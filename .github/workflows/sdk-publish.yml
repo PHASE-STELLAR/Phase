@@ -11,7 +11,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - uses: actions/setup-go@v5
