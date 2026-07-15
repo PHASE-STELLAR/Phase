@@ -133,7 +133,7 @@
     "@semantic-release/release-notes-generator": "^14.1.0",
     "@size-limit/file": "^11.1.4",
     "@testing-library/react-hooks": "^8.0.1",
-    "@testing-library/react-native": "13.3.3",
+    "@testing-library/react-native": "14.0.1",
     "@typechain/ethers-v5": "^11.1.2",
     "@types/detox": "^17.14.3",
     "@types/express": "^5.0.0",
