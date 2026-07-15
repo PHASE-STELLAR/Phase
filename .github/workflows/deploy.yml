@@ -9,7 +9,7 @@ jobs:
     environment:
       name: development
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Deploy
         run: echo "Deploying to development environment..."
 
@@ -21,7 +21,7 @@ jobs:
       name: staging
       url: https://staging.subtrackr.app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Deploy
         run: echo "Deploying to staging environment with manual approval gate..."
 
@@ -33,6 +33,6 @@ jobs:
       name: production
       url: https://subtrackr.app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Deploy
         run: echo "Deploying to production environment with strict manual approval gate..."
