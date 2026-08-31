@@ -38,6 +38,7 @@ export type Signal = {
   upvotes: string[];
   created_at: number;
   signature: string;
+  signature_verified?: boolean;
   type?: "post" | "poll";
   poll?: SignalPoll;
   scheduled_for?: number;
@@ -57,6 +58,7 @@ export type SignalReply = {
   upvotes: string[];
   created_at: number;
   signature: string;
+  signature_verified?: boolean;
   media?: MediaAttachment[];
 };
 
@@ -78,6 +80,7 @@ type SignalRow = {
   upvotes_json: string;
   created_at: number;
   signature: string;
+  signature_verified: number | null;
   type: string | null;
   poll_json: string | null;
   scheduled_for: number | null;
@@ -97,6 +100,7 @@ type ReplyRow = {
   upvotes_json: string;
   created_at: number;
   signature: string;
+  signature_verified: number | null;
   media_json: string | null;
 };
 
@@ -115,6 +119,7 @@ function rowToSignal(row: SignalRow): Signal {
     upvotes: JSON.parse(row.upvotes_json) as string[],
     created_at: row.created_at,
     signature: row.signature,
+    signature_verified: row.signature_verified === 1,
     type: (row.type as Signal["type"]) ?? undefined,
     poll: row.poll_json
       ? (JSON.parse(row.poll_json) as SignalPoll)
@@ -140,6 +145,7 @@ function rowToReply(row: ReplyRow): SignalReply {
     upvotes: JSON.parse(row.upvotes_json) as string[],
     created_at: row.created_at,
     signature: row.signature,
+    signature_verified: row.signature_verified === 1,
     media: row.media_json
       ? (JSON.parse(row.media_json) as MediaAttachment[])
       : undefined,
@@ -218,10 +224,11 @@ export async function createSignal(
       `INSERT INTO signals
          (id, author_wallet, author_display, channel, title, body,
           nft_token_id, nft_collection_id, nft_name, nft_image,
-          upvotes_json, upvote_count, created_at, signature, type,
+          upvotes_json, upvote_count, created_at, signature,
+          signature_verified, type,
           poll_json, scheduled_for, status, taken_down, takedown_reason,
           taken_down_at, media_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       signal.id,
@@ -238,6 +245,7 @@ export async function createSignal(
       (signal.upvotes ?? []).length,
       signal.created_at,
       signal.signature,
+      signal.signature_verified ? 1 : 0,
       signal.type ?? null,
       signal.poll ? JSON.stringify(signal.poll) : null,
       signal.scheduled_for ?? null,
@@ -347,8 +355,8 @@ export async function createReply(
     .prepare(
       `INSERT INTO signal_replies
          (id, signal_id, author_wallet, author_display, body,
-          upvotes_json, created_at, signature, media_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          upvotes_json, created_at, signature, signature_verified, media_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       reply.id,
@@ -359,6 +367,7 @@ export async function createReply(
       JSON.stringify(reply.upvotes ?? []),
       reply.created_at,
       reply.signature,
+      reply.signature_verified ? 1 : 0,
       reply.media ? JSON.stringify(reply.media) : null,
     );
   return reply;

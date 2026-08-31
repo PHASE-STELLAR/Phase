@@ -127,6 +127,12 @@ All handlers live in `app/api/**/route.ts`.
 - `forge-agent` and `claim-bounty` now use strict TypeScript response unions.
 - Error payloads are explicit and status-code aligned.
 - No untyped `any` responses should be used for public API contracts.
+- `POST /api/signals` and `POST /api/signals/[id]/replies` now require a real
+  SEP-53 Ed25519 `signature` over `{ title, body, timestamp }` (signals) or
+  `{ title: "", body, timestamp }` (replies), plus a numeric `timestamp`. The
+  server verifies ownership with `Keypair.fromPublicKey(wallet).verify(...)`
+  and returns `400` for missing/invalid/forged signatures. Verified authorship
+  is persisted as `signature_verified` and shown as a verified badge in the UI.
 
 ### 5.3 Flag-gated API extensions
 

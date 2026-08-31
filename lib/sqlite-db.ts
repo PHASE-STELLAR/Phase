@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS signals (
   upvote_count      INTEGER NOT NULL DEFAULT 0,
   created_at        INTEGER NOT NULL,
   signature         TEXT NOT NULL,
+  signature_verified INTEGER NOT NULL DEFAULT 0,
   type              TEXT,
   poll_json         TEXT,
   scheduled_for     INTEGER,
@@ -97,6 +98,7 @@ CREATE TABLE IF NOT EXISTS signal_replies (
   upvotes_json    TEXT NOT NULL DEFAULT '[]',
   created_at      INTEGER NOT NULL,
   signature       TEXT NOT NULL,
+  signature_verified INTEGER NOT NULL DEFAULT 0,
   media_json      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_replies_signal_created
@@ -188,7 +190,21 @@ export function getDb(): DatabaseSync {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
-  ensureListingColumns(db);
+  // Idempotent migration for databases created before signature_verified existed.
+  try {
+    db.exec(
+      "ALTER TABLE signals ADD COLUMN signature_verified INTEGER NOT NULL DEFAULT 0;",
+    );
+  } catch {
+    // Column already present — no-op.
+  }
+  try {
+    db.exec(
+      "ALTER TABLE signal_replies ADD COLUMN signature_verified INTEGER NOT NULL DEFAULT 0;",
+    );
+  } catch {
+    // Column already present — no-op.
+  }
 
   return db;
 }

@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog"
 import { useWallet } from "@/components/wallet-provider"
 import { useLang } from "@/components/lang-context"
+import { signSignalPayload } from "@/lib/viewer-signature"
 import type { Signal } from "@/lib/signal-store"
 
 type ChannelOption = { id: string; label: string; count: number }
@@ -127,14 +128,18 @@ export function SignalCompose({ open, onOpenChange, channels, onCreated }: Props
     setError(null)
     setBusy(true)
     try {
-      // TODO: replace provisional signature with Freighter signMessage when available
-      const signature = address
+      const timestamp = Date.now()
+      const signature = await signSignalPayload(
+        { title: titleVal.trim(), body: bodyVal.trim(), timestamp },
+        address,
+      )
       const body: Record<string, unknown> = {
         title: titleVal,
         body: bodyVal,
         channel,
         wallet: address,
         signature,
+        timestamp,
         type: signalType,
       }
       if (signalType === "poll") body.poll_options = pollOptions

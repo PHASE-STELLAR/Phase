@@ -31,6 +31,7 @@ const copy = {
     replies: "replies",
     upvotes: "upvotes",
     walletBadge: "✓ WALLET",
+    verifiedBadge: "✓ VERIFIED",
     onChain: "✓ ON-CHAIN",
     unverified: "UNVERIFIED",
     collector: "✓ COLLECTOR",
@@ -59,6 +60,7 @@ const copy = {
     replies: "respuestas",
     upvotes: "votos",
     walletBadge: "✓ WALLET",
+    verifiedBadge: "✓ VERIFICADO",
     onChain: "✓ ON-CHAIN",
     unverified: "NO_VERIFICADO",
     collector: "✓ COLECCIONISTA",
@@ -194,9 +196,13 @@ function PostCard({
           </Link>
           <span
             className="font-mono text-[9px] px-1.5 py-0.5"
-            style={{ background: "#EEEDFE", color: "#534AB7" }}
+            style={
+              signal.signature_verified
+                ? { background: "#E1F5EE", color: "#0F6E56" }
+                : { background: "#EEEDFE", color: "#534AB7" }
+            }
           >
-            {t.walletBadge}
+            {signal.signature_verified ? t.verifiedBadge : t.walletBadge}
           </span>
           {authorProfile.isCollector && (
             <span

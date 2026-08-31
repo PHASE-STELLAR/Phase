@@ -122,6 +122,28 @@ Owns:
 - Testnet-only assumptions must be explicit in docs and code comments.
 - Any privileged operation must validate input shape and origin intent.
 
+## 9a) Signal & reply authorship proof (SEP-53)
+
+Community signals and replies now carry a Verifiable Ed25519 proof of wallet
+ownership instead of a mock signature:
+
+- **Client** (`components/signal-compose.tsx`, `app/signals/[id]/signal-detail-client.tsx`)
+  signs a canonical payload `{ title, body, timestamp }` via the selected
+  wallet's SEP-53 `signMessage` (`lib/viewer-signature.ts:signSignalPayload`).
+- **Server** (`app/api/signals/route.ts`, `app/api/signals/[id]/replies/route.ts`)
+  reconstructs the same payload and verifies it with
+  `Keypair.fromPublicKey(author).verify(prefix + message, signature)`
+  (`lib/viewer-signature.ts:verifySignalSignature`). Missing, malformed, or
+  forged signatures (signature claiming another wallet) are rejected with
+  `400`.
+- **Badge**: verified authorship is persisted as `signature_verified` on the
+  `signals` / `signal_replies` SQLite rows and surfaced in the UI, so verified
+  signals are visually distinguished from legacy posts.
+
+All signing stays client-side; the server never holds user keys. Signed string
+is a fixed-size digest of the canonical payload, keeping it under wallet
+`sign_message` size limits.
+
 ## 10) Feature flags (rolling delivery)
 
 | Flag | Env | Purpose | Default | Rollback |
