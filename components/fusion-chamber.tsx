@@ -62,6 +62,16 @@ import {
   stroopsToLiqDisplay,
 } from "@/lib/phase-protocol"
 import { PhaseArtifactVisualizer, type ArtifactVerificationMode } from "@/components/phase-artifact-visualizer"
+import { TerminalHeader } from "@/components/chamber/terminal-header"
+import { ArtifactViewer } from "@/components/chamber/artifact-viewer"
+import { SettlementWizard } from "@/components/chamber/settlement-wizard"
+import { EnergyGaugeDisplay } from "@/components/chamber/energy-gauge-display"
+import { CertificateExporter } from "@/components/chamber/certificate-exporter"
+import { useChamberSettlement } from "@/components/chamber/use-chamber-settlement"
+import { ChamberLogStream } from "@/components/chamber/log-stream"
+import { ChamberCatalogThumb } from "@/components/chamber/catalog-thumb"
+import { PhaserLiqTokenLink } from "@/components/chamber/phaser-liq-token-link"
+import { chamberChromeNav, chamberChromeNavHere, chamberChromePrimaryBtn, chamberChromeRefreshBtn } from "@/components/chamber/chamber-chrome"
 
 /** Primer `G…` válido en el texto del portapapeles (una línea o varias). */
 function recipientGFromClipboardText(text: string, isValidG: (addr: string) => boolean): string {
@@ -89,102 +99,15 @@ function formatPowerBp(bp: number) {
   return `${Math.round(safeBp / 100)}%`
 }
 
-function ChamberLogStream({
-  lines,
-  endRef,
-}: {
-  lines: { id: number; text: string }[]
-  endRef: RefObject<HTMLDivElement | null>
-}) {
-  return (
-    <>
-      {lines.map((l, i) => {
-        const fault = /FAIL|Failed|ERROR|FAULT|ABORT|REJECT|denied|timeout|sequence|desync/i.test(l.text)
-        return (
-          <div
-            key={l.id}
-            className={cn(
-              !fault &&
-                "tactical-log-line mb-2 border-l-2 border-[#39ff14]/35 pl-2.5 font-mono text-[11px] leading-relaxed tracking-wide text-[#7df5d8] sm:text-xs sm:leading-relaxed",
-              fault && "tactical-log-emergency mb-2 font-mono text-[11px] leading-relaxed sm:text-xs",
-            )}
-            style={!fault ? { animationDelay: `${Math.min(i, 8) * 65}ms` } : undefined}
-          >
-            <span className="break-words whitespace-pre-wrap">{l.text}</span>
-          </div>
-        )
-      })}
-      <div ref={endRef} />
-    </>
-  )
-}
 
-function ChamberCatalogThumb({ collectionId, uri }: { collectionId: number; uri: string }) {
-  const [broken, setBroken] = useState(false)
-  if (!uri.trim() || broken) {
-    return (
-      <span className="px-1 text-center text-[7px] font-bold uppercase leading-tight text-cyan-500/80">
-        #{collectionId}
-      </span>
-    )
-  }
-  return (
-    <IpfsDisplayImg
-      uri={uri}
-      className="h-full w-full object-cover"
-      loading="lazy"
-      onExhausted={() => setBroken(true)}
-    />
-  )
-}
+
+
 
 /** Enlace al asset PHASELQ en Stellar Expert (icono + símbolo). */
-function PhaserLiqTokenLink({
-  href,
-  symbol,
-  iconClassName,
-  className,
-  variant = "default",
-}: {
-  href: string
-  symbol: string
-  iconClassName?: string
-  className?: string
-  variant?: "default" | "violet"
-}) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      title={href}
-      onClick={(e) => {
-        e.stopPropagation()
-        playTacticalUiClick()
-      }}
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-sm border border-transparent font-mono tracking-normal underline-offset-[3px] transition-colors hover:underline focus:outline-none",
-        variant === "violet"
-          ? "text-violet-200/95 hover:border-violet-500/45 hover:bg-violet-950/35 hover:text-violet-50 focus-visible:ring-2 focus-visible:ring-violet-400/55"
-          : "text-cyan-400/95 hover:border-cyan-500/45 hover:bg-cyan-950/35 hover:text-cyan-50 focus-visible:ring-2 focus-visible:ring-cyan-400/60",
-        className,
-      )}
-    >
-      <TokenIcon className={cn("shrink-0", iconClassName ?? "h-4 w-4")} />
-      {symbol}
-    </a>
-  )
-}
+
 
 /** Same zinc / violet chrome as `/dashboard` (Phase Market). */
-const chamberChromeNav =
-  "inline-flex min-h-[36px] items-center rounded-sm border border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-zinc-400 transition-colors hover:border-violet-500/50 hover:text-violet-300"
-const chamberChromeNavHere =
-  "inline-flex min-h-[36px] items-center rounded-sm border border-violet-600/50 bg-violet-950/50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-violet-300"
-const chamberChromePrimaryBtn =
-  "flex min-h-[46px] w-full items-center justify-center bg-gradient-to-r from-violet-600 to-cyan-500 py-3 text-center text-[11px] font-bold uppercase tracking-wide text-white shadow-[0_0_18px_rgba(139,92,246,0.35)] transition-opacity hover:opacity-90 disabled:pointer-events-none"
-const chamberChromeRefreshBtn =
-  "flex items-center gap-1.5 rounded-sm border border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-zinc-400 transition-colors hover:border-violet-500/50 hover:text-violet-300 disabled:opacity-40"
+
 
 export function FusionChamber() {
   const router = useRouter()
