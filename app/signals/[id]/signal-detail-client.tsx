@@ -4,6 +4,7 @@ import { useState } from "react"
 import { useWallet } from "@/components/wallet-provider"
 import { useLang } from "@/components/lang-context"
 import { WalletAvatar } from "@/components/wallet-avatar"
+import { signSignalPayload } from "@/lib/viewer-signature"
 import type { SignalReply } from "@/lib/signal-store"
 
 const copy = {
@@ -15,6 +16,8 @@ const copy = {
     ctaBusy: "[ SENDING… ]",
     noWallet: "[ CONNECT_WALLET_TO_REPLY ]",
     walletBadge: "✓ WALLET",
+    verifiedBadge: "✓ VERIFIED",
+    legacyBadge: "LEGACY",
   },
   es: {
     replies: "RESPUESTAS",
@@ -24,6 +27,8 @@ const copy = {
     ctaBusy: "[ ENVIANDO… ]",
     noWallet: "[ CONECTAR_WALLET_PARA_RESPONDER ]",
     walletBadge: "✓ WALLET",
+    verifiedBadge: "✓ VERIFICADO",
+    legacyBadge: "LEGADO",
   },
 }
 
@@ -60,14 +65,20 @@ export function SignalDetailClient({ signalId, initialReplies }: Props) {
     setError(null)
     setBusy(true)
     try {
+      const timestamp = Date.now()
+      const replyBodyTrimmed = replyBody.trim()
+      const signature = await signSignalPayload(
+        { title: "", body: replyBodyTrimmed, timestamp },
+        address,
+      )
       const res = await fetch(`/api/signals/${signalId}/replies`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          body: replyBody.trim(),
+          body: replyBodyTrimmed,
           wallet: address,
-          // TODO: replace provisional signature with Freighter signMessage when available
-          signature: address,
+          signature,
+          timestamp,
         }),
       })
       const data = (await res.json().catch(() => ({}))) as { reply?: SignalReply; error?: string }
@@ -113,9 +124,13 @@ export function SignalDetailClient({ signalId, initialReplies }: Props) {
                 </span>
                 <span
                   className="font-mono text-[8px] px-1 py-0.5"
-                  style={{ background: "#EEEDFE", color: "#534AB7" }}
+                  style={
+                    r.signature_verified
+                      ? { background: "#E1F5EE", color: "#0F6E56" }
+                      : { background: "#EEEDFE", color: "#534AB7" }
+                  }
                 >
-                  {t.walletBadge}
+                  {r.signature_verified ? t.verifiedBadge : t.walletBadge}
                 </span>
                 <span className="ml-auto font-mono text-[9px] text-muted-foreground/40">
                   {timeAgo(r.created_at)}

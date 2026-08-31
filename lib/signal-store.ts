@@ -38,6 +38,7 @@ export type Signal = {
   upvotes: string[];
   created_at: number;
   signature: string;
+  signature_verified?: boolean;
   type?: "post" | "poll";
   poll?: SignalPoll;
   scheduled_for?: number;
@@ -57,6 +58,7 @@ export type SignalReply = {
   upvotes: string[];
   created_at: number;
   signature: string;
+  signature_verified?: boolean;
   media?: MediaAttachment[];
 };
 
@@ -78,6 +80,7 @@ type SignalRow = {
   upvotes_json: string;
   created_at: number;
   signature: string;
+  signature_verified: number | null;
   type: string | null;
   poll_json: string | null;
   scheduled_for: number | null;
@@ -97,6 +100,7 @@ type ReplyRow = {
   upvotes_json: string;
   created_at: number;
   signature: string;
+  signature_verified: number | null;
   media_json: string | null;
 };
 
@@ -115,6 +119,7 @@ function rowToSignal(row: SignalRow): Signal {
     upvotes: JSON.parse(row.upvotes_json) as string[],
     created_at: row.created_at,
     signature: row.signature,
+    signature_verified: row.signature_verified === 1,
     type: (row.type as Signal["type"]) ?? undefined,
     poll: row.poll_json
       ? (JSON.parse(row.poll_json) as SignalPoll)
@@ -140,6 +145,7 @@ function rowToReply(row: ReplyRow): SignalReply {
     upvotes: JSON.parse(row.upvotes_json) as string[],
     created_at: row.created_at,
     signature: row.signature,
+    signature_verified: row.signature_verified === 1,
     media: row.media_json
       ? (JSON.parse(row.media_json) as MediaAttachment[])
       : undefined,
@@ -218,10 +224,11 @@ export async function createSignal(
       `INSERT INTO signals
          (id, author_wallet, author_display, channel, title, body,
           nft_token_id, nft_collection_id, nft_name, nft_image,
-          upvotes_json, upvote_count, created_at, signature, type,
+          upvotes_json, upvote_count, created_at, signature,
+          signature_verified, type,
           poll_json, scheduled_for, status, taken_down, takedown_reason,
           taken_down_at, media_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       signal.id,
@@ -238,6 +245,7 @@ export async function createSignal(
       (signal.upvotes ?? []).length,
       signal.created_at,
       signal.signature,
+      signal.signature_verified ? 1 : 0,
       signal.type ?? null,
       signal.poll ? JSON.stringify(signal.poll) : null,
       signal.scheduled_for ?? null,
@@ -347,8 +355,8 @@ export async function createReply(
     .prepare(
       `INSERT INTO signal_replies
          (id, signal_id, author_wallet, author_display, body,
-          upvotes_json, created_at, signature, media_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          upvotes_json, created_at, signature, signature_verified, media_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       reply.id,
@@ -359,6 +367,7 @@ export async function createReply(
       JSON.stringify(reply.upvotes ?? []),
       reply.created_at,
       reply.signature,
+      reply.signature_verified ? 1 : 0,
       reply.media ? JSON.stringify(reply.media) : null,
     );
   return reply;
@@ -910,4 +919,337 @@ export function getCidGatewayCacheStats(): {
 export function __resetCidGatewayCacheForTests(): void {
   cidResolutionCache.clear();
   gatewayHealth.clear();
+}
+
+// ── Issue #100 (phase-82): signal edit history with version diffing ────────
+//
+// Edits to a signal's title/body were destructive — the prior text was
+// simply overwritten with no audit trail. This module snapshots the
+// pre-edit title/body into `signal_versions` before every edit, so history
+// is a plain read (no reconstruction), and computes a word-level diff
+// on demand between any two snapshots (or a snapshot and the live signal).
+//
+// Feature flag: phase-82 (NEXT_PUBLIC_FEATURE_PHASE_82 / FEATURE_PHASE_82)
+// Rollback: unset the flag → `editSignal`/the history route throw/404;
+//           signals remain editable only through whatever pre-82 path
+//           existed (none, today). Existing `signal_versions` rows are
+//           historical record and are simply no longer appended to.
+
+export function isPhase82Enabled(): boolean {
+  return isFeatureEnabled("phase-82");
+}
+
+export function flag82RollbackNote(): string {
+  return "Rollback phase-82: unset NEXT_PUBLIC_FEATURE_PHASE_82 / FEATURE_PHASE_82 or set to 0/false and restart. editSignal() and the history route become unavailable; existing signal_versions rows remain on disk as an inert audit trail. No data migration to undo.";
+}
+
+export class SignalEditError extends Error {
+  code: "FLAG_DISABLED" | "NOT_FOUND" | "FORBIDDEN" | "VALIDATION_FAILED";
+
+  constructor(code: SignalEditError["code"], message: string) {
+    super(message);
+    this.name = "SignalEditError";
+    this.code = code;
+  }
+}
+
+export type SignalVersion = {
+  id: string;
+  signal_id: string;
+  version: number;
+  title: string;
+  body: string;
+  edited_by: string;
+  edited_at: number;
+};
+
+type SignalVersionRow = {
+  id: string;
+  signal_id: string;
+  version: number;
+  title: string;
+  body: string;
+  edited_by: string;
+  edited_at: number;
+};
+
+function rowToSignalVersion(row: SignalVersionRow): SignalVersion {
+  return {
+    id: row.id,
+    signal_id: row.signal_id,
+    version: row.version,
+    title: row.title,
+    body: row.body,
+    edited_by: row.edited_by,
+    edited_at: row.edited_at,
+  };
+}
+
+export type DiffOp = { type: "equal" | "add" | "remove"; value: string };
+
+/**
+ * Word-level LCS diff between two strings. Splits on runs of whitespace
+ * (kept as tokens so the reconstructed text is exact), then walks the
+ * standard dynamic-programming LCS table and merges adjacent same-type ops.
+ * O(n*m) in token count — signal title/body are bounded (see createSignal
+ * validation), so this stays well within an interactive request budget.
+ */
+export function diffWords(oldText: string, newText: string): DiffOp[] {
+  const a = oldText.split(/(\s+)/).filter((t) => t.length > 0);
+  const b = newText.split(/(\s+)/).filter((t) => t.length > 0);
+  const n = a.length;
+  const m = b.length;
+
+  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i]![j] = a[i] === b[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
+    }
+  }
+
+  const ops: DiffOp[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      ops.push({ type: "equal", value: a[i]! });
+      i++;
+      j++;
+    } else if (lcs[i + 1]![j]! >= lcs[i]![j + 1]!) {
+      ops.push({ type: "remove", value: a[i]! });
+      i++;
+    } else {
+      ops.push({ type: "add", value: b[j]! });
+      j++;
+    }
+  }
+  while (i < n) {
+    ops.push({ type: "remove", value: a[i]! });
+    i++;
+  }
+  while (j < m) {
+    ops.push({ type: "add", value: b[j]! });
+    j++;
+  }
+
+  const merged: DiffOp[] = [];
+  for (const op of ops) {
+    const last = merged[merged.length - 1];
+    if (last && last.type === op.type) last.value += op.value;
+    else merged.push({ ...op });
+  }
+  return merged;
+}
+
+/** Snapshots the signal's current title/body as the next version, then applies the edit. Only the author may edit. */
+export async function editSignal(
+  signal_id: string,
+  wallet: string,
+  patch: { title?: string; body?: string },
+): Promise<{ signal: Signal; version: SignalVersion }> {
+  if (!isPhase82Enabled()) throw new SignalEditError("FLAG_DISABLED", "phase-82 disabled");
+
+  const signal = await getSignal(signal_id);
+  if (!signal) throw new SignalEditError("NOT_FOUND", "Signal not found");
+  if (signal.author_wallet !== wallet) throw new SignalEditError("FORBIDDEN", "Only the author can edit this signal");
+
+  const title = patch.title?.trim();
+  const body = patch.body?.trim();
+  if (!title && !body) throw new SignalEditError("VALIDATION_FAILED", "Nothing to edit");
+  if (title !== undefined && title.length === 0) throw new SignalEditError("VALIDATION_FAILED", "title cannot be empty");
+  if (body !== undefined && body.length === 0) throw new SignalEditError("VALIDATION_FAILED", "body cannot be empty");
+
+  const db = getDb();
+  const maxVersionRow = db
+    .prepare("SELECT COALESCE(MAX(version), 0) AS maxv FROM signal_versions WHERE signal_id = ?")
+    .get(signal_id) as { maxv: number };
+  const nextVersion = maxVersionRow.maxv + 1;
+
+  const version: SignalVersion = {
+    id: nanoid(10),
+    signal_id,
+    version: nextVersion,
+    title: signal.title,
+    body: signal.body,
+    edited_by: wallet,
+    edited_at: Date.now(),
+  };
+  db.prepare(
+    `INSERT INTO signal_versions (id, signal_id, version, title, body, edited_by, edited_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(version.id, version.signal_id, version.version, version.title, version.body, version.edited_by, version.edited_at);
+
+  db.prepare("UPDATE signals SET title = COALESCE(?, title), body = COALESCE(?, body) WHERE id = ?").run(
+    title ?? null,
+    body ?? null,
+    signal_id,
+  );
+
+  const updated = await getSignal(signal_id);
+  if (!updated) throw new SignalEditError("NOT_FOUND", "Signal not found after edit");
+  return { signal: updated, version };
+}
+
+export async function getSignalVersionHistory(signal_id: string): Promise<SignalVersion[]> {
+  const rows = getDb()
+    .prepare("SELECT * FROM signal_versions WHERE signal_id = ? ORDER BY version ASC")
+    .all(signal_id) as SignalVersionRow[];
+  return rows.map(rowToSignalVersion);
+}
+
+export type SignalVersionDiffEntry = {
+  from_version: number;
+  to_version: number | "current";
+  edited_by: string;
+  edited_at: number;
+  title_diff: DiffOp[];
+  body_diff: DiffOp[];
+};
+
+/** Full history plus a word-diff between every consecutive pair of snapshots, and from the latest snapshot to the live signal. */
+export async function getSignalEditHistory(
+  signal_id: string,
+): Promise<{ signal: Signal; versions: SignalVersion[]; diffs: SignalVersionDiffEntry[] } | null> {
+  const signal = await getSignal(signal_id);
+  if (!signal) return null;
+  const versions = await getSignalVersionHistory(signal_id);
+
+  const diffs: SignalVersionDiffEntry[] = [];
+  for (let i = 0; i < versions.length; i++) {
+    const from = versions[i]!;
+    const to = versions[i + 1];
+    diffs.push({
+      from_version: from.version,
+      to_version: to ? to.version : "current",
+      edited_by: (to ?? { edited_by: signal.author_wallet }).edited_by,
+      edited_at: to ? to.edited_at : versions[versions.length - 1]!.edited_at,
+      title_diff: diffWords(from.title, to ? to.title : signal.title),
+      body_diff: diffWords(from.body, to ? to.body : signal.body),
+    });
+  }
+
+  return { signal, versions, diffs };
+}
+
+// ── Issue #101 (phase-83): emoji-reaction aggregation with rate limits ─────
+//
+// Signals only had a binary upvote. This module adds a small curated set of
+// emoji reactions, toggle-able per (signal, wallet, emoji), with per-wallet
+// rate limiting so a single wallet can't hammer the endpoint to spam
+// notifications or inflate counts. Aggregation is a GROUP BY over
+// `signal_reactions`; "did this wallet react" is a per-viewer lookup layered
+// on top so the summary works for both an authenticated viewer and an
+// anonymous read.
+//
+// Feature flag: phase-83 (NEXT_PUBLIC_FEATURE_PHASE_83 / FEATURE_PHASE_83)
+// Rollback: unset the flag → the reactions route 404s and
+//           `toggleSignalReaction` throws; existing `signal_reactions` rows
+//           remain on disk (no migration to undo) but stop being written to.
+
+export function isPhase83Enabled(): boolean {
+  return isFeatureEnabled("phase-83");
+}
+
+export function flag83RollbackNote(): string {
+  return "Rollback phase-83: unset NEXT_PUBLIC_FEATURE_PHASE_83 / FEATURE_PHASE_83 or set to 0/false and restart. Reaction reads/writes become unavailable; existing signal_reactions rows remain on disk as inert history. No data migration to undo.";
+}
+
+export const REACTION_EMOJI = ["👍", "❤️", "🔥", "😂", "😮", "😢"] as const;
+export type ReactionEmoji = (typeof REACTION_EMOJI)[number];
+
+export class SignalReactionError extends Error {
+  code: "FLAG_DISABLED" | "VALIDATION_FAILED" | "RATE_LIMITED" | "NOT_FOUND";
+  retryAfterMs?: number;
+
+  constructor(code: SignalReactionError["code"], message: string, retryAfterMs?: number) {
+    super(message);
+    this.name = "SignalReactionError";
+    this.code = code;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+const REACTION_RATE_LIMIT = 20;
+const REACTION_RATE_WINDOW_MS = 60_000;
+const reactionRateBuckets = new Map<string, { used: number; resetAt: number }>();
+
+function consumeReactionRateLimit(wallet: string, now: number): { allowed: boolean; retryAfterMs: number } {
+  const bucket = reactionRateBuckets.get(wallet);
+  if (!bucket || bucket.resetAt <= now) {
+    reactionRateBuckets.set(wallet, { used: 1, resetAt: now + REACTION_RATE_WINDOW_MS });
+    return { allowed: true, retryAfterMs: 0 };
+  }
+  if (bucket.used >= REACTION_RATE_LIMIT) {
+    return { allowed: false, retryAfterMs: bucket.resetAt - now };
+  }
+  bucket.used += 1;
+  return { allowed: true, retryAfterMs: 0 };
+}
+
+/** Test/ops hook to reset process-local phase-83 rate-limit state. */
+export function __resetSignalReactionRateLimitForTests(): void {
+  reactionRateBuckets.clear();
+}
+
+export type SignalReactionSummary = Array<{ emoji: ReactionEmoji; count: number; reacted: boolean }>;
+
+export async function getSignalReactionSummary(
+  signal_id: string,
+  viewer_wallet?: string,
+): Promise<SignalReactionSummary> {
+  const db = getDb();
+  const counts = db
+    .prepare("SELECT emoji, COUNT(*) AS count FROM signal_reactions WHERE signal_id = ? GROUP BY emoji")
+    .all(signal_id) as Array<{ emoji: string; count: number }>;
+  const mine = viewer_wallet
+    ? new Set(
+        (db.prepare("SELECT emoji FROM signal_reactions WHERE signal_id = ? AND wallet = ?").all(signal_id, viewer_wallet) as Array<{ emoji: string }>).map(
+          (r) => r.emoji,
+        ),
+      )
+    : new Set<string>();
+
+  return REACTION_EMOJI.map((emoji) => ({
+    emoji,
+    count: counts.find((c) => c.emoji === emoji)?.count ?? 0,
+    reacted: mine.has(emoji),
+  }));
+}
+
+/** Toggles a wallet's reaction on a signal (add if absent, remove if present), subject to a per-wallet rate limit. */
+export async function toggleSignalReaction(
+  signal_id: string,
+  wallet: string,
+  emoji: string,
+): Promise<{ toggled: "added" | "removed"; summary: SignalReactionSummary }> {
+  if (!isPhase83Enabled()) throw new SignalReactionError("FLAG_DISABLED", "phase-83 disabled");
+  if (!(REACTION_EMOJI as readonly string[]).includes(emoji)) {
+    throw new SignalReactionError("VALIDATION_FAILED", `Unsupported emoji. Allowed: ${REACTION_EMOJI.join(" ")}`);
+  }
+
+  const signal = await getSignal(signal_id);
+  if (!signal) throw new SignalReactionError("NOT_FOUND", "Signal not found");
+
+  const now = Date.now();
+  const rl = consumeReactionRateLimit(wallet, now);
+  if (!rl.allowed) throw new SignalReactionError("RATE_LIMITED", "Too many reactions, slow down", rl.retryAfterMs);
+
+  const db = getDb();
+  const existing = db
+    .prepare("SELECT id FROM signal_reactions WHERE signal_id = ? AND wallet = ? AND emoji = ?")
+    .get(signal_id, wallet, emoji) as { id: string } | undefined;
+
+  let toggled: "added" | "removed";
+  if (existing) {
+    db.prepare("DELETE FROM signal_reactions WHERE id = ?").run(existing.id);
+    toggled = "removed";
+  } else {
+    db.prepare(
+      "INSERT INTO signal_reactions (id, signal_id, wallet, emoji, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(nanoid(10), signal_id, wallet, emoji, now);
+    toggled = "added";
+  }
+
+  const summary = await getSignalReactionSummary(signal_id, wallet);
+  return { toggled, summary };
 }

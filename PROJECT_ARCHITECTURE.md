@@ -122,6 +122,28 @@ Owns:
 - Testnet-only assumptions must be explicit in docs and code comments.
 - Any privileged operation must validate input shape and origin intent.
 
+## 9a) Signal & reply authorship proof (SEP-53)
+
+Community signals and replies now carry a Verifiable Ed25519 proof of wallet
+ownership instead of a mock signature:
+
+- **Client** (`components/signal-compose.tsx`, `app/signals/[id]/signal-detail-client.tsx`)
+  signs a canonical payload `{ title, body, timestamp }` via the selected
+  wallet's SEP-53 `signMessage` (`lib/viewer-signature.ts:signSignalPayload`).
+- **Server** (`app/api/signals/route.ts`, `app/api/signals/[id]/replies/route.ts`)
+  reconstructs the same payload and verifies it with
+  `Keypair.fromPublicKey(author).verify(prefix + message, signature)`
+  (`lib/viewer-signature.ts:verifySignalSignature`). Missing, malformed, or
+  forged signatures (signature claiming another wallet) are rejected with
+  `400`.
+- **Badge**: verified authorship is persisted as `signature_verified` on the
+  `signals` / `signal_replies` SQLite rows and surfaced in the UI, so verified
+  signals are visually distinguished from legacy posts.
+
+All signing stays client-side; the server never holds user keys. Signed string
+is a fixed-size digest of the canonical payload, keeping it under wallet
+`sign_message` size limits.
+
 ## 10) Feature flags (rolling delivery)
 
 | Flag | Env | Purpose | Default | Rollback |
@@ -144,6 +166,10 @@ Owns:
 | `phase-124` | `NEXT_PUBLIC_FEATURE_PHASE_124` / `FEATURE_PHASE_124` | Metadata version migration tool (v1→v2) | off | Unset var, restart — v2 payloads remain readable as v1 where additive; no destructive rewrite without `--apply` |
 | `phase-134` | `NEXT_PUBLIC_FEATURE_PHASE_134` / `FEATURE_PHASE_134` | Rate-limit-aware batch trustline submission to Horizon (bounded concurrency + 429/503 backoff) | off | Unset var, restart — each XDR submits immediately and sequentially with no retry (pre-phase-134 behavior) |
 | `phase-135` | `NEXT_PUBLIC_FEATURE_PHASE_135` / `FEATURE_PHASE_135` | Cached wallet/explore NFT ownership index (LRU) with stale-on-error fallback | off | Unset var, restart — no cache, no stale degrade; both routes revert to their pre-phase-135 behavior exactly |
+| `phase-82` | `NEXT_PUBLIC_FEATURE_PHASE_82` / `FEATURE_PHASE_82` | Signal edit history: pre-edit title/body snapshot on every author edit, with word-level version diffing | off | Unset var, restart — `PATCH /api/signals/[id]` and the history route become unavailable; existing `signal_versions` rows remain on disk (no migration to undo) |
+| `phase-83` | `NEXT_PUBLIC_FEATURE_PHASE_83` / `FEATURE_PHASE_83` | Emoji-reaction aggregation on signals (curated set, toggle per wallet) with a 20/60s per-wallet rate limit | off | Unset var, restart — reactions route returns 404; existing `signal_reactions` rows remain on disk (no migration to undo) |
+| `phase-139` | `NEXT_PUBLIC_FEATURE_PHASE_139` / `FEATURE_PHASE_139` | Collection-level offer books aggregated from per-token offers, plus bulk-bid across a collection's listings | off | Unset var, restart — offer-book/bulk-bid route returns 404; per-listing offers (`/api/market/[id]/offers`) are unaffected either way |
+| `phase-140` | `NEXT_PUBLIC_FEATURE_PHASE_140` / `FEATURE_PHASE_140` | Royalty enforcement on secondary sales: creator/seller split computed and ledgered at offer-accept time | off | Unset var, restart — listing creation stops accepting `creator_wallet`/`royalty_bps`; offer-accept stops computing a split (100% to seller, pre-140 behavior); existing `royalty_payouts` rows are historical record |
 
 Flags are read via `lib/feature-flags.ts:isFeatureEnabled`. Client flags use `NEXT_PUBLIC_*`, server also accepts `FEATURE_*`. Zero regression when off.
 

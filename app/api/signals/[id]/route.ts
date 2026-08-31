@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
-import { getSignal, upvoteSignal, getReplies } from "@/lib/signal-store"
+import { getSignal, upvoteSignal, getReplies, editSignal, SignalEditError } from "@/lib/signal-store"
 import { createNotification } from "@/lib/notification-store"
 import { checkAndUnlock } from "@/lib/achievement-store"
 
@@ -62,5 +62,49 @@ export async function POST(
     return NextResponse.json({ signal })
   } catch {
     return NextResponse.json({ error: "Signal not found" }, { status: 404 })
+  }
+}
+
+type EditBody = {
+  wallet?: unknown
+  title?: unknown
+  body?: unknown
+}
+
+const EDIT_ERROR_STATUS: Record<SignalEditError["code"], number> = {
+  FLAG_DISABLED: 404,
+  NOT_FOUND: 404,
+  FORBIDDEN: 403,
+  VALIDATION_FAILED: 400,
+}
+
+// phase-82: edit a signal's title/body, snapshotting the pre-edit state into version history.
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params
+  let body: EditBody
+  try {
+    body = (await request.json()) as EditBody
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 })
+  }
+
+  if (typeof body.wallet !== "string" || !StrKey.isValidEd25519PublicKey(body.wallet)) {
+    return NextResponse.json({ error: "Invalid wallet address" }, { status: 400 })
+  }
+
+  try {
+    const { signal, version } = await editSignal(id, body.wallet, {
+      title: typeof body.title === "string" ? body.title : undefined,
+      body: typeof body.body === "string" ? body.body : undefined,
+    })
+    return NextResponse.json({ signal, version })
+  } catch (error) {
+    if (error instanceof SignalEditError) {
+      return NextResponse.json({ error: error.message, code: error.code }, { status: EDIT_ERROR_STATUS[error.code] })
+    }
+    return NextResponse.json({ error: "Failed to edit signal" }, { status: 500 })
   }
 }

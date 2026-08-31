@@ -20,6 +20,8 @@ export type NotificationType =
   | "offer_rejected"
   | "achievement_unlocked"
   | "content_takedown"
+  | "royalty_payout"
+  | "signal_reaction"
 
 export type Notification = {
   id: string

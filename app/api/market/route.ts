@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
-import { getListings, createListing } from "@/lib/market-store"
+import { getListings, createListing, isPhase140Enabled } from "@/lib/market-store"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -28,6 +28,8 @@ type CreateBody = {
   min_offer?: unknown
   image?: unknown
   name?: unknown
+  creator_wallet?: unknown
+  royalty_bps?: unknown
 }
 
 export async function POST(request: NextRequest) {
@@ -52,6 +54,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "price_phaselq must be positive" }, { status: 400 })
 
   const min_offer = typeof body.min_offer === "number" ? body.min_offer : undefined
+
+  // phase-140: creator/royalty on a listing are additive and only take
+  // effect once the flag is on; a listing created with the flag off simply
+  // carries no royalty and is never eligible for a split on resale.
+  let creator_wallet: string | undefined
+  let royalty_bps: number | undefined
+  if (isPhase140Enabled() && typeof body.creator_wallet === "string" && body.creator_wallet.trim().length > 0) {
+    const trimmed = body.creator_wallet.trim()
+    if (!StrKey.isValidEd25519PublicKey(trimmed)) {
+      return NextResponse.json({ error: "invalid creator_wallet" }, { status: 400 })
+    }
+    creator_wallet = trimmed
+    const bps = Number(body.royalty_bps)
+    if (!Number.isInteger(bps) || bps < 0 || bps > 10_000) {
+      return NextResponse.json({ error: "royalty_bps must be an integer 0-10000" }, { status: 400 })
+    }
+    royalty_bps = bps
+  }
+
   const listing = await createListing({
     token_id,
     collection_id,
@@ -61,6 +82,8 @@ export async function POST(request: NextRequest) {
     min_offer,
     image: typeof body.image === "string" ? body.image : undefined,
     name: typeof body.name === "string" ? body.name : undefined,
+    creator_wallet,
+    royalty_bps,
   })
   return NextResponse.json({ listing }, { status: 201 })
 }

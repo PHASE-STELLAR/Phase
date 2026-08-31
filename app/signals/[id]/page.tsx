@@ -105,9 +105,13 @@ export default async function SignalDetailPage({ params }: Props) {
             </span>
             <span
               className="font-mono text-[9px] px-1.5 py-0.5"
-              style={{ background: "#EEEDFE", color: "#534AB7" }}
+              style={
+                signal.signature_verified
+                  ? { background: "#E1F5EE", color: "#0F6E56" }
+                  : { background: "#EEEDFE", color: "#534AB7" }
+              }
             >
-              ✓ WALLET
+              {signal.signature_verified ? "✓ VERIFIED" : "✓ WALLET"}
             </span>
             <span className="font-mono text-[9px] text-muted-foreground/40 border border-[var(--color-border-tertiary)] px-1.5 py-0.5 uppercase tracking-widest">
               {signal.channel.toUpperCase()}

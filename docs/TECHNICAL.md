@@ -127,6 +127,12 @@ All handlers live in `app/api/**/route.ts`.
 - `forge-agent` and `claim-bounty` now use strict TypeScript response unions.
 - Error payloads are explicit and status-code aligned.
 - No untyped `any` responses should be used for public API contracts.
+- `POST /api/signals` and `POST /api/signals/[id]/replies` now require a real
+  SEP-53 Ed25519 `signature` over `{ title, body, timestamp }` (signals) or
+  `{ title: "", body, timestamp }` (replies), plus a numeric `timestamp`. The
+  server verifies ownership with `Keypair.fromPublicKey(wallet).verify(...)`
+  and returns `400` for missing/invalid/forged signatures. Verified authorship
+  is persisted as `signature_verified` and shown as a verified badge in the UI.
 
 ### 5.3 Flag-gated API extensions
 
@@ -147,6 +153,10 @@ All handlers live in `app/api/**/route.ts`.
 | `phase-122` | `POST /api/phase-nft/verify` | Adds `delta` + `storage` fields (off-chain manifest, stub note) | Fields omitted |
 | `phase-123` | `GET /api/metadata/[id]` & `GET /api/ipfs/[...cid]` | Adds `X-Phase-*` headers, per-gateway timeout, structured `perGateway` error | Legacy 8s sequential, no headers |
 | `phase-124` | `scripts/*` | Migration logs, `--migrate-metadata` CLI | No-op with hint |
+| `phase-82` | `PATCH /api/signals/[id]` & `GET /api/signals/[id]/history` | Author-only edit with pre-edit version snapshot; history route returns versions + word-level diffs (`diffWords`) between every consecutive snapshot and the live signal | `404` disabled, no edit path |
+| `phase-83` | `GET/POST /api/signals/[id]/reactions` | Toggle a curated emoji reaction per (signal, wallet); `GET` returns per-emoji counts + the viewer's own reacted flags; `POST` rate-limited to 20/60s per wallet (`429` + `Retry-After` over the limit) | `404` disabled |
+| `phase-139` | `GET/POST /api/market/collections/[collection_id]/offer-book` | `GET` aggregates every pending offer across a collection's active listings into price levels (best price first); `POST` fans a single buyer intent into up to 20 per-listing offers, reporting `created`/`skipped` | `404` disabled; per-listing `/api/market/[id]/offers` unaffected |
+| `phase-140` | `POST /api/market/route.ts` (listing create) & `POST /api/market/[id]/offers/[offer_id]` (accept) | Listing create accepts `creator_wallet`/`royalty_bps`; accepting an offer on a secondary sale (`creator_wallet !== seller_wallet`) computes and ledgers a creator/seller split, returned as `royalty` on the accept response | Listing create ignores the fields; accept pays 100% to seller as before |
 
 ---
 
@@ -229,6 +239,10 @@ NEXT_PUBLIC_FEATURE_PHASE_123=1
 NEXT_PUBLIC_FEATURE_PHASE_124=1
 NEXT_PUBLIC_FEATURE_PHASE_134=1
 NEXT_PUBLIC_FEATURE_PHASE_135=1
+NEXT_PUBLIC_FEATURE_PHASE_82=1
+NEXT_PUBLIC_FEATURE_PHASE_83=1
+NEXT_PUBLIC_FEATURE_PHASE_139=1
+NEXT_PUBLIC_FEATURE_PHASE_140=1
 # Server-only aliases also accepted: FEATURE_PHASE_104, etc.
 ```
 

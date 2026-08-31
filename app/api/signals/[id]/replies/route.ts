@@ -4,6 +4,7 @@ import { getSignal, createReply, AttributionInReplySchema, recordReplyAttributio
 import { createNotification } from "@/lib/notification-store"
 import { dispatchPushNotification, extractMentionedWallets, isPhase92Enabled } from "@/lib/push-notifications"
 import { createApiRequestContext } from "@/lib/api-observability"
+import { verifySignalSignature } from "@/lib/viewer-signature"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 import { z } from "zod"
 
@@ -31,6 +32,7 @@ type ReplyBody = {
   body?: unknown
   wallet?: unknown
   signature?: unknown
+  timestamp?: unknown
   attribution?: unknown
   contributors?: unknown
 }
@@ -79,6 +81,25 @@ export async function POST(
     return api.json(
       { error: "Body max 500 chars" },
       { status: 400, event: "signals.reply.validation_failed", metadata: { reason: "body_length" } },
+    )
+  }
+  if (typeof body.timestamp !== "number" || !Number.isFinite(body.timestamp)) {
+    return api.json(
+      { error: "Invalid signature timestamp" },
+      { status: 400, event: "signals.reply.validation_failed", metadata: { reason: "timestamp" } },
+    )
+  }
+
+  const walletStr = body.wallet
+  const signatureVerified = await verifySignalSignature(
+    walletStr,
+    { title: "", body: (body.body as string).trim(), timestamp: body.timestamp as number },
+    body.signature as string,
+  )
+  if (!signatureVerified) {
+    return api.json(
+      { error: "Invalid signature: reply not signed by this wallet" },
+      { status: 400, event: "signals.reply.invalid_signature" },
     )
   }
 
@@ -144,7 +165,6 @@ export async function POST(
       return api.json({ error: "Signal not found" }, { status: 404, event: "signals.reply.signal_missing", metadata: { signal_id: id } })
     }
 
-    const walletStr = body.wallet
     const res = await fetch(
       `${request.nextUrl.origin}/api/artist-profile?walletAddress=${encodeURIComponent(walletStr)}`,
       { headers: { "x-correlation-id": api.correlationId } },
@@ -167,6 +187,7 @@ export async function POST(
       body: (body.body as string).trim(),
       upvotes: [],
       signature: body.signature as string,
+      signature_verified: signatureVerified,
     })
 
     // phase-116: record contributor attribution (flag-gated, best-effort)

@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
-import { getListing, getOffers, updateOfferStatus, soldListing } from "@/lib/market-store"
+import {
+  getListing,
+  getOffers,
+  updateOfferStatus,
+  soldListing,
+  isPhase140Enabled,
+  computeRoyaltySplit,
+  recordRoyaltyPayout,
+} from "@/lib/market-store"
 import { createNotification } from "@/lib/notification-store"
 
 export const runtime = "nodejs"
@@ -40,8 +48,24 @@ export async function POST(
   const updated = await updateOfferStatus(offer_id, newStatus)
 
   // If accepted, mark listing as sold
+  let royalty: Awaited<ReturnType<typeof recordRoyaltyPayout>> | null = null
   if (action === "accept") {
     await soldListing(id)
+
+    // phase-140: split proceeds with the original creator on a secondary sale.
+    if (isPhase140Enabled()) {
+      const split = computeRoyaltySplit(listing, offer.amount_phaselq)
+      if (split.is_secondary_sale && split.royalty_bps > 0) {
+        royalty = await recordRoyaltyPayout(listing, offer.id, split)
+        void createNotification(listing.creator_wallet!, "royalty_payout", {
+          listing_id: id,
+          token_id: listing.token_id,
+          amount_phaselq: royalty.royalty_amount_phaselq,
+          seller_wallet: listing.seller_wallet,
+        }).catch(() => { /* silent */ })
+      }
+    }
+
     void createNotification(offer.buyer_wallet, "offer_accepted", { listing_id: id, token_id: listing.token_id })
       .catch(() => { /* silent */ })
   } else {
@@ -49,5 +73,5 @@ export async function POST(
       .catch(() => { /* silent */ })
   }
 
-  return NextResponse.json({ ok: true, offer: updated })
+  return NextResponse.json({ ok: true, offer: updated, ...(royalty ? { royalty } : {}) })
 }

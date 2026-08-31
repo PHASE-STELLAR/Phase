@@ -31,6 +31,10 @@
  * - phase-136: per-CID IPFS gateway resolution cache with TTL + gateway health scoring
  * - phase-137: structured error taxonomy for profile avatar / x402 invoice failures
  * - phase-138: cost attribution ledger per follow/forge request for treasury accounting
+ * - phase-82: signal edit history with word-level version diffing
+ * - phase-83: emoji-reaction aggregation on signals with per-wallet rate limits
+ * - phase-139: collection-level offer books aggregated from token offers + bulk bid
+ * - phase-140: royalty enforcement on secondary sales via a creator/seller split
  */
 
 export type PhaseFeatureFlag =
@@ -83,7 +87,11 @@ export type PhaseFeatureFlag =
   | "phase-135"
   | "phase-136"
   | "phase-137"
-  | "phase-138";
+  | "phase-138"
+  | "phase-82"
+  | "phase-83"
+  | "phase-139"
+  | "phase-140";
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-66": ["NEXT_PUBLIC_FEATURE_PHASE_66", "FEATURE_PHASE_66"],
@@ -135,6 +143,10 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-136": ["NEXT_PUBLIC_FEATURE_PHASE_136", "FEATURE_PHASE_136"],
   "phase-137": ["NEXT_PUBLIC_FEATURE_PHASE_137", "FEATURE_PHASE_137"],
   "phase-138": ["NEXT_PUBLIC_FEATURE_PHASE_138", "FEATURE_PHASE_138"],
+  "phase-82": ["NEXT_PUBLIC_FEATURE_PHASE_82", "FEATURE_PHASE_82"],
+  "phase-83": ["NEXT_PUBLIC_FEATURE_PHASE_83", "FEATURE_PHASE_83"],
+  "phase-139": ["NEXT_PUBLIC_FEATURE_PHASE_139", "FEATURE_PHASE_139"],
+  "phase-140": ["NEXT_PUBLIC_FEATURE_PHASE_140", "FEATURE_PHASE_140"],
 };
 
 function isTruthy(v: string | undefined): boolean {
@@ -212,6 +224,10 @@ export function getEnabledFeatureFlags(): PhaseFeatureFlag[] {
     "phase-136",
     "phase-137",
     "phase-138",
+    "phase-82",
+    "phase-83",
+    "phase-139",
+    "phase-140",
   ];
   return all.filter(isFeatureEnabled)
 }

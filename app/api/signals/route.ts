@@ -5,6 +5,7 @@ import {
   createSignal,
   getSignalChannelStats,
 } from "@/lib/signal-store"
+import { verifySignalSignature } from "@/lib/viewer-signature"
 import type { Signal } from "@/lib/signal-store"
 import { getAllWorldCollections } from "@/lib/narrative-world-store"
 import { checkAndUnlock } from "@/lib/achievement-store"
@@ -48,6 +49,7 @@ type CreateSignalBody = {
   channel?: unknown
   wallet?: unknown
   signature?: unknown
+  timestamp?: unknown
   nft_token_id?: unknown
   nft_collection_id?: unknown
   nft_name?: unknown
@@ -72,6 +74,9 @@ export async function POST(request: NextRequest) {
   if (typeof body.signature !== "string" || body.signature.length === 0) {
     return NextResponse.json({ error: "Signature required" }, { status: 400 })
   }
+  if (typeof body.timestamp !== "number" || !Number.isFinite(body.timestamp)) {
+    return NextResponse.json({ error: "Invalid signature timestamp" }, { status: 400 })
+  }
   if (typeof body.title !== "string" || body.title.trim().length === 0) {
     return NextResponse.json({ error: "Title required" }, { status: 400 })
   }
@@ -86,6 +91,24 @@ export async function POST(request: NextRequest) {
   }
   if (typeof body.channel !== "string" || body.channel.trim().length === 0) {
     return NextResponse.json({ error: "Channel required" }, { status: 400 })
+  }
+
+  const walletStr = body.wallet
+  const proofPayload = {
+    title: body.title.trim(),
+    body: (body.body as string).trim(),
+    timestamp: body.timestamp as number,
+  }
+  const signatureVerified = await verifySignalSignature(
+    walletStr,
+    proofPayload,
+    body.signature as string,
+  )
+  if (!signatureVerified) {
+    return NextResponse.json(
+      { error: "Invalid signature: payload not signed by this wallet" },
+      { status: 400 },
+    )
   }
 
   let poll: Signal["poll"]
@@ -131,7 +154,6 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const walletStr = body.wallet
   const res = await fetch(
     `${request.nextUrl.origin}/api/artist-profile?walletAddress=${encodeURIComponent(walletStr)}`,
   ).catch(() => null)
@@ -151,6 +173,7 @@ export async function POST(request: NextRequest) {
     body: (body.body as string).trim(),
     upvotes: [],
     signature: body.signature as string,
+    signature_verified: signatureVerified,
     type: body.type === "poll" ? "poll" : "post",
     ...(poll ? { poll } : {}),
     ...(scheduledFor ? { scheduled_for: scheduledFor } : {}),
