@@ -1,6 +1,11 @@
 import type { AppLang } from "@/components/lang-context"
 import type { ImageUriValidationMessages } from "@/lib/phase-protocol"
 
+function getNodeEnv(): string {
+  if (typeof process === "undefined" || !process.env) return "production"
+  return process.env.NODE_ENV ?? "production"
+}
+
 export type ChamberLogsCopy = {
   chamberOnline: string
   walletRequest: string
