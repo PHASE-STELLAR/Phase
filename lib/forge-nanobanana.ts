@@ -12,6 +12,8 @@
  *      from app/api/webhooks/nanobanana to deliver the result.
  */
 
+import { fetchWithRetry } from "@/lib/pipeline-retry"
+
 const NANOBANANA_BASE = "https://api.nanobananaapi.ai"
 
 function sleep(ms: number): Promise<void> {
@@ -63,7 +65,7 @@ async function submitGenerateTask(prompt: string, callBackUrl: string): Promise<
     callBackUrl,
   }
 
-  const genRes = await fetch(`${NANOBANANA_BASE}/api/v1/nanobanana/generate`, {
+  const genRes = await fetchWithRetry(`${NANOBANANA_BASE}/api/v1/nanobanana/generate`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -135,7 +137,7 @@ export async function generateForgeImageUrlViaNanobananaApi(options: {
   while (Date.now() < deadline) {
     await sleep(pollIntervalMs)
 
-    const infoRes = await fetch(
+    const infoRes = await fetchWithRetry(
       `${NANOBANANA_BASE}/api/v1/nanobanana/record-info?taskId=${encodeURIComponent(taskId)}`,
       {
         headers: { Authorization: `Bearer ${apiKey}` },

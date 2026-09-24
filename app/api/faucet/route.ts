@@ -37,13 +37,16 @@ import { isQuestSnapshotEnabled, loadQuestSnapshot, saveQuestSnapshot, pruneStal
 import { isStreakMultiplierEnabled, getStreakInfo, applyStreakMultiplier, recordDailyClaim, type StreakInfo } from "@/lib/quest-streak"
 import { isReferralQuestEnabled, validateReferralCode, recordReferral, getReferralStats } from "@/lib/referral-quest"
 import { isDistributorTopupEnabled, prepareTopup } from "@/lib/distributor-topup"
-import { 
-  evaluateAllQuests, 
-  getQuestRegistry, 
-  getQuestRewardAmount, 
-  isValidQuestId, 
-  type QuestEvaluationResult 
+import {
+  evaluateAllQuests,
+  getQuestRegistry,
+  getQuestRewardAmount,
+  isValidQuestId,
+  type QuestEvaluationResult
 } from "@/lib/quest-registry"
+import { assessWalletSybilRisk, isSybilResistanceEnabled } from "@/lib/sybil-resistance"
+import { isWalletDenied } from "@/lib/faucet-deny-list"
+import { verifyTurnstileToken, turnstileSiteKeyConfigured } from "@/lib/faucet-turnstile"
 
 /** Vercel: Hobby ~10s; Pro/Enterprise permite más — subir si el faucet sigue en 504. */
 export const maxDuration = 60
@@ -490,9 +493,9 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  let body: { walletAddress?: string; userAddress?: string; reward?: string; referralCode?: string }
+  let body: { walletAddress?: string; userAddress?: string; reward?: string; referralCode?: string; turnstileToken?: string; hashcashProof?: string }
   try {
-    body = (await req.json()) as { walletAddress?: string; userAddress?: string; reward?: string; referralCode?: string }
+    body = (await req.json()) as { walletAddress?: string; userAddress?: string; reward?: string; referralCode?: string; turnstileToken?: string; hashcashProof?: string }
   } catch {
     return NextResponse.json({ error: "JSON inválido." }, { status: 400 })
   }
@@ -503,6 +506,65 @@ export async function POST(req: NextRequest) {
       { error: "walletAddress (o userAddress) debe ser una cuenta Stellar G válida." },
       { status: 400 },
     )
+  }
+
+  // Triple check #1: Check deny-list (governance veto)
+  if (await isWalletDenied(userAddress)) {
+    return NextResponse.json(
+      {
+        error: "Esta wallet ha sido excluida del faucet por gobernanza.",
+        code: "WALLET_DENIED",
+        detail: "Contacta al equipo PHASE si crees que esto es un error.",
+      },
+      { status: 403 },
+    )
+  }
+
+  // Triple check #2: Turnstile bot check (client-side Cloudflare challenge)
+  if (turnstileSiteKeyConfigured()) {
+    if (!body.turnstileToken) {
+      return NextResponse.json(
+        {
+          error: "Turnstile token requerido.",
+          code: "TURNSTILE_REQUIRED",
+          detail: "Ejecuta el desafío Cloudflare Turnstile en el cliente antes de enviar.",
+        },
+        { status: 400 },
+      )
+    }
+    try {
+      const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || undefined
+      const turnstileOk = await verifyTurnstileToken(body.turnstileToken, clientIp)
+      if (!turnstileOk) {
+        return NextResponse.json(
+          { error: "Turnstile check failed.", code: "TURNSTILE_FAILED" },
+          { status: 403 },
+        )
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unknown error"
+      return NextResponse.json(
+        { error: `Turnstile verification failed: ${msg}`, code: "TURNSTILE_ERROR" },
+        { status: 500 },
+      )
+    }
+  }
+
+  // Triple check #3: Sybil resistance score (on-chain wallet history)
+  if (isSybilResistanceEnabled()) {
+    const sybilScore = await assessWalletSybilRisk(userAddress)
+    if (sybilScore && sybilScore.suspect) {
+      return NextResponse.json(
+        {
+          error: "Wallet appears to be new or suspicious. Try again after building more on-chain history.",
+          code: "SYBIL_SUSPECT",
+          suspectBand: sybilScore.band,
+          signals: sybilScore.signals.slice(0, 3),
+          detail: "Sybil resistance active: fresh or dormant accounts are rate-limited.",
+        },
+        { status: 429 },
+      )
+    }
   }
 
   /** Cada intento de claim debe ver el ledger al día (p. ej. acabas de hacer settle). */

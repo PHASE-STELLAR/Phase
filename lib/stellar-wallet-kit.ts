@@ -15,10 +15,13 @@ import {
   WALLET_CONNECT_ID,
 } from "@creit.tech/stellar-wallets-kit/modules/wallet-connect"
 import { albedoImplicitTxAllowed, isAlbedoSelectedInKit } from "@/lib/albedo-intent-client"
+import { randomUUID } from "node:crypto"
 
 let initialized = false
 
 const LS_SELECTED_MODULE_ID = "@StellarWalletsKit/selectedModuleId"
+const LS_POSTMESSAGE_NONCE = "@StellarWalletsKit/postMessageNonce"
+const LS_POSTMESSAGE_ORIGIN = "@StellarWalletsKit/postMessageOrigin"
 
 /** Testnet network passphrase — used for network validation on hardware wallets. */
 export const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015"
@@ -30,6 +33,37 @@ export const MAINNET_PASSPHRASE = "Public Global Stellar Network ; September 201
  */
 const WC_PROJECT_ID =
   process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? "8b0db5d25e9ea3d7bddf2b96e1b7f0eb"
+
+function generatePostMessageNonce(): string {
+  if (typeof window === "undefined") return ""
+  const nonce = randomUUID()
+  try {
+    window.localStorage.setItem(LS_POSTMESSAGE_NONCE, nonce)
+    window.localStorage.setItem(LS_POSTMESSAGE_ORIGIN, window.location.origin)
+  } catch {
+    // localStorage unavailable; nonce remains in memory
+  }
+  return nonce
+}
+
+function getPostMessageNonce(): string | null {
+  if (typeof window === "undefined") return null
+  try {
+    return window.localStorage.getItem(LS_POSTMESSAGE_NONCE)
+  } catch {
+    return null
+  }
+}
+
+function validatePostMessageOrigin(): boolean {
+  if (typeof window === "undefined") return false
+  try {
+    const storedOrigin = window.localStorage.getItem(LS_POSTMESSAGE_ORIGIN)
+    return storedOrigin === window.location.origin
+  } catch {
+    return false
+  }
+}
 
 /**
  * Build the full modules list: all defaultModules (no extra config needed) plus
@@ -43,6 +77,13 @@ export function initStellarWalletKit() {
   if (initialized) return
   const hasPersistedModule =
     typeof window !== "undefined" && Boolean(window.localStorage.getItem(LS_SELECTED_MODULE_ID)?.trim())
+
+  if (typeof window !== "undefined") {
+    generatePostMessageNonce()
+    if (!validatePostMessageOrigin()) {
+      console.warn("[PHASE] Wallet Kit: postMessage origin mismatch — possible hijack attempt")
+    }
+  }
 
   const walletConnectModule = new WalletConnectModule({
     projectId: WC_PROJECT_ID,
@@ -145,12 +186,19 @@ export async function signTransaction(
     }
   }
 
+  if (typeof window !== "undefined" && !validatePostMessageOrigin()) {
+    return {
+      error: {
+        message: "Wallet Kit security check failed: origin mismatch. This may indicate a hijack attempt.",
+      },
+    }
+  }
+
   try {
     const { signedTxXdr } = await StellarWalletsKit.signTransaction(xdr, opts)
     return { signedTxXdr, signedTransaction: signedTxXdr }
   } catch (e: unknown) {
     const err = parseError(e)
-    // Map common Ledger/USB errors to friendly messages
     const raw = err.message ?? ""
     let message = raw
 
