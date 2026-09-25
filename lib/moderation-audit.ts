@@ -4,6 +4,9 @@ import { nanoid } from "nanoid"
 import { z } from "zod"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
 
+export const MODERATION_ACTIONS = ["takedown", "restore"] as const
+export type ModerationAction = (typeof MODERATION_ACTIONS)[number]
+
 export const ModeratorIdentitySchema = z.object({
   moderator_wallet: z.string().trim().regex(/^G[A-Z2-7]{55}$/, "Invalid moderator wallet"),
   moderator_signature: z.string().trim().min(1, "Moderator signature required").max(512),
@@ -12,7 +15,7 @@ export const ModeratorIdentitySchema = z.object({
 export type ModerationAuditEvent = {
   id: string
   signal_id: string
-  action: "takedown" | "restore"
+  action: ModerationAction
   moderator_wallet: string
   moderator_signature: string
   reason: string | null
