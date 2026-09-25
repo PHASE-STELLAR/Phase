@@ -31,6 +31,13 @@ const FILES = {
   questRegistry: "quest-registry.json",
   distributorHealth: "distributor-health.json",
   sqliteDb: "phase.sqlite3",
+  faucetDenyList: "faucet-deny-list.json",
+  faucetFunnelEvents: "faucet-funnel-events.json",
+  trendingSignals: "trending-signals.json",
+  blockList: "block-list.json",
+  x402DeadLetter: "x402-dead-letter.json",
+  generationJobs: "generation-jobs.json",
+  generationDlq: "generation-dlq.json",
 } as const
 
 export type ServerDataFile = keyof typeof FILES

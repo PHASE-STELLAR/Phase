@@ -83,7 +83,71 @@ function parseJsonRpcId(rawBody: string): string | number | null {
   return null
 }
 
+// ── Circuit Breaker & Rate Limiter (Issue #164) ──────────────────────────────
+type CircuitState = "CLOSED" | "OPEN" | "HALF_OPEN"
+
+interface CircuitStatus {
+  state: CircuitState
+  failures: number
+  nextAttempt: number
+}
+
+const upstreamCircuits = new Map<string, CircuitStatus>()
+const CIRCUIT_COOLDOWN_MS = 15_000
+const FAILURE_THRESHOLD = 3
+
+export function getUpstreamCircuitStatus(url: string): CircuitStatus {
+  let status = upstreamCircuits.get(url)
+  if (!status) {
+    status = { state: "CLOSED", failures: 0, nextAttempt: 0 }
+    upstreamCircuits.set(url, status)
+  }
+  if (status.state === "OPEN" && Date.now() >= status.nextAttempt) {
+    status.state = "HALF_OPEN"
+  }
+  return status
+}
+
+export function recordUpstreamSuccess(url: string) {
+  const status = getUpstreamCircuitStatus(url)
+  status.state = "CLOSED"
+  status.failures = 0
+}
+
+export function recordUpstreamFailure(url: string, is429: boolean = false) {
+  const status = getUpstreamCircuitStatus(url)
+  status.failures += 1
+  if (is429 || status.failures >= FAILURE_THRESHOLD) {
+    status.state = "OPEN"
+    status.nextAttempt = Date.now() + CIRCUIT_COOLDOWN_MS
+  }
+}
+
+/** Rate Limiting: 60 requests / minute per client identifier */
+const clientRateLimitMap = new Map<string, { count: number; resetAt: number }>()
+const RATE_LIMIT_WINDOW_MS = 60_000
+const MAX_REQUESTS_PER_WINDOW = 60
+
+export function checkProxyRateLimit(clientIp: string): boolean {
+  const now = Date.now()
+  const record = clientRateLimitMap.get(clientIp)
+  if (!record || now >= record.resetAt) {
+    clientRateLimitMap.set(clientIp, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
+    return true
+  }
+  if (record.count >= MAX_REQUESTS_PER_WINDOW) {
+    return false
+  }
+  record.count += 1
+  return true
+}
+
 export async function POST(req: NextRequest) {
+  const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "global"
+  if (!checkProxyRateLimit(clientIp)) {
+    return jsonRpcUpstreamError("Rate limit exceeded for Soroban RPC proxy. Please retry later.", null)
+  }
+
   let body: string
   try {
     body = await req.text()
@@ -96,8 +160,14 @@ export async function POST(req: NextRequest) {
 
   const fetchTimeoutMs = proxyFetchTimeoutMs()
   const rpcId = parseJsonRpcId(body)
-  /** Evita agotar `maxDuration` si hay muchas URLs en env. */
-  const urls = sorobanUpstreamCandidates().slice(0, 5)
+  const candidates = sorobanUpstreamCandidates().slice(0, 5)
+  // Filter candidates using Circuit Breaker (keep HALF_OPEN or CLOSED)
+  let urls = candidates.filter((url) => getUpstreamCircuitStatus(url).state !== "OPEN")
+  if (urls.length === 0) {
+    // If all circuits are OPEN, fall back to testing the primary candidate
+    urls = [candidates[0] || DEFAULT_SOROBAN_TESTNET_RPC]
+  }
+
   const perUrl = attemptsPerUrl()
   let lastFailure = "unknown"
 
@@ -122,6 +192,7 @@ export async function POST(req: NextRequest) {
         const ct = upstream.headers.get("Content-Type") || "application/json"
 
         if (upstream.ok) {
+          recordUpstreamSuccess(url)
           return new NextResponse(text, {
             status: upstream.status,
             headers: { "Content-Type": ct },
@@ -130,6 +201,7 @@ export async function POST(req: NextRequest) {
 
         if (RETRYABLE_HTTP.has(upstream.status)) {
           lastFailure = `${url} → HTTP ${upstream.status}`
+          recordUpstreamFailure(url, upstream.status === 429)
           if (attempt + 1 < perUrl) {
             await sleep(proxyRetryBackoffMs(attempt))
             continue
@@ -137,6 +209,7 @@ export async function POST(req: NextRequest) {
           break
         }
 
+        recordUpstreamSuccess(url)
         return new NextResponse(text, {
           status: upstream.status,
           headers: { "Content-Type": ct },
@@ -144,6 +217,7 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         lastFailure = `${url} → ${msg}`
+        recordUpstreamFailure(url, false)
         if (attempt + 1 < perUrl) {
           await sleep(proxyRetryBackoffMs(attempt))
           continue
