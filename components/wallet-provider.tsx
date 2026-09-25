@@ -265,6 +265,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("focus", onFocus)
   }, [refresh, startHeartbeat])
 
+  /** Stop polling when the provider unmounts. */
+  useEffect(() => stopHeartbeat, [stopHeartbeat])
+
   /** Subscribe to kit state events (extension wallets dispatch these). */
   useEffect(() => {
     initStellarWalletKit()
@@ -339,6 +342,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (now - prev < FAUCET_AUTO_CLAIM_DEDUPE_MS) return
     lastFaucetAutoClaimAt.set(address, now)
     autoFundedWalletsRef.current.add(address)
+    const controller = new AbortController()
 
     const controller = new AbortController()
 
@@ -382,10 +386,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
 
     void autoClaimGenesis().catch(() => {})
-
-    return () => {
-      controller.abort()
-    }
+    return () => controller.abort()
   }, [address])
 
   const refreshArtistAlias = useCallback(async (signal?: AbortSignal): Promise<string | null> => {

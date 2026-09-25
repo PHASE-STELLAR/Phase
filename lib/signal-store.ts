@@ -26,6 +26,7 @@ export type SignalPoll = {
 
 export type Signal = {
   id: string;
+  version: number;
   author_wallet: string;
   author_display: string;
   channel: "general" | "showcase" | string;
@@ -68,6 +69,7 @@ export type SignalReply = {
 
 type SignalRow = {
   id: string;
+  version: number;
   author_wallet: string;
   author_display: string;
   channel: string;
@@ -107,6 +109,7 @@ type ReplyRow = {
 function rowToSignal(row: SignalRow): Signal {
   return {
     id: row.id,
+    version: row.version,
     author_wallet: row.author_wallet,
     author_display: row.author_display,
     channel: row.channel,
@@ -203,7 +206,7 @@ export async function getSignal(id: string): Promise<Signal | null> {
 }
 
 export async function createSignal(
-  data: Omit<Signal, "id" | "created_at">,
+  data: Omit<Signal, "id" | "created_at" | "version">,
 ): Promise<Signal> {
   const now = Date.now();
   const scheduled =
@@ -213,6 +216,7 @@ export async function createSignal(
   const signal: Signal = {
     ...data,
     id: nanoid(10),
+    version: 0,
     created_at: now,
     ...(scheduled
       ? { status: "scheduled" as const }
@@ -944,7 +948,7 @@ export function flag82RollbackNote(): string {
 }
 
 export class SignalEditError extends Error {
-  code: "FLAG_DISABLED" | "NOT_FOUND" | "FORBIDDEN" | "VALIDATION_FAILED";
+  code: "FLAG_DISABLED" | "NOT_FOUND" | "FORBIDDEN" | "VALIDATION_FAILED" | "CONFLICT";
 
   constructor(code: SignalEditError["code"], message: string) {
     super(message);
@@ -1046,12 +1050,12 @@ export async function editSignal(
   signal_id: string,
   wallet: string,
   patch: { title?: string; body?: string },
+  expectedVersion?: number,
 ): Promise<{ signal: Signal; version: SignalVersion }> {
   if (!isPhase82Enabled()) throw new SignalEditError("FLAG_DISABLED", "phase-82 disabled");
-
-  const signal = await getSignal(signal_id);
-  if (!signal) throw new SignalEditError("NOT_FOUND", "Signal not found");
-  if (signal.author_wallet !== wallet) throw new SignalEditError("FORBIDDEN", "Only the author can edit this signal");
+  if (expectedVersion !== undefined && (!Number.isInteger(expectedVersion) || expectedVersion < 0)) {
+    throw new SignalEditError("VALIDATION_FAILED", "A valid signal version is required");
+  }
 
   const title = patch.title?.trim();
   const body = patch.body?.trim();
@@ -1060,34 +1064,46 @@ export async function editSignal(
   if (body !== undefined && body.length === 0) throw new SignalEditError("VALIDATION_FAILED", "body cannot be empty");
 
   const db = getDb();
-  const maxVersionRow = db
-    .prepare("SELECT COALESCE(MAX(version), 0) AS maxv FROM signal_versions WHERE signal_id = ?")
-    .get(signal_id) as { maxv: number };
-  const nextVersion = maxVersionRow.maxv + 1;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const row = getSignalRow(signal_id);
+    if (!row) throw new SignalEditError("NOT_FOUND", "Signal not found");
+    if (row.author_wallet !== wallet) throw new SignalEditError("FORBIDDEN", "Only the author can edit this signal");
+    const currentVersion = expectedVersion ?? row.version;
+    if (row.version !== currentVersion) {
+      throw new SignalEditError("CONFLICT", "Signal changed; reload before editing again");
+    }
 
-  const version: SignalVersion = {
-    id: nanoid(10),
-    signal_id,
-    version: nextVersion,
-    title: signal.title,
-    body: signal.body,
-    edited_by: wallet,
-    edited_at: Date.now(),
-  };
-  db.prepare(
-    `INSERT INTO signal_versions (id, signal_id, version, title, body, edited_by, edited_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(version.id, version.signal_id, version.version, version.title, version.body, version.edited_by, version.edited_at);
+    const nextVersion = currentVersion + 1;
+    const version: SignalVersion = {
+      id: nanoid(10),
+      signal_id,
+      version: nextVersion,
+      title: row.title,
+      body: row.body,
+      edited_by: wallet,
+      edited_at: Date.now(),
+    };
+    db.prepare(
+      `INSERT INTO signal_versions (id, signal_id, version, title, body, edited_by, edited_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(version.id, version.signal_id, version.version, version.title, version.body, version.edited_by, version.edited_at);
 
-  db.prepare("UPDATE signals SET title = COALESCE(?, title), body = COALESCE(?, body) WHERE id = ?").run(
-    title ?? null,
-    body ?? null,
-    signal_id,
-  );
+    const updated = db.prepare(
+      `UPDATE signals
+       SET title = COALESCE(?, title), body = COALESCE(?, body), version = ?
+       WHERE id = ? AND version = ?`,
+    ).run(title ?? null, body ?? null, nextVersion, signal_id, currentVersion);
+    if (updated.changes !== 1) throw new SignalEditError("CONFLICT", "Signal changed; reload before editing again");
 
-  const updated = await getSignal(signal_id);
-  if (!updated) throw new SignalEditError("NOT_FOUND", "Signal not found after edit");
-  return { signal: updated, version };
+    db.exec("COMMIT");
+    const next = await getSignal(signal_id);
+    if (!next) throw new SignalEditError("NOT_FOUND", "Signal not found after edit");
+    return { signal: next, version };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export async function getSignalVersionHistory(signal_id: string): Promise<SignalVersion[]> {
