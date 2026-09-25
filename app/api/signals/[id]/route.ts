@@ -76,6 +76,7 @@ const EDIT_ERROR_STATUS: Record<SignalEditError["code"], number> = {
   NOT_FOUND: 404,
   FORBIDDEN: 403,
   VALIDATION_FAILED: 400,
+  CONFLICT: 409,
 }
 
 // phase-82: edit a signal's title/body, snapshotting the pre-edit state into version history.
@@ -94,12 +95,16 @@ export async function PATCH(
   if (typeof body.wallet !== "string" || !StrKey.isValidEd25519PublicKey(body.wallet)) {
     return NextResponse.json({ error: "Invalid wallet address" }, { status: 400 })
   }
+  const ifMatch = request.headers.get("if-match")?.trim()
+  if (!ifMatch || !/^\d+$/.test(ifMatch)) {
+    return NextResponse.json({ error: "If-Match header with the current signal version is required" }, { status: 428 })
+  }
 
   try {
     const { signal, version } = await editSignal(id, body.wallet, {
       title: typeof body.title === "string" ? body.title : undefined,
       body: typeof body.body === "string" ? body.body : undefined,
-    })
+    }, Number(ifMatch))
     return NextResponse.json({ signal, version })
   } catch (error) {
     if (error instanceof SignalEditError) {
