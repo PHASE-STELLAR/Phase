@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { buildWorldExportSnapshot, renderWorldExportMarkdown } from "@/lib/narrative-world-store"
+import { buildWorldExportSnapshot, renderWorldExportMarkdown, renderWorldExportNdjson } from "@/lib/narrative-world-store"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 
 export const runtime = "nodejs"
@@ -42,8 +42,19 @@ export async function GET(
     })
   }
 
+  if (format === "ndjson") {
+    const ndjson = renderWorldExportNdjson(snapshot)
+    return new NextResponse(ndjson, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Content-Disposition": `attachment; filename="world-${collectionId}.ndjson"`,
+      },
+    })
+  }
+
   if (format !== "json") {
-    return NextResponse.json({ error: "format debe ser 'json' o 'markdown'" }, { status: 400 })
+    return NextResponse.json({ error: "format debe ser 'json', 'markdown' o 'ndjson'" }, { status: 400 })
   }
 
   return NextResponse.json(snapshot, {

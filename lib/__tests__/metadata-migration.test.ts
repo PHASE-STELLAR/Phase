@@ -43,4 +43,19 @@ describe("phase-124 metadata migration", () => {
     const res = migrateMetadataPayload({ name: "" }, { force: true })
     assert.equal(res.ok, false)
   })
+
+  it("handles null, undefined, and non-object payloads without throwing", () => {
+    const resNull = migrateMetadataPayload(null, { force: true })
+    assert.equal(resNull.ok, false)
+    if (!resNull.ok) assert.equal(resNull.error.code, "UNSUPPORTED_VERSION")
+
+    const resUndefined = migrateMetadataPayload(undefined, { force: true })
+    assert.equal(resUndefined.ok, false)
+    if (!resUndefined.ok) assert.equal(resUndefined.error.code, "UNSUPPORTED_VERSION")
+
+    const resNum = migrateMetadataPayload(12345, { force: true })
+    assert.equal(resNum.ok, false)
+    if (!resNum.ok) assert.equal(resNum.error.code, "UNSUPPORTED_VERSION")
+  })
 })
+

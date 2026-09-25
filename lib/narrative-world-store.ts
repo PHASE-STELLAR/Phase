@@ -336,6 +336,31 @@ export function renderWorldExportMarkdown(snapshot: WorldExportSnapshot): string
   return md
 }
 
+/**
+ * Serialises a world export snapshot as Newline-Delimited JSON (NDJSON).
+ *
+ * One JSON object per line — the metadata header on the first line, then one
+ * narrative record per subsequent line. Consumers can stream the response and
+ * process records incrementally without buffering the whole file.
+ *
+ * The caller is responsible for setting Content-Type: application/x-ndjson.
+ */
+export function renderWorldExportNdjson(snapshot: WorldExportSnapshot): string {
+  const header = {
+    collection_id: snapshot.collection_id,
+    world_name: snapshot.world_name,
+    world_prompt: snapshot.world_prompt,
+    narrator_tone: snapshot.narrator_tone ?? null,
+    created_at: snapshot.created_at,
+    narrative_count: snapshot.narratives.length,
+  }
+  const lines = [JSON.stringify(header)]
+  for (const n of snapshot.narratives) {
+    lines.push(JSON.stringify(n))
+  }
+  return lines.join("\n") + "\n"
+}
+
 // ─── phase-115: cross-artifact lore linking ──────────────────────────────
 
 export type LoreLink = {
