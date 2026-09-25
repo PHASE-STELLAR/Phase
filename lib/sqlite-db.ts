@@ -191,6 +191,7 @@ export function getDb(): DatabaseSync {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  ensureListingColumns(db);
   // Idempotent migration for databases created before signature_verified existed.
   try {
     db.exec(

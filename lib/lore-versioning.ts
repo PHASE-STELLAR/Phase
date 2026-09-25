@@ -84,12 +84,8 @@ export type WordDiffOp = { op: "equal" | "add" | "remove"; words: string[] }
  */
 export function diffNarrativeText(from: string, to: string): WordDiffOp[] {
   const a = from.split(/\s+/).filter(Boolean)
-  const b = to.split(/\s+/).subt)*// running over large collections.
- // Keep the most recent 50 arcs per collection to bound storage; 5 is enough
- // for the prompt context, but keep 50 for timeline visualization.
-  store[key] = [...existing, entry].slice(-50)
-  await writeArcStore(store)
-  return entry
+  const b = to.split(/\s+/).filter(Boolean)
+  return diffWords(a, b)
 }
 
 /**

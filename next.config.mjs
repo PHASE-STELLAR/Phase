@@ -78,7 +78,13 @@ const nextConfig = {
         headers: [
           { key: "Access-Control-Allow-Origin",  value: "*" },
           { key: "Cross-Origin-Resource-Policy", value: "cross-origin" },
-          { key: "Cache-Control",                value: "public, max-age=86400, immutable" },
+          { key: "Cache-Control",                value: "public, max-age=86400, must-revalidate" },
+        ],
+      },
+      {
+        source: "/assets/(.*)",
+        headers: [
+          { key: "Cache-Control",                value: "public, max-age=86400, must-revalidate" },
         ],
       },
     ]

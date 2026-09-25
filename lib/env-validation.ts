@@ -134,11 +134,114 @@ function validateSecretKey(
 }
 
 /**
+ * Zod Client Schema — Enforces NEXT_PUBLIC_ prefixing and client-safe values.
+ * Client bundle variables MUST NOT contain secret keys or server credentials.
+ */
+export const clientEnvSchema = z.object({
+  NEXT_PUBLIC_PHASER_TOKEN_ID: z.string().optional().refine(
+    (v) => !v || StrKey.isValidContract(v.trim()),
+    { message: "NEXT_PUBLIC_PHASER_TOKEN_ID must be a valid Stellar Contract ID (C...)" },
+  ),
+  NEXT_PUBLIC_PHASE_PROTOCOL_ID: z.string().optional().refine(
+    (v) => !v || StrKey.isValidContract(v.trim()),
+    { message: "NEXT_PUBLIC_PHASE_PROTOCOL_ID must be a valid Stellar Contract ID (C...)" },
+  ),
+  NEXT_PUBLIC_CLASSIC_LIQ_ASSET_CODE: z.string().optional(),
+  NEXT_PUBLIC_CLASSIC_LIQ_ISSUER: z.string().optional().refine(
+    (v) => !v || StrKey.isValidEd25519PublicKey(v.trim()),
+    { message: "NEXT_PUBLIC_CLASSIC_LIQ_ISSUER must be a valid Stellar Public Key (G...)" },
+  ),
+})
+
+/**
+ * Zod Server Schema — Validates server-only configuration, secrets, and RPC endpoints.
+ * Ensures secret keys (e.g. starting with 'S') stay on the server.
+ */
+export const serverEnvSchema = z.object({
+  ADMIN_SECRET_KEY: z.string().optional().refine(
+    (v) => !v || StrKey.isValidEd25519SecretSeed(v.trim()),
+    { message: "ADMIN_SECRET_KEY must be a valid Stellar Secret Key (S...)" },
+  ),
+  FAUCET_DISTRIBUTOR_SECRET_KEY: z.string().optional().refine(
+    (v) => !v || StrKey.isValidEd25519SecretSeed(v.trim()),
+    { message: "FAUCET_DISTRIBUTOR_SECRET_KEY must be a valid Stellar Secret Key (S...)" },
+  ),
+  STELLAR_RPC_URL: z.string().optional().refine(
+    (v) => !v || /^https?:\/\//i.test(v.trim()),
+    { message: "STELLAR_RPC_URL must be a valid HTTP/HTTPS URL" },
+  ),
+  STELLAR_RPC_FALLBACK_URLS: z.string().optional(),
+  SOROBAN_PROXY_FETCH_TIMEOUT_MS: z.string().optional().refine(
+    (v) => {
+      if (!v) return true
+      const n = Number.parseInt(v, 10)
+      return Number.isFinite(n) && n >= 1000
+    },
+    { message: "SOROBAN_PROXY_FETCH_TIMEOUT_MS must be a positive integer" },
+  ),
+})
+
+export function validateClientEnv(rawEnv: Record<string, string | undefined> = process.env): EnvValidationResult {
+  const errors: EnvValidationError[] = []
+  const parsed = clientEnvSchema.safeParse(rawEnv)
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) {
+      const variable = String(issue.path[0] || "CLIENT_ENV")
+      errors.push({
+        variable,
+        issue: "invalid_format",
+        message: issue.message,
+        hint: "Verifica que las variables públicas NEXT_PUBLIC_* tengan el formato correcto.",
+      })
+    }
+  }
+
+  // Security Audit: Check that no secret key is exposed in NEXT_PUBLIC_ variables
+  for (const [key, value] of Object.entries(rawEnv)) {
+    if (key.startsWith("NEXT_PUBLIC_") && value) {
+      if (StrKey.isValidEd25519SecretSeed(value.trim())) {
+        errors.push({
+          variable: key,
+          issue: "wrong_key_type",
+          message: `CRITICAL: Secret key starting with 'S' detected in client variable ${key}!`,
+          hint: "NUNCA expongas secret keys (S...) en variables de entorno cliente NEXT_PUBLIC_*.",
+        })
+      }
+    }
+  }
+
+  return { valid: errors.length === 0, errors }
+}
+
+export function validateServerEnv(rawEnv: Record<string, string | undefined> = process.env): EnvValidationResult {
+  const errors: EnvValidationError[] = []
+  const parsed = serverEnvSchema.safeParse(rawEnv)
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) {
+      const variable = String(issue.path[0] || "SERVER_ENV")
+      errors.push({
+        variable,
+        issue: "invalid_format",
+        message: issue.message,
+        hint: "Verifica la configuración de servidor en .env.local",
+      })
+    }
+  }
+  return { valid: errors.length === 0, errors }
+}
+
+/**
  * Valida la configuración completa de entorno para PHASE
  */
 export function validatePhaseEnv(): EnvValidationResult {
   const errors: EnvValidationError[] = []
   const env = process.env || {}
+
+  const clientRes = validateClientEnv(env)
+  if (!clientRes.valid) errors.push(...clientRes.errors)
+
+  const serverRes = validateServerEnv(env)
+  if (!serverRes.valid) errors.push(...serverRes.errors)
 
   // Contratos Soroban: mismas claves y defaults que `phase-protocol.ts` (omitir "missing" si todo vacío).
   const tokenContract = validateContractEnvChain(
