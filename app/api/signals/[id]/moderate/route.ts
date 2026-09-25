@@ -3,6 +3,8 @@ import { getSignal, takedownSignal, restoreSignal, isModerationEnabled } from "@
 import { createNotification } from "@/lib/notification-store"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 import {
+  MODERATION_ACTIONS,
+  type ModerationAction,
   ModeratorIdentitySchema,
   appendModerationAuditEvent,
   getModerationAuditEvents,
@@ -12,7 +14,7 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 type ModerateBody = {
-  action?: unknown
+  action?: ModerationAction
   reason?: unknown
   moderator_wallet?: unknown
   moderator_signature?: unknown
@@ -65,8 +67,11 @@ export async function POST(
   }
 
   const action = body.action
-  if (action !== "takedown" && action !== "restore") {
-    return NextResponse.json({ error: "action must be 'takedown' or 'restore'" }, { status: 400 })
+  if (!action || !(MODERATION_ACTIONS as readonly string[]).includes(action)) {
+    return NextResponse.json(
+      { error: `action must be one of: ${MODERATION_ACTIONS.join(", ")}` },
+      { status: 400 },
+    )
   }
 
   const auditEnabled = isFeatureEnabled("phase-91")
