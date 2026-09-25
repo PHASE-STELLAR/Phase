@@ -13,6 +13,31 @@
 
 export type WebhookAlertType = "info" | "warning" | "critical"
 
+// Suppresses repeat sends of the same alert (by type+title) within this
+// window so a persistently unhealthy check can't spam webhooks on every
+// cron tick.
+const ALERT_DEDUP_WINDOW_MS = 15 * 60 * 1000 // 15 minutes
+const recentAlerts = new Map<string, number>()
+
+function shouldSuppressAlert(type: WebhookAlertType, title: string): boolean {
+  const key = `${type}:${title}`
+  const now = Date.now()
+  const lastSent = recentAlerts.get(key)
+
+  if (lastSent && now - lastSent < ALERT_DEDUP_WINDOW_MS) {
+    return true
+  }
+
+  recentAlerts.set(key, now)
+  // Bound the map so it can't grow unboundedly across process lifetime.
+  if (recentAlerts.size > 200) {
+    const oldestKey = recentAlerts.keys().next().value
+    if (oldestKey !== undefined) recentAlerts.delete(oldestKey)
+  }
+
+  return false
+}
+
 export interface WebhookAlertPayload {
   title: string
   message: string
@@ -195,6 +220,10 @@ export async function sendWebhookAlert(
   type: WebhookAlertType,
   payload: WebhookAlertPayload
 ): Promise<{ sent: string[]; failed: string[] }> {
+  if (shouldSuppressAlert(type, payload.title)) {
+    return { sent: [], failed: [] }
+  }
+
   const results = await Promise.allSettled([
     sendDiscordWebhook(type, payload).then(ok => ({ service: "discord", ok })),
     sendTelegramWebhook(type, payload).then(ok => ({ service: "telegram", ok })),
