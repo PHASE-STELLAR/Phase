@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile, open, unlink } from "node:fs/promises"
 import path from "node:path"
 import { NextRequest, NextResponse } from "next/server"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
@@ -62,12 +62,55 @@ async function walletStatus(wallet: string, asset: ClassicLiqAsset): Promise<Cla
   return readClassicWalletStatus(wallet, asset)
 }
 
-async function markClassicFund(wallet: string) {
-  const claims = await readClassicClaims()
-  const row = claims[wallet] ?? {}
-  row.classicFundAt = Date.now()
-  claims[wallet] = row
-  await writeClassicClaims(claims)
+function classicClaimsLockPath() {
+  return `${classicClaimsFilePath()}.lock`
+}
+
+// Serializes the check-then-claim below so parallel POSTs for the same
+// wallet can't both pass the "already claimed?" check before either has
+// written its claim — the race that let concurrent requests each trigger a
+// separate Horizon payout for the same bootstrap.
+async function withClaimsLock<T>(fn: () => Promise<T>): Promise<T> {
+  const lockPath = classicClaimsLockPath()
+  const start = Date.now()
+  while (true) {
+    try {
+      const handle = await open(lockPath, "wx")
+      await handle.close()
+      break
+    } catch (err: any) {
+      if (err.code !== "EEXIST") throw err
+      if (Date.now() - start > 5000) throw new Error("classic-liq claims lock timeout")
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+  try {
+    return await fn()
+  } finally {
+    await unlink(lockPath).catch(() => {})
+  }
+}
+
+/** Atomically claims the bootstrap for `wallet`, or returns false if already claimed. */
+async function claimClassicFund(wallet: string): Promise<boolean> {
+  return withClaimsLock(async () => {
+    const claims = await readClassicClaims()
+    if (claims[wallet]?.classicFundAt) return false
+    const row = claims[wallet] ?? {}
+    row.classicFundAt = Date.now()
+    claims[wallet] = row
+    await writeClassicClaims(claims)
+    return true
+  })
+}
+
+/** Releases a claim after a failed Horizon submission, so a genuine failure doesn't permanently lock the wallet out. */
+async function releaseClassicFundClaim(wallet: string): Promise<void> {
+  await withClaimsLock(async () => {
+    const claims = await readClassicClaims()
+    delete claims[wallet]
+    await writeClassicClaims(claims)
+  })
 }
 
 export async function GET(req: NextRequest) {
@@ -174,13 +217,13 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const claims = await readClassicClaims()
-  const fundedAt = claims[wallet]?.classicFundAt ?? null
-  if (fundedAt) {
+  const claimed = await claimClassicFund(wallet)
+  if (!claimed) {
+    const claims = await readClassicClaims()
     return NextResponse.json(
       {
         error: "Classic bootstrap already claimed for this wallet.",
-        fundedAt,
+        fundedAt: claims[wallet]?.classicFundAt ?? null,
       },
       { status: 409 },
     )
@@ -205,7 +248,6 @@ export async function POST(req: NextRequest) {
       .build()
     tx.sign(config.issuerKp)
     const submit = await server.submitTransaction(tx)
-    await markClassicFund(wallet)
     return NextResponse.json({
       ok: true,
       hash: submit.hash,
@@ -213,6 +255,7 @@ export async function POST(req: NextRequest) {
       amount: config.amount,
     })
   } catch (e) {
+    await releaseClassicFundClaim(wallet)
     logHorizonSubmitError("classic-liq POST payment", e)
     return NextResponse.json(
       { error: e instanceof Error ? e.message : String(e), asset: config.asset },
