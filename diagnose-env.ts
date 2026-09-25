@@ -5,6 +5,8 @@
 
 import {
   validatePhaseEnv,
+  validateServerEnv,
+  validateClientEnv,
   formatEnvValidationErrors,
   validateFaucetIssuerConfig,
   auditFollowGraphPortabilityWiring,
@@ -26,8 +28,25 @@ console.log("=".repeat(70))
 console.log("DIAGNÓSTICO DE CONFIGURACIÓN PHASE")
 console.log("=".repeat(70))
 
-// 1. Validación general de entorno
-console.log("\n📋 Validación general de variables de entorno:")
+// 1. Validación general y esquemas Zod (server vs client)
+console.log("\n📋 Validación de esquemas de entorno (Zod serverSchema & clientSchema):")
+const serverCheck = validateServerEnv()
+const clientCheck = validateClientEnv()
+
+if (serverCheck.valid) {
+  console.log("   ✅ serverSchema: Variables de servidor válidas")
+} else {
+  console.log("   ❌ serverSchema errores:")
+  console.log(formatEnvValidationErrors(serverCheck))
+}
+
+if (clientCheck.valid) {
+  console.log("   ✅ clientSchema: Variables cliente NEXT_PUBLIC_* válidas y seguras")
+} else {
+  console.log("   ❌ clientSchema errores:")
+  console.log(formatEnvValidationErrors(clientCheck))
+}
+
 const validation = validatePhaseEnv()
 if (validation.valid) {
   console.log("   ✅ Todas las variables de entorno requeridas están configuradas")

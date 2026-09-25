@@ -333,7 +333,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [address, isHardwareWallet, validateHardwareNetwork])
 
-  /** Faucet auto-claim (unchanged from original). */
+  /** Faucet auto-claim with AbortController cleanup. */
   useEffect(() => {
     if (!address || userDisconnectedRef.current) return
     if (autoFundedWalletsRef.current.has(address)) return
@@ -342,6 +342,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (now - prev < FAUCET_AUTO_CLAIM_DEDUPE_MS) return
     lastFaucetAutoClaimAt.set(address, now)
     autoFundedWalletsRef.current.add(address)
+    const controller = new AbortController()
+
     const controller = new AbortController()
 
     const autoClaimGenesis = async () => {
@@ -358,6 +360,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
       const settleReward = async (reward: string) => {
         for (let i = 0; i < 8; i++) {
+          if (controller.signal.aborted) return
           const { res, data } = await postReward(reward)
           if (res.status === 503 || res.status === 412) return
           if (res.status === 202 || data.pending === true) {
@@ -374,7 +377,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
       try {
         await settleReward("genesis")
-        await settleReward("quest_connect_wallet")
+        if (!controller.signal.aborted) {
+          await settleReward("quest_connect_wallet")
+        }
       } catch {
         // Silent: faucet may be disabled or already claimed.
       }
@@ -384,7 +389,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return () => controller.abort()
   }, [address])
 
-  const refreshArtistAlias = useCallback(async (): Promise<string | null> => {
+  const refreshArtistAlias = useCallback(async (signal?: AbortSignal): Promise<string | null> => {
     if (!address) {
       setArtistAlias(null)
       return null
@@ -393,6 +398,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     try {
       const res = await fetch(`/api/artist-profile?walletAddress=${encodeURIComponent(address)}`, {
         cache: "no-store",
+        signal,
       })
       const data = (await res.json().catch(() => ({}))) as { alias?: string | null }
       if (!res.ok) {
@@ -441,7 +447,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setArtistAlias(null)
       return
     }
-    void refreshArtistAlias().catch(() => {})
+    const controller = new AbortController()
+    void refreshArtistAlias(controller.signal).catch(() => {})
+    return () => {
+      controller.abort()
+    }
   }, [address, refreshArtistAlias])
 
   useEffect(() => {
