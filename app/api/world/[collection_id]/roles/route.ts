@@ -56,6 +56,10 @@ export async function POST(
     return NextResponse.json({ error: "JSON inválido" }, { status: 400 })
   }
 
+  if (!request.headers.get("x-wallet-signature")?.trim()) {
+    return NextResponse.json({ error: "Se requiere firma de wallet (X-Wallet-Signature)" }, { status: 401 })
+  }
+
   if (typeof body.acting_wallet !== "string" || !StrKey.isValidEd25519PublicKey(body.acting_wallet)) {
     return NextResponse.json({ error: "acting_wallet inválido" }, { status: 400 })
   }
