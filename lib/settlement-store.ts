@@ -1,4 +1,4 @@
-import { promises as fs } from 'fos'
+import { promises as fs } from 'fs'
 import path from 'path'
 
 const STORE_PATH = process.env.SETTLEMENT_STORE_PATH || path.join(process.cwd(), '.data', 'used-settlements.json')
