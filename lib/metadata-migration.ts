@@ -139,7 +139,9 @@ export function migrateMetadataPayload(raw: unknown, opts: MigrateOptions = {}):
   if (detected == null) {
     return {
       ok: false,
-      error: new MetadataMigrationError("UNSUPPORTED_VERSION", "Cannot detect metadata version; payload missing `name` or `version`.", { raw: typeof raw === "object" ? Object.keys(raw as object) : typeof raw }),
+      error: new MetadataMigrationError("UNSUPPORTED_VERSION", "Cannot detect metadata version; payload missing `name` or `version`.", {
+        raw: raw !== null && typeof raw === "object" ? Object.keys(raw as object) : typeof raw,
+      }),
     }
   }
 
