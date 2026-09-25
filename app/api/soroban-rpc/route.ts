@@ -31,6 +31,14 @@ function proxyRetryBackoffMs(attemptIndex: number): number {
 /** HTTP que suelen ser transitorios en el RPC público de testnet. */
 const RETRYABLE_HTTP = new Set([502, 503, 504, 429])
 
+// Keep one warm function instance from amplifying a public RPC outage.
+const MAX_IN_FLIGHT = 12
+const CIRCUIT_FAILURE_LIMIT = 5
+const CIRCUIT_COOLDOWN_MS = 10_000
+let inFlight = 0
+let consecutiveFailures = 0
+let circuitOpenedAt = 0
+
 /** Debe cubrir varias URLs × reintentos × timeout (p. ej. 3×2×45s); Vercel Pro permite hasta 300s. */
 export const maxDuration = 300
 
@@ -84,22 +92,38 @@ function parseJsonRpcId(rawBody: string): string | number | null {
 }
 
 export async function POST(req: NextRequest) {
-  let body: string
-  try {
-    body = await req.text()
-  } catch {
-    return NextResponse.json({ error: "invalid body" }, { status: 400 })
+  const now = Date.now()
+  if (circuitOpenedAt > 0 && now - circuitOpenedAt < CIRCUIT_COOLDOWN_MS) {
+    return NextResponse.json(
+      { error: "Soroban RPC temporarily unavailable; retry shortly." },
+      { status: 503, headers: { "Retry-After": "10" } },
+    )
   }
-  if (body.length > 2_000_000) {
-    return NextResponse.json({ error: "body too large" }, { status: 413 })
+  if (inFlight >= MAX_IN_FLIGHT) {
+    return NextResponse.json(
+      { error: "Soroban RPC proxy is busy; retry shortly." },
+      { status: 429, headers: { "Retry-After": "2" } },
+    )
   }
+  inFlight += 1
 
-  const fetchTimeoutMs = proxyFetchTimeoutMs()
-  const rpcId = parseJsonRpcId(body)
-  /** Evita agotar `maxDuration` si hay muchas URLs en env. */
-  const urls = sorobanUpstreamCandidates().slice(0, 5)
-  const perUrl = attemptsPerUrl()
-  let lastFailure = "unknown"
+  try {
+    let body: string
+    try {
+      body = await req.text()
+    } catch {
+      return NextResponse.json({ error: "invalid body" }, { status: 400 })
+    }
+    if (body.length > 2_000_000) {
+      return NextResponse.json({ error: "body too large" }, { status: 413 })
+    }
+
+    const fetchTimeoutMs = proxyFetchTimeoutMs()
+    const rpcId = parseJsonRpcId(body)
+    /** Evita agotar `maxDuration` si hay muchas URLs en env. */
+    const urls = sorobanUpstreamCandidates().slice(0, 5)
+    const perUrl = attemptsPerUrl()
+    let lastFailure = "unknown"
 
   for (let urlIdx = 0; urlIdx < urls.length; urlIdx++) {
     const url = urls[urlIdx]!
@@ -122,6 +146,8 @@ export async function POST(req: NextRequest) {
         const ct = upstream.headers.get("Content-Type") || "application/json"
 
         if (upstream.ok) {
+          consecutiveFailures = 0
+          circuitOpenedAt = 0
           return new NextResponse(text, {
             status: upstream.status,
             headers: { "Content-Type": ct },
@@ -153,21 +179,30 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  if (process.env.NODE_ENV === "development") {
-    // eslint-disable-next-line no-console
-    console.error("[soroban-rpc] all upstream attempts failed", {
-      lastFailure,
-      timeoutMs: fetchTimeoutMs,
-      urlsTried: urls.length,
-    })
-  }
+    if (process.env.NODE_ENV === "development") {
+      // eslint-disable-next-line no-console
+      console.error("[soroban-rpc] all upstream attempts failed", {
+        lastFailure,
+        timeoutMs: fetchTimeoutMs,
+        urlsTried: urls.length,
+      })
+    }
 
-  return jsonRpcUpstreamError(
-    `Soroban RPC no disponible tras reintentos (${lastFailure}). ` +
-      `Si ves timeouts, sube SOROBAN_PROXY_FETCH_TIMEOUT_MS (p. ej. 90000) en local; en Vercel hace falta plan con funciones >10s o un RPC más rápido. ` +
-      `También puedes fijar STELLAR_RPC_URL / STELLAR_RPC_FALLBACK_URLS.`,
-    rpcId,
-  )
+    consecutiveFailures += 1
+    if (consecutiveFailures >= CIRCUIT_FAILURE_LIMIT) {
+      circuitOpenedAt = Date.now()
+      consecutiveFailures = 0
+    }
+
+    return jsonRpcUpstreamError(
+      `Soroban RPC no disponible tras reintentos (${lastFailure}). ` +
+        `Si ves timeouts, sube SOROBAN_PROXY_FETCH_TIMEOUT_MS (p. ej. 90000) en local; en Vercel hace falta plan con funciones >10s o un RPC más rápido. ` +
+        `También puedes fijar STELLAR_RPC_URL / STELLAR_RPC_FALLBACK_URLS.`,
+      rpcId,
+    )
+  } finally {
+    inFlight -= 1
+  }
 }
 
 export async function GET() {

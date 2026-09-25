@@ -14,6 +14,10 @@ const PHASE_LIQ_TOKEN_CONTRACT = tokenContractIdForServer()
 
 const X402_NETWORK = "stellar:testnet"
 
+function localShimEnabled(): boolean {
+  return process.env.X402_LOCAL_SHIM_ENABLED?.trim().toLowerCase() === "true"
+}
+
 type LocalX402Token = {
   invoice?: string
   amount?: number | string
@@ -52,6 +56,9 @@ function isSatisfiedPayment(payload: LocalX402Token | null): boolean {
 }
 
 export async function GET(request: NextRequest) {
+  if (!localShimEnabled()) {
+    return NextResponse.json({ error: "x402 local shim disabled" }, { status: 503 })
+  }
   const authHeader = request.headers.get("authorization")
   const facilitator = facilitatorUrl(request)
 
@@ -107,6 +114,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  if (!localShimEnabled()) {
+    return NextResponse.json({ error: "x402 local shim disabled" }, { status: 503 })
+  }
   try {
     const facilitator = facilitatorUrl(request)
     const body = await request.json()

@@ -57,6 +57,7 @@ CREATE INDEX IF NOT EXISTS idx_offers_status_expires
 
 CREATE TABLE IF NOT EXISTS signals (
   id                TEXT PRIMARY KEY,
+  version           INTEGER NOT NULL DEFAULT 0,
   author_wallet     TEXT NOT NULL,
   author_display    TEXT NOT NULL,
   channel           TEXT NOT NULL,
@@ -201,6 +202,13 @@ export function getDb(): DatabaseSync {
   try {
     db.exec(
       "ALTER TABLE signal_replies ADD COLUMN signature_verified INTEGER NOT NULL DEFAULT 0;",
+    );
+  } catch {
+    // Column already present — no-op.
+  }
+  try {
+    db.exec(
+      "ALTER TABLE signals ADD COLUMN version INTEGER NOT NULL DEFAULT 0;",
     );
   } catch {
     // Column already present — no-op.

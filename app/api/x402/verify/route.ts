@@ -4,6 +4,10 @@ import { isSettlementUsed } from "@/lib/settlement-store"
 
 export const dynamic = 'force-dynamic'
 
+function localShimEnabled(): boolean {
+  return process.env.X402_LOCAL_SHIM_ENABLED?.trim().toLowerCase() === "true"
+}
+
 type LocalX402Token = {
   invoice?: string
   amount?: number | string
@@ -23,11 +27,14 @@ function decodeX402Token(raw: string): LocalX402Token | null {
 function isMaisonedPayment(payload: LocalX402Token | null): boolean {
   if (!payload) return false
   const amount = Number(payload.amount)
-  const required = Number.ParseInt(REQUIRED_AMOUNT, 10)
+  const required = Number.parseInt(REQUIRED_AMOUNT, 10)
   return Boolean(payload.invoice) && Number.isFinite(amount) && Number.isFinite(required) && amount >= required
 }
 
 export async function POST(request: NextRequest) {
+  if (!localShimEnabled()) {
+    return NextResponse.json({ error: "x402 local shim disabled" }, { status: 503 })
+  }
   try {
     const body = (await request.json()) as { payment_token?: string }
     const token = body.payment_token?.trim()

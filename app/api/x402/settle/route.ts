@@ -5,6 +5,10 @@ export const dynamic = 'force-dynamic'
 
 const PHASE_LIQ_TOKEN_CONTRACT = tokenContractIdForServer()
 
+function localShimEnabled(): boolean {
+  return process.env.X402_LOCAL_SHIM_ENABLED?.trim().toLowerCase() === "true"
+}
+
 type LocalX402Token = {
   invoice?: string
   amount?: number | string
@@ -29,6 +33,9 @@ function isSatisfiedPayment(payload: LocalX402Token | null): boolean {
 }
 
 export async function POST(request: NextRequest) {
+  if (!localShimEnabled()) {
+    return NextResponse.json({ error: "x402 local shim disabled" }, { status: 503 })
+  }
   try {
     const body = (await request.json()) as { payment_token?: string; user_address?: string }
     const token = body.payment_token?.trim()
