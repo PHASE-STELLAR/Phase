@@ -46,7 +46,9 @@ CREATE TABLE IF NOT EXISTS offers (
   message         TEXT,
   created_at      INTEGER NOT NULL,
   status          TEXT NOT NULL DEFAULT 'pending',
-  expires_at      INTEGER NOT NULL
+  expires_at      INTEGER NOT NULL,
+  wash_flagged    INTEGER NOT NULL DEFAULT 0,
+  wash_reason     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_offers_listing_created
   ON offers (listing_id, created_at DESC);
@@ -54,6 +56,10 @@ CREATE INDEX IF NOT EXISTS idx_offers_buyer_created
   ON offers (buyer_wallet, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_offers_status_expires
   ON offers (status, expires_at);
+-- Issue #230: volume aggregates filter on wash_flagged, so it needs an index
+-- that carries the flag alongside the status it is always read with.
+CREATE INDEX IF NOT EXISTS idx_offers_status_wash_created
+  ON offers (status, wash_flagged, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS signals (
   id                TEXT PRIMARY KEY,
@@ -176,6 +182,26 @@ function ensureListingColumns(conn: DatabaseSync): void {
   }
 }
 
+// Issue #230: same additive pattern for `offers` — `wash_flagged` was added
+// after the table shipped, so an existing database file needs the ALTER.
+const OFFER_COLUMNS: Array<{ name: string; ddl: string }> = [
+  { name: "wash_flagged", ddl: "wash_flagged INTEGER NOT NULL DEFAULT 0" },
+  { name: "wash_reason", ddl: "wash_reason TEXT" },
+];
+
+function ensureOfferColumns(conn: DatabaseSync): void {
+  const existing = new Set(
+    (conn.prepare("PRAGMA table_info(offers)").all() as Array<{ name: string }>).map(
+      (row) => row.name,
+    ),
+  );
+  for (const column of OFFER_COLUMNS) {
+    if (!existing.has(column.name)) {
+      conn.exec(`ALTER TABLE offers ADD COLUMN ${column.ddl};`);
+    }
+  }
+}
+
 /**
  * Returns the process-wide SQLite connection, creating and migrating the
  * schema on first use. Safe to call from any request handler; `node:sqlite`
@@ -192,6 +218,7 @@ export function getDb(): DatabaseSync {
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
   ensureListingColumns(db);
+  ensureOfferColumns(db);
   // Idempotent migration for databases created before signature_verified existed.
   try {
     db.exec(

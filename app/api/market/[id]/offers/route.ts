@@ -81,10 +81,15 @@ export async function POST(
         { status: 400, event: "market.offer.validation_failed", metadata: { reason: "min_offer", listing_id: id } },
       )
     }
-    if (listing.seller_wallet === buyer_wallet) {
+    // Issue #230: a direct self-deal is a 400, not a flag. There is no
+    // legitimate reading of "bid on your own listing", so this one case blocks.
+    // Everything subtler (circular, rapid-flip, sybil clusters) is flagged in
+    // createOffer and excluded from volume rather than rejected, because
+    // blocking those punishes legitimate buyers.
+    if (listing.seller_wallet.toUpperCase() === buyer_wallet.toUpperCase()) {
       return api.json(
-        { error: "Cannot offer on your own listing" },
-        { status: 400, event: "market.offer.validation_failed", metadata: { reason: "own_listing", listing_id: id } },
+        { error: "Wash Trade: buyer==seller" },
+        { status: 400, event: "market.offer.wash_trade", metadata: { reason: "self_deal", listing_id: id } },
       )
     }
 
@@ -99,7 +104,10 @@ export async function POST(
     }).catch((error) => api.log("warn", "market.offer.notification_failed", { error }))
 
     return api.json(
-      { offer },
+      // Issue #230: the wash screen is a flag, so the caller is told whether
+      // their offer was excluded from volume rather than finding out from a
+      // ranking that ignored them.
+      { offer, washScreened: true },
       { status: 201, event: "market.offer.created", metadata: { listing_id: id, offer_id: offer.id } },
     )
   } catch (error) {
