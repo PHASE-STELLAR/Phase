@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
 import { getWorldRoles, setWorldRole } from "@/lib/narrative-world-store"
 import { isFeatureEnabled } from "@/lib/feature-flags"
+import { verifyWorldRoleSignature, type WorldRoleProofPayload } from "@/lib/viewer-signature"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -33,7 +34,12 @@ type RolesBody = {
   acting_wallet?: unknown
   target_wallet?: unknown
   role?: unknown
+  /** Timestamp the client signed over, so a captured signature can't be replayed. */
+  timestamp?: unknown
 }
+
+/** A role-assignment proof older than this is rejected (replay window). */
+const SIGNATURE_MAX_AGE_MS = 5 * 60 * 1000
 
 export async function POST(
   request: NextRequest,
@@ -56,7 +62,8 @@ export async function POST(
     return NextResponse.json({ error: "JSON inválido" }, { status: 400 })
   }
 
-  if (!request.headers.get("x-wallet-signature")?.trim()) {
+  const signature = request.headers.get("x-wallet-signature")?.trim()
+  if (!signature) {
     return NextResponse.json({ error: "Se requiere firma de wallet (X-Wallet-Signature)" }, { status: 401 })
   }
 
@@ -68,6 +75,32 @@ export async function POST(
   }
   if (body.role !== "editor" && body.role !== "viewer") {
     return NextResponse.json({ error: "role debe ser 'editor' o 'viewer'" }, { status: 400 })
+  }
+
+  // #247: a present-but-unverified signature header proves nothing — acting_wallet
+  // comes from the request body, so anyone could claim to be the world owner and
+  // assign themselves a role. Verify the SEP-53 signature over this exact action.
+  const timestamp = typeof body.timestamp === "number" ? body.timestamp : Number(body.timestamp)
+  if (!Number.isFinite(timestamp)) {
+    return NextResponse.json({ error: "timestamp de la firma requerido" }, { status: 400 })
+  }
+  if (Math.abs(Date.now() - timestamp) > SIGNATURE_MAX_AGE_MS) {
+    return NextResponse.json({ error: "Firma de wallet expirada" }, { status: 401 })
+  }
+
+  const proof: WorldRoleProofPayload = {
+    action: "world-role-assign",
+    collection_id: collectionId,
+    target_wallet: body.target_wallet,
+    role: body.role,
+    timestamp,
+  }
+  const signatureValid = await verifyWorldRoleSignature(body.acting_wallet, proof, signature)
+  if (!signatureValid) {
+    return NextResponse.json(
+      { error: "Firma de wallet inválida para esta operación" },
+      { status: 401 },
+    )
   }
 
   try {
