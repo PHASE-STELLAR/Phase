@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
-import { buildWorldExportSnapshot, renderWorldExportMarkdown, renderWorldExportNdjson } from "@/lib/narrative-world-store"
+import {
+  buildWorldExportSnapshot,
+  getWorldForCollection,
+  renderWorldExportMarkdown,
+  streamWorldExportNdjson,
+  WORLD_EXPORT_PAGE_SIZE,
+} from "@/lib/narrative-world-store"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 
 export const runtime = "nodejs"
@@ -24,12 +30,45 @@ export async function GET(
     return NextResponse.json({ error: "collection_id inválido" }, { status: 400 })
   }
 
+  const format = request.nextUrl.searchParams.get("format")?.trim().toLowerCase() ?? "json"
+
+  // NDJSON is streamed page by page so a large world is never serialised into a
+  // single in-memory string (#239).
+  if (format === "ndjson") {
+    const world = await getWorldForCollection(collectionId)
+    if (!world) {
+      return NextResponse.json({ error: "Mundo no encontrado" }, { status: 404 })
+    }
+    const cursorParam = request.nextUrl.searchParams.get("cursor")
+    const parsedCursor = cursorParam === null ? Number.NaN : Number(cursorParam)
+    const cursor = Number.isFinite(parsedCursor) ? parsedCursor : null
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const encoder = new TextEncoder()
+        try {
+          for await (const line of streamWorldExportNdjson(collectionId, { cursor })) {
+            controller.enqueue(encoder.encode(line))
+          }
+          controller.close()
+        } catch (err) {
+          controller.error(err)
+        }
+      },
+    })
+    return new NextResponse(stream, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Content-Disposition": `attachment; filename="world-${collectionId}.ndjson"`,
+        "X-Phase-Page-Size": String(WORLD_EXPORT_PAGE_SIZE),
+      },
+    })
+  }
+
   const snapshot = await buildWorldExportSnapshot(collectionId)
   if (!snapshot) {
     return NextResponse.json({ error: "Mundo no encontrado" }, { status: 404 })
   }
-
-  const format = request.nextUrl.searchParams.get("format")?.trim().toLowerCase() ?? "json"
 
   if (format === "markdown" || format === "md") {
     const markdown = renderWorldExportMarkdown(snapshot)
@@ -38,17 +77,6 @@ export async function GET(
       headers: {
         "Content-Type": "text/markdown; charset=utf-8",
         "Content-Disposition": `attachment; filename="world-${collectionId}.md"`,
-      },
-    })
-  }
-
-  if (format === "ndjson") {
-    const ndjson = renderWorldExportNdjson(snapshot)
-    return new NextResponse(ndjson, {
-      status: 200,
-      headers: {
-        "Content-Type": "application/x-ndjson; charset=utf-8",
-        "Content-Disposition": `attachment; filename="world-${collectionId}.ndjson"`,
       },
     })
   }

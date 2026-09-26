@@ -83,6 +83,22 @@ export type GenerationDlqEntry = {
 type JobStore = Record<string, GenerationJob>
 type DlqStore = Record<string, GenerationDlqEntry>
 
+/**
+ * Serialises every read→modify→write cycle on the JSON sidecars.
+ *
+ * Without it, two overlapping `createGenerationJob` calls each read the same
+ * snapshot and the second write drops the first job's entry — the read→push→write
+ * TOCTOU that loses jobs under concurrent webhook/traffic bursts (#243). The
+ * queue is drained in FIFO order, so callers still observe the stored value.
+ */
+let writeQueue: Promise<unknown> = Promise.resolve()
+
+function withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeQueue.then(fn, fn)
+  writeQueue = run.catch(() => {})
+  return run
+}
+
 async function readJobStore(): Promise<JobStore> {
   try {
     const raw = await readFile(serverDataJsonPath("generationJobs"), "utf8")
@@ -161,29 +177,31 @@ export type CreateJobInput = {
  * If a job for txHash already exists, returns it without creating a duplicate.
  */
 export async function createGenerationJob(input: CreateJobInput): Promise<GenerationJob> {
-  const store = pruneJobs(await readJobStore())
+  return withStoreLock(async () => {
+    const store = pruneJobs(await readJobStore())
 
-  // Idempotent: if already tracked, return existing
-  const existing = Object.values(store).find((j) => j.txHash === input.txHash)
-  if (existing) return existing
+    // Idempotent: if already tracked, return existing
+    const existing = Object.values(store).find((j) => j.txHash === input.txHash)
+    if (existing) return existing
 
-  const job: GenerationJob = {
-    id: randomUUID(),
-    taskId: input.taskId,
-    txHash: input.txHash,
-    prompt: input.prompt,
-    payerAddress: input.payerAddress,
-    imageStyleMode: input.imageStyleMode,
-    collectionId: input.collectionId,
-    lang: input.lang,
-    status: "pending",
-    webhookDeliveries: 0,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  }
-  store[job.id] = job
-  await writeJobStore(store)
-  return job
+    const job: GenerationJob = {
+      id: randomUUID(),
+      taskId: input.taskId,
+      txHash: input.txHash,
+      prompt: input.prompt,
+      payerAddress: input.payerAddress,
+      imageStyleMode: input.imageStyleMode,
+      collectionId: input.collectionId,
+      lang: input.lang,
+      status: "pending",
+      webhookDeliveries: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }
+    store[job.id] = job
+    await writeJobStore(store)
+    return job
+  })
 }
 
 /**
@@ -230,13 +248,15 @@ export async function updateGenerationJob(
   id: string,
   patch: UpdateJobInput,
 ): Promise<GenerationJob | null> {
-  const store = pruneJobs(await readJobStore())
-  const job = store[id]
-  if (!job) return null
-  const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() }
-  store[id] = updated
-  await writeJobStore(store)
-  return updated
+  return withStoreLock(async () => {
+    const store = pruneJobs(await readJobStore())
+    const job = store[id]
+    if (!job) return null
+    const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() }
+    store[id] = updated
+    await writeJobStore(store)
+    return updated
+  })
 }
 
 /**
@@ -246,14 +266,16 @@ export async function updateGenerationJobByTxHash(
   txHash: string,
   patch: UpdateJobInput,
 ): Promise<GenerationJob | null> {
-  const store = pruneJobs(await readJobStore())
-  const entry = Object.entries(store).find(([, j]) => j.txHash === txHash)
-  if (!entry) return null
-  const [id, job] = entry
-  const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() }
-  store[id] = updated
-  await writeJobStore(store)
-  return updated
+  return withStoreLock(async () => {
+    const store = pruneJobs(await readJobStore())
+    const entry = Object.entries(store).find(([, j]) => j.txHash === txHash)
+    if (!entry) return null
+    const [id, job] = entry
+    const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() }
+    store[id] = updated
+    await writeJobStore(store)
+    return updated
+  })
 }
 
 /**
@@ -263,14 +285,16 @@ export async function updateGenerationJobByTaskId(
   taskId: string,
   patch: UpdateJobInput,
 ): Promise<GenerationJob | null> {
-  const store = pruneJobs(await readJobStore())
-  const entry = Object.entries(store).find(([, j]) => j.taskId === taskId)
-  if (!entry) return null
-  const [id, job] = entry
-  const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() }
-  store[id] = updated
-  await writeJobStore(store)
-  return updated
+  return withStoreLock(async () => {
+    const store = pruneJobs(await readJobStore())
+    const entry = Object.entries(store).find(([, j]) => j.taskId === taskId)
+    if (!entry) return null
+    const [id, job] = entry
+    const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() }
+    store[id] = updated
+    await writeJobStore(store)
+    return updated
+  })
 }
 
 /**

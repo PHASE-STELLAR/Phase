@@ -7,6 +7,7 @@ import { z } from "zod";
 import { isFeatureEnabled, flagRollbackNote } from "@/lib/feature-flags";
 import { serverDataJsonPath } from "@/lib/server-data-paths";
 import { getDb } from "@/lib/sqlite-db";
+import { incSecurityCounter } from "@/lib/security-counters";
 
 export type ListingStatus = "active" | "sold" | "cancelled";
 export type OfferStatus = "pending" | "accepted" | "rejected" | "expired";
@@ -382,6 +383,33 @@ export async function getOffers(listing_id: string): Promise<Offer[]> {
 export async function createOffer(
   data: Omit<Offer, "id" | "created_at" | "status" | "expires_at">,
 ): Promise<Offer> {
+  // Issue #230: screen every offer for wash patterns. The offer is still
+  // created (flag, not block — see lib/wash-screening.ts), but a flagged offer
+  // is marked and excluded from every volume aggregate, which is where the
+  // inflation in this issue actually lands.
+  let washFlagged = false
+  let washReason: string | null = null
+  try {
+    const { screenOfferForWash } = await import("@/lib/wash-screening")
+    const listing = await getListing(data.listing_id)
+    if (listing) {
+      const screen = screenOfferForWash({
+        listingId: listing.id,
+        tokenId: listing.token_id,
+        sellerWallet: listing.seller_wallet,
+        buyerWallet: data.buyer_wallet,
+        amountPhaselq: data.amount_phaselq,
+      })
+      washFlagged = screen.washFlagged
+      washReason = screen.washReason
+    }
+  } catch (error) {
+    // Screening must never block a legitimate offer; on failure the offer is
+    // created unflagged and the omission is visible via volume drift.
+    console.warn("[phase-230] wash screening failed, creating unflagged offer:", error)
+    void incSecurityCounter("market_volume_drift")
+  }
+
   const offer: Offer = {
     ...data,
     id: randomUUID(),
@@ -393,8 +421,8 @@ export async function createOffer(
     .prepare(
       `INSERT INTO offers
          (id, listing_id, buyer_wallet, amount_phaselq, message,
-          created_at, status, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          created_at, status, expires_at, wash_flagged, wash_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       offer.id,
@@ -405,6 +433,8 @@ export async function createOffer(
       offer.created_at,
       offer.status,
       offer.expires_at,
+      washFlagged ? 1 : 0,
+      washReason,
     );
   return offer;
 }

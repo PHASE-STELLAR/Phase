@@ -35,6 +35,8 @@ type ReplyBody = {
   timestamp?: unknown
   attribution?: unknown
   contributors?: unknown
+  /** Issue #224: signal version this reply was composed against (CAS). */
+  parent_version?: unknown
 }
 
 const ContributorsArraySchema = z.array(
@@ -163,6 +165,35 @@ export async function POST(
     const signal = await getSignal(id)
     if (!signal) {
       return api.json({ error: "Signal not found" }, { status: 404, event: "signals.reply.signal_missing", metadata: { signal_id: id } })
+    }
+
+    // Issue #224: optimistic concurrency control for concurrent writers.
+    // The caller sends the signal version it composed its reply against; if the
+    // signal changed in the meantime the reply is rejected instead of being
+    // appended to a stale view (silent lost-update territory).
+    const parentVersionRaw = (body as { parent_version?: unknown }).parent_version
+    if (parentVersionRaw != null) {
+      if (typeof parentVersionRaw !== "number" || !Number.isInteger(parentVersionRaw) || parentVersionRaw < 0) {
+        return api.json(
+          { error: "parent_version must be a non-negative integer", code: "VALIDATION_FAILED" },
+          { status: 400, event: "signals.reply.parent_version_invalid" },
+        )
+      }
+      if (parentVersionRaw !== signal.version) {
+        api.log("warn", "signals.version_conflict", {
+          signal_id: id,
+          expected: parentVersionRaw,
+          actual: signal.version,
+        })
+        return api.json(
+          {
+            error: "Signal changed since this reply was composed",
+            code: "VERSION_CONFLICT",
+            currentVersion: signal.version,
+          },
+          { status: 409, event: "signals.reply.version_conflict" },
+        )
+      }
     }
 
     const res = await fetch(
