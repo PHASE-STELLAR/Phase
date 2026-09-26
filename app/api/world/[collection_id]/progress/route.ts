@@ -31,7 +31,14 @@ export async function GET(
   }
 
   const progress = await getReaderProgress(wallet, collectionId)
-  return NextResponse.json({ progress })
+  return NextResponse.json(
+    { progress },
+    {
+      headers: {
+        "Cache-Control": "private, max-age=60, s-maxage=60",
+      },
+    }
+  )
 }
 
 type ProgressBody = {

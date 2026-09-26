@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
       {
         token_contract: PHASE_LIQ_TOKEN_CONTRACT,
         amount: Number.parseInt(REQUIRED_AMOUNT, 10),
+        decimals: 7,
       },
     ],
   })

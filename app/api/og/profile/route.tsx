@@ -335,7 +335,7 @@ export async function GET(request: NextRequest) {
 
   const headers: Record<string, string> = {
     "Content-Type": "image/png",
-    "Cache-Control": "public, max-age=300, s-maxage=300",
+    "Cache-Control": "public, max-age=60, s-maxage=60, stale-while-revalidate=120",
     "X-Phase-Og-Template": usedTemplate,
     ...(isPhase120Enabled() ? { "X-Phase120": "enabled" } : {}),
     ...(isSybilResistanceEnabled() ? { "X-Phase145": "enabled" } : {}),
