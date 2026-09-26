@@ -44,6 +44,23 @@ export async function GET(
   const contractId =
     cParam && StrKey.isValidContract(cParam) ? cParam : phaseProtocolContractIdForServer()
 
+  // Issue #229: a caller-supplied `m` (metadata_uri) is not trusted before it
+  // is resolved. `ipfs://` CIDv1/v0 only — an `https://` URI is not
+  // content-addressed, so whatever that origin returns would be served as the
+  // World's metadata and then cached for a year. Rejected here, before any
+  // fetch, so a poisoned URI never reaches a gateway or the CID cache.
+  const metadataUriParam = request.nextUrl.searchParams.get("m")?.trim()
+  if (metadataUriParam) {
+    const { parseMetadataUri } = await import("@/lib/cid-verification")
+    const uriResult = parseMetadataUri(metadataUriParam)
+    if (!uriResult.ok) {
+      return NextResponse.json(
+        { error: "invalid metadata_uri", code: uriResult.code, detail: uriResult.reason },
+        { status: 400, headers: { ...corsJson, "Cache-Control": "private, no-store" } },
+      )
+    }
+  }
+
   // phase-123: validate contract+token pair when flag enabled (type-safe, structured error)
   if (isPhase123Enabled()) {
     const chk = PhaseMetadataRequestSchema.safeParse({ contractId, tokenId })
@@ -82,7 +99,11 @@ export async function GET(
       headers: {
         "Content-Type": "application/json; charset=utf-8",
         ...corsJson,
+        // Issue #227/#229: `Vary: Authorization` keeps a shared cache from
+        // serving one viewer's entry to the next caller now that metadata can be
+        // gated (#227) and CID-verified (#229).
         "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
+        Vary: "Authorization",
         ...(isPhase123Enabled() ? { "X-Phase-IPFS-Fallback": "enabled" } : {}),
         ...(isPhase93Enabled() ? { "X-Phase-Profile-Completeness": "enabled" } : {}),
         ...(isPhase78Enabled() ? { "X-Phase-Gas-Estimate": "enabled" } : {}),

@@ -24,7 +24,7 @@ export async function OPTIONS() {
 }
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ cid: string[] }> },
 ) {
   const { cid } = await context.params
@@ -41,17 +41,33 @@ export async function GET(
   })
 
   if (result.ok) {
+    // Issue #229: verify the bytes against the CID before they are eligible for
+    // any shared cache. A client-supplied `metadata_uri` can name a perfectly
+    // well-formed CID bound to an attacker payload; recomputing the multihash
+    // is the only check that distinguishes the two. An unverified CID is served
+    // `private, no-store` rather than rejected, so the route still functions
+    // for a CID this server cannot recompute (blake2b) while keeping it out of
+    // the 1-year shared cache.
+    const { verifyCID, cacheControlForCid } = await import("@/lib/cid-verification")
+    const requestedCid = parsed.data[0] ?? ""
+    const verification = verifyCID(requestedCid, result.bytes)
+    const gated = request.headers.get("x-phase-gated") === "1"
+
+    if (!verification.ok && verification.code === "CID_MISMATCH") {
+      return NextResponse.json(
+        { error: "CID Mismatch", detail: verification.reason, cid: requestedCid },
+        { status: 400, headers: { ...CORS, "Cache-Control": "private, no-store" } },
+      )
+    }
+
     return new NextResponse(result.bytes, {
       status: 200,
       headers: {
         ...CORS,
         "Content-Type": result.contentType,
-        // Issue #227: `Vary: Authorization` is mandatory on this route. Without
-        // it a shared cache (s-maxage is 1 year) can key a single response per
-        // CID and hand one viewer's gated bytes to the next unauthenticated
-        // caller. #229 splits this further into public vs private per CID.
-        "Cache-Control": "public, max-age=2592000, s-maxage=31536000, immutable",
+        "Cache-Control": cacheControlForCid(verification, gated),
         Vary: "Authorization",
+        "X-Phase-Cid-Verified": verification.ok ? "1" : "0",
         ...(isPhase123Enabled() ? { "X-Phase-Gateway": result.gateway, "X-Phase-Latency-Ms": String(result.latencyMs) } : {}),
       },
     })
