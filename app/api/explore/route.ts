@@ -79,7 +79,9 @@ export async function GET(request: NextRequest) {
     } else {
       const scanIds = Array.from({ length: total }, (_, i) => i + 1)
       const runScan = () =>
-        mapConcurrent(scanIds, 12, async (id) => {
+        // Keep the caller pool aligned with the shared Horizon bulkhead. The
+        // bulkhead also protects concurrent requests and other owner scans.
+        mapConcurrent(scanIds, 5, async (id) => {
           try {
             const owner = await fetchTokenOwnerAddress(contractId, id)
             return owner ? { id, owner } : null

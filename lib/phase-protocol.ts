@@ -25,6 +25,7 @@ import {
   DEFAULT_TOKEN_CONTRACT,
 } from "@/lib/phase-contract-defaults"
 import { getGatewayHealthSnapshot as _getGatewayHealthSnapshot, recordGatewayLatency as _recordGatewayLatency } from "@/lib/gateway-health"
+import { withHorizonBulkhead } from "@/lib/horizon-bulkhead"
 
 // ── phase-121: gateway health dashboard (isolated, flag-gated) ──
 // Operators cannot see which gateway is slow. Scoring lives in @/lib/gateway-health;
@@ -2390,12 +2391,12 @@ export async function fetchTokenOwnerAddress(
 ): Promise<string | null> {
   if (!Number.isFinite(tokenId) || tokenId <= 0) return null
   const tryOwner = async (method: "owner_of" | "owner_of_u64", type: "u32" | "u64") => {
-    const native = await simulateContractCall(
+    const native = await withHorizonBulkhead(() => simulateContractCall(
       contractId,
       method,
       [nativeToScVal(tokenId, { type })],
       READONLY_SIM_SOURCE_G,
-    )
+    ))
     return parseOwnerOfReturn(native)
   }
   try {
