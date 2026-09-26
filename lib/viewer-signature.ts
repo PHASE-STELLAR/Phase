@@ -66,6 +66,58 @@ export async function verifySignalSignature(
   }
 }
 
+/** Canonical payload signed/proven for a world-role assignment (issue #247). */
+export type WorldRoleProofPayload = {
+  action: "world-role-assign"
+  collection_id: number
+  target_wallet: string
+  role: string
+  timestamp: number
+}
+
+/**
+ * Deterministic serialization for a world-role proof. Like
+ * canonicalSignalPayload(), the client and server must build the exact same
+ * string so the Ed25519 signature always binds to the action being performed.
+ */
+export function canonicalWorldRolePayload(payload: WorldRoleProofPayload): string {
+  return JSON.stringify({
+    action: payload.action,
+    collection_id: payload.collection_id,
+    target_wallet: payload.target_wallet,
+    role: payload.role,
+    timestamp: payload.timestamp,
+  })
+}
+
+/** Fixed-size message signed for a world-role assignment (issue #247). */
+export async function worldRoleProofMessage(payload: WorldRoleProofPayload): Promise<string> {
+  const digest = await sha256Hex(canonicalWorldRolePayload(payload))
+  return `phase-world-role:v1:${digest}`
+}
+
+/**
+ * Server-only: verify a SEP-53 Ed25519 signature over a world-role assignment
+ * made by `wallet` (issue #247). The presence check on X-Wallet-Signature is
+ * not sufficient on its own — without this check any caller could claim to be
+ * the world owner by simply setting acting_wallet to the owner's address.
+ */
+export async function verifyWorldRoleSignature(
+  wallet: string,
+  payload: WorldRoleProofPayload,
+  signatureBase64: string,
+): Promise<boolean> {
+  try {
+    const { Keypair } = await import("@stellar/stellar-sdk")
+    const message = await worldRoleProofMessage(payload)
+    const data = new TextEncoder().encode(SIGNATURE_PREFIX + message)
+    const signature = Buffer.from(signatureBase64, "base64")
+    return Keypair.fromPublicKey(wallet).verify(data, signature)
+  } catch {
+    return false
+  }
+}
+
 /**
  * Client-only: sign the payload with the currently-selected wallet via the
  * Stellar Wallets Kit `signMessage` (SEP-53). Returns the base64 signature.
