@@ -46,7 +46,12 @@ export async function GET(
       headers: {
         ...CORS,
         "Content-Type": result.contentType,
+        // Issue #227: `Vary: Authorization` is mandatory on this route. Without
+        // it a shared cache (s-maxage is 1 year) can key a single response per
+        // CID and hand one viewer's gated bytes to the next unauthenticated
+        // caller. #229 splits this further into public vs private per CID.
         "Cache-Control": "public, max-age=2592000, s-maxage=31536000, immutable",
+        Vary: "Authorization",
         ...(isPhase123Enabled() ? { "X-Phase-Gateway": result.gateway, "X-Phase-Latency-Ms": String(result.latencyMs) } : {}),
       },
     })
