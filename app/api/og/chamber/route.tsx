@@ -350,7 +350,10 @@ function ogHeaders(
 ): Record<string, string> {
   return {
     "Content-Type": "image/png",
-    "Cache-Control": "no-store, must-revalidate",
+    // OG output can contain private collection/token metadata.  Do not let a
+    // shared CDN cache expose it or mix variants between callers.
+    "Cache-Control": "private, no-store, must-revalidate",
+    Vary: "Accept-Language, Authorization, X-Phase-Lang",
     "X-Phase-Og-Template": tplName,
     ...(isPhase120Enabled() ? { "X-Phase120": "enabled" } : {}),
   };
