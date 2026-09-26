@@ -73,7 +73,7 @@ flowchart TB
 | `lib/server-data-paths.ts` | Writable data location abstraction |
 | `lib/feature-flags.ts` | Flag registry (phase-107,111,113,114 + 116,117,119,120 + 121..124, env resolution, rollback notes) |
 | `lib/story-arc-continuity.ts` | AI story-arc continuity check against recent world narratives (phase-107) |
-| `lib/narrative-world-store.ts` | World/narrative JSON store + localized per-(tokenId,lang) narrative cache (phase-111) |
+| `lib/narrative-world-store.ts` | World/narrative JSON store + localized per-(tokenId,lang) narrative cache (phase-111) + world export snapshot builder and markdown renderer (phase-112) + collaborative role store with ownership enforcement (phase-109) + lore link store with back-reference index (phase-115) |
 | `lib/ipfs-upload-retry.ts` | IPFS upload retry w/ exponential backoff + sha256 checksum (phase-120) |
 | `lib/cid-cache.ts` | CID content-addressing cache with integrity verification (phase-119) |
 | `lib/ipfs-pinning.ts` | Multi-gateway pinning with quorum + fallback fetch (phase-117) |
@@ -142,6 +142,12 @@ settlement verifier and must not accept unsigned base64 payloads.
 
 | Flag | Route | Extension | Flag off |
 |------|-------|-----------|----------|
+| `phase-109` | `GET /api/world/[collection_id]/roles` | Returns current role map (`editor`/`viewer`) for the world collection | `404` disabled |
+| `phase-109` | `POST /api/world/[collection_id]/roles` | Assigns a role to a target wallet; requires `X-Wallet-Signature` header and acting wallet must be the world owner (403 otherwise) | `404` disabled |
+| `phase-110` | `GET /api/world/search` | Full-text narrative search across all world collections; supports `?entity=<id>`, `?location=<text>`, `?q=<text>` | `404` disabled |
+| `phase-112` | `GET /api/world/[collection_id]/export` | Exports a world snapshot as `json` (default) or `markdown` via `?format=`; responds with `Content-Disposition: attachment` | `404` disabled |
+| `phase-115` | `GET /api/world/narrative/[token_id]/links` | Returns `outgoing` and `incoming` lore links for a narrative token | `404` disabled |
+| `phase-115` | `POST /api/world/narrative/[token_id]/links` | Creates a directed lore link from `token_id` to a `to_token_id` with an optional `note`; upserts on duplicate | `404` disabled |
 | `phase-107` | `POST /api/narrator` | Checks new narrative against the world's recent narratives (Gemini); `409 CONTINUITY_CONTRADICTION` on a detected contradiction | No check, generation always saves |
 | `phase-111` | `GET /api/world/narrative/[token_id]` | Reads through a per-(tokenId, `?lang=`) cache with a short TTL | Direct store read every request |
 | `phase-113` | `POST /api/signals/[id]/moderate` | Takedown/restore a signal (`x-admin-key` gated); taken-down signals excluded from `GET /api/signals` | `404` disabled, no filtering |
@@ -219,7 +225,7 @@ Critical groups:
 - Gemini runtime (`GEMINI_API_KEY`)
 - Writable server data directory (`PHASE_SERVER_DATA_DIR`)
 
-### 9.1 Feature flags (phase-88..91, 107,111,113,114 + 116..124, 134, 135)
+### 9.1 Feature flags (phase-88..91, 107,109,110,111,112,113,114 + 115,116..124, 134, 135)
 
 All flags default to **off** (safe rollback). Set to `1`/`true` to enable.
 
@@ -230,9 +236,13 @@ NEXT_PUBLIC_FEATURE_PHASE_89=1
 NEXT_PUBLIC_FEATURE_PHASE_90=1
 NEXT_PUBLIC_FEATURE_PHASE_91=1
 NEXT_PUBLIC_FEATURE_PHASE_107=1
+NEXT_PUBLIC_FEATURE_PHASE_109=1
+NEXT_PUBLIC_FEATURE_PHASE_110=1
 NEXT_PUBLIC_FEATURE_PHASE_111=1
+NEXT_PUBLIC_FEATURE_PHASE_112=1
 NEXT_PUBLIC_FEATURE_PHASE_113=1
 NEXT_PUBLIC_FEATURE_PHASE_114=1
+NEXT_PUBLIC_FEATURE_PHASE_115=1
 NEXT_PUBLIC_FEATURE_PHASE_116=1
 NEXT_PUBLIC_FEATURE_PHASE_117=1
 NEXT_PUBLIC_FEATURE_PHASE_119=1
