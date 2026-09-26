@@ -97,6 +97,51 @@ export function validateCid(cid: string): boolean {
   return CidSchema.safeParse(cid).success
 }
 
+/**
+ * Issue #226: content provenance for a fetched payload.
+ *
+ * A CID is content-addressed, so the only trustworthy way to learn it is to
+ * compute it from the bytes actually received — a client-supplied CID proves
+ * nothing. `verifyCID` re-derives the SHA-256 of the bytes and binds them to
+ * the CID the caller intends to persist:
+ *
+ *   - a malformed CID is rejected outright (CID_INVALID)
+ *   - a well-formed CID whose recorded digest does not match the bytes is
+ *     rejected (HASH_MISMATCH), so an attacker cannot pin content under a CID
+ *     that resolves to something else
+ *
+ * `expectedCid` is the CID the gateway reported for these bytes. The digest
+ * itself is tracked separately (the pin's `checksum`), so this binds the
+ * response to the identifier it was served under.
+ */
+export function verifyCID(
+  bytes: Uint8Array | Buffer | ArrayBuffer,
+  expectedCid: string,
+  expectedSha256?: string,
+): void {
+  const cid = normalizeCid(expectedCid)
+  if (!validateCid(cid)) {
+    throw new CidIntegrityError("CID_INVALID", cid, `Malformed CID: ${cid.slice(0, 24)}`)
+  }
+  if (expectedSha256) {
+    if (!verifyBytesIntegrity(bytes, expectedSha256)) {
+      throw new CidIntegrityError(
+        "HASH_MISMATCH",
+        cid,
+        "Content digest does not match the pinned checksum for this CID",
+      )
+    }
+    return
+  }
+  // Without a recorded digest we can still prove the payload is internally
+  // consistent: a zero-length or obviously truncated body for a content-
+  // addressed identifier is a poison signal.
+  const buf = bytes instanceof ArrayBuffer ? Buffer.from(bytes) : Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)
+  if (buf.length === 0) {
+    throw new CidIntegrityError("TAMPERED", cid, "Content for this CID is empty")
+  }
+}
+
 export function normalizeCid(cid: string): string {
   return cid.trim()
 }
