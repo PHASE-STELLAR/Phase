@@ -5,6 +5,7 @@ import { generateLoreStep, generateImageStep } from "@/lib/forge/ai-pipeline"
 import { publishIpfsStep } from "@/lib/forge/ipfs-publisher"
 import { createJob, updateJob } from "@/lib/forge/job-store"
 import type { ForgeJobStatus } from "@/lib/forge/job-store"
+import { charge as chargeForgeStep, getCost as getForgeCost } from "@/lib/cost-attribution-ledger"
 
 // mint stub — Soroban mint via /api/mint would require server signer; keep isolated step for wiring
 export async function mintNftStep(input: {
@@ -39,6 +40,7 @@ export type ForgePipelineSuccess = {
   metadataUri?: string
   cid?: string | null
   jobId: string
+  costEstimate: number
 }
 
 export async function runForgePipeline(input: ForgePipelineInput, correlationId?: string): Promise<ForgePipelineSuccess> {
@@ -46,6 +48,14 @@ export async function runForgePipeline(input: ForgePipelineInput, correlationId?
   const outputLang = normalizeForgeOutputLang(input.lang)
   const job = createJob({ prompt: input.prompt, payerAddress: input.payerAddress, settlementTxHash: input.settlementTxHash })
   const jobId = correlationId ?? job.id
+
+  // Attribute each infrastructure step exactly once.  A retry of this
+  // function with the same correlation id reuses the existing job/step keys.
+  chargeForgeStep(jobId, "nanobanana", 0.02)
+  chargeForgeStep(jobId, "ipfs", 0.001)
+  chargeForgeStep(jobId, "soroban", 0.01)
+  chargeForgeStep(jobId, "seal", 0.01)
+  const costEstimate = getForgeCost(jobId)
 
   const set = (status: ForgeJobStatus) => updateJob(job.id, { status })
 
@@ -77,7 +87,7 @@ export async function runForgePipeline(input: ForgePipelineInput, correlationId?
     updateJob(job.id, { status: "minting" } as never)
     await mintNftStep({ payerAddress: input.payerAddress, metadataUri, collectionId: input.collection_id })
 
-    const result = { imageUrl, image_url: imageUrl, lore, metadataStandard: "SEP-41/50" as const, image_source, metadataUri, cid, jobId }
+    const result = { imageUrl, image_url: imageUrl, lore, metadataStandard: "SEP-41/50" as const, image_source, metadataUri, cid, jobId, costEstimate }
     updateJob(job.id, { status: "completed", result } as never)
 
     if (input.payerAddress?.trim()) {

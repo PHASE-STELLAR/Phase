@@ -149,7 +149,7 @@ export async function POST(request: NextRequest) {
   if (!isProfilePinningRedundancyEnabled()) {
     return api.json({ error: "Multi-gateway pinning disabled (phase-117 flag off)" }, { status: 404, event: "profile.avatar.redundancy_disabled" })
   }
-  let body: { wallet?: unknown; imageUrl?: unknown; imageBlob?: unknown; quorum?: unknown }
+  let body: { wallet?: unknown; imageUrl?: unknown; imageBlob?: unknown; quorum?: unknown; signature?: unknown }
   try {
     body = (await request.json()) as typeof body
   } catch {
@@ -157,11 +157,36 @@ export async function POST(request: NextRequest) {
   }
   const wallet = typeof body.wallet === "string" ? body.wallet.trim() : ""
   if (!wallet || !StrKey.isValidEd25519PublicKey(wallet)) {
-    return api.json({ error: "Invalid wallet" }, { status: 400, event: "profile.avatar.validation_failed" })
+    return api.json({ error: "Invalid wallet" }, { status: 400, event: "profile.avatar.validation_failed", metadata: { reason: "wallet" } })
+  }
+
+  // Issue #226: proving wallet ownership. Without this, anyone can POST
+  // { wallet: <victim>, imageUrl: <attacker> } and overwrite a victim's
+  // avatar — a persistent, CDN-cached phishing vector. The caller signs a
+  // SEP-53 message binding wallet + imageUrl (the exact bytes that will be
+  // fetched and pinned); the server verifies it with the claimed keypair.
+  const signature = typeof (body as { signature?: unknown }).signature === "string"
+    ? ((body as { signature: string }).signature).trim()
+    : ""
+  if (!signature) {
+    return api.json(
+      { error: "signature required: sign { wallet, imageUrl } to prove wallet ownership" },
+      { status: 401, event: "profile.avatar.signature_required" },
+    )
   }
   // For this route we accept imageUrl and fetch server-side for pinning (signing boundary preserved)
   const imageUrl = typeof body.imageUrl === "string" ? body.imageUrl.trim() : ""
   if (!imageUrl) return api.json({ error: "imageUrl required" }, { status: 400, event: "profile.avatar.validation_failed" })
+
+  const ownershipOk = await verifyAvatarOwnershipSignature(wallet, imageUrl, signature)
+  if (!ownershipOk) {
+    api.log("warn", "avatar_forgery_attempt", { wallet, reason: "invalid_signature" })
+    return api.json(
+      { error: "Invalid signature: request not signed by the wallet being updated" },
+      { status: 403, event: "profile.avatar.invalid_signature" },
+    )
+  }
+
   const quorum = typeof body.quorum === "number" && Number.isFinite(body.quorum) ? Math.max(1, Math.min(3, Math.trunc(body.quorum))) : 1
 
   try {
@@ -186,6 +211,26 @@ export async function POST(request: NextRequest) {
       }
       return api.json({ error: result.error, code: result.code, quorum: result.quorum, achieved: result.achieved }, { status: 502, event: "profile.avatar.pin_failed" })
     }
+    // Issue #226: bind the pinned content to the CID it is served under before
+    // persisting it. The pin result carries the gateway checksum; a mismatch
+    // means the bytes we are about to store are not the bytes that CID names.
+    try {
+      const { verifyCID, CidIntegrityError } = await import("@/lib/cid-cache")
+      const expectedSha = typeof result.checksum === "string" && /^[a-f0-9]{64}$/i.test(result.checksum)
+        ? result.checksum
+        : undefined
+      verifyCID(new Uint8Array(ab), result.cid, expectedSha)
+    } catch (e) {
+      if (e instanceof Error && e.name === "CidIntegrityError") {
+        api.log("warn", "avatar_cid_mismatch", { wallet, cid: result.cid, code: (e as { code?: string }).code })
+        return api.json(
+          { error: "Pinned content failed CID verification", code: "CID_MISMATCH" },
+          { status: 400, event: "profile.avatar.cid_mismatch" },
+        )
+      }
+      throw e
+    }
+
     // Persist new avatar_image_url as verified gateway URL
     const profile = await getProfile(wallet)
     if (profile) {
@@ -194,9 +239,32 @@ export async function POST(request: NextRequest) {
     }
     return api.json(
       { ok: true, cid: result.cid, uri: result.uri, checksum: result.checksum, quorum: result.quorum, achieved: result.achieved },
-      { event: "profile.avatar.pinned", metadata: { wallet, cid: result.cid } },
+      { status: 201, event: "profile.avatar.pinned", metadata: { wallet, cid: result.cid }, headers: { "Cache-Control": "private, no-store" } },
     )
   } catch (error) {
     return respondWithProfileError(api, error, "profile.avatar.pin_failed")
+  }
+}
+
+/**
+ * Issue #226: SEP-53 wallet-ownership proof for avatar updates.
+ *
+ * Signs a canonical message binding { wallet, imageUrl } so the signature
+ * cannot be lifted from another request or replayed against a different image.
+ * Same SEP-53 construction as lib/viewer-signature.ts.
+ */
+export async function verifyAvatarOwnershipSignature(
+  wallet: string,
+  imageUrl: string,
+  signatureBase64: string,
+): Promise<boolean> {
+  try {
+    const { Keypair } = await import("@stellar/stellar-sdk")
+    const { SIGNATURE_PREFIX, sha256Hex } = await import("@/lib/viewer-signature")
+    const message = `phase-avatar:v1:${await sha256Hex(JSON.stringify({ wallet, imageUrl }))}`
+    const data = new TextEncoder().encode(SIGNATURE_PREFIX + message)
+    return Keypair.fromPublicKey(wallet).verify(data, Buffer.from(signatureBase64, "base64"))
+  } catch {
+    return false
   }
 }

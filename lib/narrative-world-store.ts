@@ -320,6 +320,96 @@ export async function buildWorldExportSnapshot(collectionId: number): Promise<Wo
   }
 }
 
+export type WorldExportNarrative = {
+  token_id: number
+  narrative: string
+  lore_input: string
+  generated_at: number
+}
+
+/** Narratives per cursor page during export — keeps each batch bounded (#239). */
+export const WORLD_EXPORT_PAGE_SIZE = 50
+
+export type WorldExportNarrativePage = {
+  items: WorldExportNarrative[]
+  /** token_id to resume from, or null when the collection is exhausted. */
+  nextCursor: number | null
+}
+
+/**
+ * Cursor-paginated narratives for a collection, ordered by token_id.
+ * `cursor` is the last token_id already emitted, so each page holds at most
+ * `limit` records instead of materialising every narrative at once (#239).
+ */
+export async function getWorldNarrativesPage(
+  collectionId: number,
+  opts: { cursor?: number | null; limit?: number } = {},
+): Promise<WorldExportNarrativePage> {
+  const store = await readJsonStore<WorldNarrativesStore>(serverDataJsonPath("worldNarratives"))
+  const limit = Math.min(Math.max(opts.limit ?? WORLD_EXPORT_PAGE_SIZE, 1), WORLD_EXPORT_PAGE_SIZE)
+  const cursor = typeof opts.cursor === "number" && Number.isFinite(opts.cursor) ? opts.cursor : null
+
+  const matching = Object.entries(store)
+    .filter(([, data]) => data.collection_id === collectionId)
+    .map(([tokenId, data]) => ({
+      token_id: Number(tokenId),
+      narrative: data.narrative,
+      lore_input: data.lore_input,
+      generated_at: data.generated_at,
+    }))
+    .filter((n) => cursor === null || n.token_id > cursor)
+    .sort((a, b) => a.token_id - b.token_id)
+
+  const items = matching.slice(0, limit)
+  const last = items[items.length - 1]
+  return { items, nextCursor: matching.length > items.length && last ? last.token_id : null }
+}
+
+/** Total narratives in a collection — counted without holding them in memory. */
+export async function countWorldNarratives(collectionId: number): Promise<number> {
+  const store = await readJsonStore<WorldNarrativesStore>(serverDataJsonPath("worldNarratives"))
+  let total = 0
+  for (const data of Object.values(store)) {
+    if (data.collection_id === collectionId) total++
+  }
+  return total
+}
+
+/**
+ * Streams a world export as NDJSON in cursor pages of `pageSize` records, so a
+ * large world never has to be serialised into a single in-memory string.
+ * First line is the metadata header, then one narrative record per line.
+ * The caller sets Content-Type: application/x-ndjson.
+ */
+export async function* streamWorldExportNdjson(
+  collectionId: number,
+  opts: { cursor?: number | null; pageSize?: number } = {},
+): AsyncGenerator<string, void, undefined> {
+  const world = await getWorldForCollection(collectionId)
+  if (!world) return
+
+  const header = {
+    collection_id: collectionId,
+    world_name: world.world_name,
+    world_prompt: world.world_prompt,
+    narrator_tone: world.narrator_tone ?? null,
+    created_at: world.created_at,
+    narrative_count: await countWorldNarratives(collectionId),
+  }
+  yield `${JSON.stringify(header)}\n`
+
+  let cursor = opts.cursor ?? null
+  for (;;) {
+    const page = await getWorldNarrativesPage(collectionId, {
+      cursor,
+      limit: opts.pageSize ?? WORLD_EXPORT_PAGE_SIZE,
+    })
+    for (const narrative of page.items) yield `${JSON.stringify(narrative)}\n`
+    if (page.nextCursor === null) return
+    cursor = page.nextCursor
+  }
+}
+
 export function renderWorldExportMarkdown(snapshot: WorldExportSnapshot): string {
   let md = `# ${snapshot.world_name}\n\n`
   md += `**Mundo ID:** ${snapshot.collection_id}\n\n`

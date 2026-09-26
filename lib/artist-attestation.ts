@@ -204,6 +204,88 @@ export async function listVerifiedArtistBadges(): Promise<ArtistBadge[]> {
   return Object.values(store).sort((a, b) => b.verifiedAt - a.verifiedAt)
 }
 
+// ─── on-chain attestation (Issue #225) ──────────────────────────────────────
+//
+// An off-chain badge is only a cache: the trust anchor is the
+// `artist_attestations` entry in the phase-protocol contract, which is only
+// writable through `attest_artist` gated by `require_auth(admin)`. A badge is
+// therefore never issued unless the chain agrees the artist is attested, so a
+// forged/mismatched off-chain store entry cannot be promoted to "verified".
+
+export type OnChainAttestationResult = "verified" | "not_attested" | "unavailable"
+
+const ON_CHAIN_CHECK_TIMEOUT_MS = 8_000
+const ON_CHAIN_CACHE_TTL_MS = 5 * 60 * 1000 // 5 min, per the issue's cache spec
+const onChainCache = new Map<string, { at: number; result: OnChainAttestationResult }>()
+
+/** Read-only G address used as the simulation fee source for read calls. */
+const READ_SOURCE_G =
+  process.env.PHASE_READONLY_SIM_SOURCE_G?.trim() ||
+  "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+
+/**
+ * Query the phase-protocol contract for the artist's attestation flag.
+ *
+ * Returns "verified" | "not_attested" when the chain answered, and
+ * "unavailable" when the RPC/contract could not be reached — callers must
+ * decide whether "unavailable" is fatal (issuance) or a degradation (reads).
+ */
+export async function checkOnChainArtistAttestation(
+  wallet: string,
+): Promise<OnChainAttestationResult> {
+  if (!STRKEY_VALID(wallet)) return "not_attested"
+
+  const cached = onChainCache.get(wallet)
+  const now = Date.now()
+  if (cached && now - cached.at < ON_CHAIN_CACHE_TTL_MS) return cached.result
+
+  let result: OnChainAttestationResult = "unavailable"
+  try {
+    const [{ rpc, xdr, Contract, TransactionBuilder, Networks }, protocol] = await Promise.all([
+      import("@stellar/stellar-sdk"),
+      import("@/lib/phase-protocol"),
+    ])
+    const contractId = protocol.phaseProtocolContractIdForServer()
+    if (!contractId) return "unavailable"
+
+    const url = process.env.SOROBAN_RPC_URL?.trim() || "https://soroban-testnet.stellar.org"
+    const server = new rpc.Server(url, { allowHttp: url.startsWith("http:") })
+    const source = await server.getAccount(READ_SOURCE_G)
+    const contract = new Contract(contractId)
+    const tx = new TransactionBuilder(source, {
+      fee: "100",
+      networkPassphrase: Networks.TESTNET,
+    })
+      .addOperation(contract.call("is_artist_attested", xdr.ScVal.scvAddress(wallet)))
+      .setTimeout(300)
+      .build()
+
+    const sim = await server.simulateTransaction(tx)
+    if (rpc.Api.isSimulationError(sim)) {
+      // An unknown method / missing entry surfaces as a simulation error, which
+      // we treat as "not attested" rather than an infrastructure failure.
+      result = "not_attested"
+    } else {
+      const retval = sim.result?.retval
+      const decoded = retval ? xdr.ScVal.fromXDR(retval, "base64") : null
+      const isVerified =
+        decoded?.switch?.() === xdr.ScValType.scvBool && decoded.bool() === true
+      result = isVerified ? "verified" : "not_attested"
+    }
+  } catch {
+    result = "unavailable"
+  }
+
+  onChainCache.set(wallet, { at: now, result })
+  return result
+}
+
+/** Test seam: clears the on-chain attestation cache. */
+export function __resetArtistAttestationCacheForTests(): void {
+  onChainCache.clear()
+}
+
+
 /**
  * Deployment-script wiring hook: audits that the attestation schema and
  * signature-verification pipeline are loadable/consistent before setup/reset
