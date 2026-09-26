@@ -248,6 +248,8 @@ export default async function WorldGalleryPage({ params }: Props) {
                         <img
                           src={nft.image}
                           alt={nft.name}
+                          loading="lazy"
+                          decoding="async"
                           className="aspect-square w-full object-cover opacity-80 transition-opacity group-hover:opacity-95"
                         />
                       ) : (

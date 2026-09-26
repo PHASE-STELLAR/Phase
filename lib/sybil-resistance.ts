@@ -215,6 +215,7 @@ export function isSybilSuspect(score: number, threshold = SUSPECT_MAX): boolean 
 
 type HorizonBalance = { balance?: string; asset_type?: string }
 type HorizonAccount = {
+  created_at?: string
   balances?: HorizonBalance[]
   signers?: unknown[]
   home_domain?: string
@@ -298,9 +299,13 @@ export async function fetchAccountHistoryFeatures(
   const txRecords = txPage?._embedded?.records ?? []
   const transactionCount = txRecords.length
   let accountAgeDays = 0
+  if (typeof account.created_at === "string") {
+    const ms = Date.now() - new Date(account.created_at).getTime()
+    if (Number.isFinite(ms) && ms > 0) accountAgeDays = ms / 86_400_000
+  }
   const oldest = txRecords[txRecords.length - 1]
   const oldestCreatedAt = oldest?.["created_at"]
-  if (typeof oldestCreatedAt === "string") {
+  if (accountAgeDays === 0 && typeof oldestCreatedAt === "string") {
     const ms = Date.now() - new Date(oldestCreatedAt).getTime()
     if (Number.isFinite(ms) && ms > 0) accountAgeDays = ms / 86_400_000
   }

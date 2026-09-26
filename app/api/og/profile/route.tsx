@@ -335,7 +335,10 @@ export async function GET(request: NextRequest) {
 
   const headers: Record<string, string> = {
     "Content-Type": "image/png",
-    "Cache-Control": "public, max-age=60, s-maxage=60, stale-while-revalidate=120",
+    // A profile can contain private owner metadata; wallet is user supplied,
+    // therefore this response must never be shared by a CDN.
+    "Cache-Control": "private, no-store, must-revalidate",
+    Vary: "Accept-Language, Authorization, X-Phase-Lang",
     "X-Phase-Og-Template": usedTemplate,
     ...(isPhase120Enabled() ? { "X-Phase120": "enabled" } : {}),
     ...(isSybilResistanceEnabled() ? { "X-Phase145": "enabled" } : {}),

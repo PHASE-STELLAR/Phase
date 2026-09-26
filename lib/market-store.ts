@@ -424,13 +424,18 @@ export async function updateOfferStatus(
   return rowToOffer(row, Date.now());
 }
 
-export async function getOffersByBuyer(buyer_wallet: string): Promise<Offer[]> {
+export async function getOffersByBuyer(
+  buyer_wallet: string,
+  opts: { limit?: number; cursor?: number } = {},
+): Promise<Offer[]> {
   const now = Date.now();
+  const limit = Math.min(100, Math.max(1, Math.floor(opts.limit ?? 50)));
+  const cursor = Number.isFinite(opts.cursor) ? Math.max(0, Math.floor(opts.cursor!)) : 0;
   const rows = getDb()
     .prepare(
-      "SELECT * FROM offers WHERE buyer_wallet = ? ORDER BY created_at DESC",
+      "SELECT * FROM offers WHERE buyer_wallet = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
     )
-    .all(buyer_wallet) as OfferRow[];
+    .all(buyer_wallet, limit, cursor) as OfferRow[];
   return rows.map((row) => rowToOffer(row, now));
 }
 
