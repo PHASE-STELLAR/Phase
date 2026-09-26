@@ -76,6 +76,11 @@ flowchart TB
 | `lib/narrative-world-store.ts` | World/narrative JSON store + localized per-(tokenId,lang) narrative cache (phase-111) + world export snapshot builder and markdown renderer (phase-112) + collaborative role store with ownership enforcement (phase-109) + lore link store with back-reference index (phase-115) |
 | `lib/ipfs-upload-retry.ts` | IPFS upload retry w/ exponential backoff + sha256 checksum (phase-120) |
 | `lib/cid-cache.ts` | CID content-addressing cache with integrity verification (phase-119) |
+| `lib/cid-verification.ts` | CID multihash verification + `metadata_uri` allowlist; gates the shared-cache lifetime (#229) |
+| `lib/viewer-authorization.ts` | Gated-preview grant: token/expiry/`jti`-bound viewer signature, single-use via `viewer_jti` (#227) |
+| `lib/security-counters.ts` | Security counter registry (gated preview, CID, wash, distributor) with closed label sets (#227, #229, #230, #231) |
+| `lib/wash-screening.ts` | Offer wash screen + volume aggregates excluding wash-flagged offers (#230) |
+| `lib/distributor-ledger.ts` | Distributor balance ledger + `BEGIN IMMEDIATE` refill reservation (#231) |
 | `lib/ipfs-pinning.ts` | Multi-gateway pinning with quorum + fallback fetch (phase-117) |
 | `lib/profile-store.ts` | Profile JSON store + avatar redundancy helpers (phase-117) |
 | `lib/contributor-ledger.ts` | Contributor ledger & credit distribution (phase-116) |
@@ -303,3 +308,100 @@ Contract commands are documented in [`contracts/README.md`](../contracts/README.
 - [SEP-0001](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0001.md)
 - [Freighter Docs](https://docs.freighter.app/)
 - [Stellar x402](https://developers.stellar.org/docs/build/agentic-payments/x402)
+
+---
+
+## 13. Gated content, CID verification and market integrity
+
+Three security properties that interact, and are easy to get individually right
+and collectively wrong. Findings and measurements are in `docs/spikes/`.
+
+### Gated preview authorization (#227)
+
+```
+signedPayload = SHA256("Phase SEP50" | networkPassphrase | contractId |
+                       viewer | tokenId | exp | jti)
+signedBytes   = "Stellar Signed Message:\n" + "phase-viewer:v1:" + hex(signedPayload)
+```
+
+Every field is inside the digest, so none can be swapped after signing:
+`networkPassphrase` blocks cross-network replay, `contractId` blocks
+cross-contract replay, `tokenId` blocks one signature opening every gated token,
+`exp` bounds the window to 300s (±30s skew), and `jti` makes each signature
+single-use.
+
+`jti` is consumed with `INSERT … ON CONFLICT (jti) DO NOTHING` against
+`viewer_jti`. The primary key does the work, so two concurrent presentations
+cannot both win — a read-then-write in the request path would let exactly that
+race through. The `jti` is consumed **after** the signature verifies, so a
+signature that fails verification is not burned.
+
+**The signature lifetime is not the security boundary — the cache layer is.** A
+300-second `exp` on a response marked `public, s-maxage=31536000` is still a
+year-long bearer token. Gated responses are therefore `private, no-store` with
+`Vary: Authorization`.
+
+`POST /api/phase-nft/verify` returns `gatedVerified: false` when no signature is
+present. Default-deny: gated content stays gated when the signature path is
+absent or broken.
+
+### CID verification (#229)
+
+`cid-cache.ts` verifies cached bytes against a **stored** digest, which catches
+corruption but not a client-supplied CID — an attacker who supplies both the CID
+and the payload satisfies that check, because the stored digest was computed
+from the attacker's own bytes. `verifyCID` recomputes the digest **from the CID
+itself**:
+
+| Input | Result |
+|---|---|
+| CIDv0 `Qm…` | base58btc, multihash `0x12 0x20`, recompute sha2-256 |
+| CIDv1 `bafy…` | base32, sha2-256 length 32, recompute sha2-256 |
+| CIDv1 `bafb…` (blake2b) | `CID_UNVERIFIABLE` — **not** recomputable, so not passed |
+| digest ≠ payload | `CID_MISMATCH` → 400, never cached |
+
+`metadata_uri` is allowlisted to `ipfs://` with a verifiable CID; `https://` is
+refused outright because it is not content-addressed. Rejection happens in the
+route **before** any fetch.
+
+Cache lifetime follows verification:
+
+| State | `Cache-Control` |
+|---|---|
+| verified, non-gated | `public, …, s-maxage=31536000, immutable, Vary: Authorization` |
+| gated | `private, max-age=60, Vary: Authorization` |
+| unverified / mismatch | `private, no-store, Vary: Authorization` |
+
+### Wash screening and volume (#230)
+
+The detectors in `lib/wash-trading.ts` are now consulted on the **write** path.
+Policy is deliberately asymmetric:
+
+| Pattern | Action |
+|---|---|
+| `buyer == seller` | **400 block** — no legitimate reading of bidding on your own listing |
+| circular, rapid flip, sybil cluster | **flag**, excluded from volume |
+
+Blocking the graph-based patterns would reject ordinary wallets funded from the
+same exchange. The damage is the offer *counting toward volume*, not the offer
+existing, so flagged offers are created and excluded from every volume
+aggregate. Screening is O(1) per offer plus a bounded (≤200 row) window read,
+so a 100k-offer campaign cannot amplify the check into an outage.
+
+### Distributor refill reservation (#231)
+
+The refill path was a check-then-act race: read the balance, decide it is low,
+submit. Two concurrent refills both read the same balance and both submitted.
+`reserveFunds` performs the check and the hold in one `BEGIN IMMEDIATE`
+transaction — `IMMEDIATE` takes the write lock *before* the first read, which a
+deferred `BEGIN` would not.
+
+```
+availableBalance = balance - reserve - feeReserve - pendingReserved
+```
+
+The fee reserve is separate from the trustline reserve: fees come out of native
+XLM, and draining it below the transaction fee strands every later settlement.
+A failed refill **must** release its hold; a refill still pending after the poll
+window **keeps** it, since releasing it would let a concurrent refill authorise
+against funds the pending transaction is about to consume.
