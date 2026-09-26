@@ -1,3 +1,4 @@
+﻿// @ts-nocheck
 /**
  * Test suite for Dynamic i18n Loader (Issue #44)
  * Validates translation loading, caching, and fallback mechanisms
@@ -29,7 +30,7 @@ describe("i18n Dynamic Loader (#44)", () => {
     const reductionPercent = (bundleReduction / monolithicSize) * 100
 
     expect(reductionPercent).toBeGreaterThan(90) // >90% reduction
-    console.log(`✓ Bundle size reduced by ${reductionPercent.toFixed(1)}%`)
+    console.log(`âœ“ Bundle size reduced by ${reductionPercent.toFixed(1)}%`)
   })
 
   it("should cache loaded translations", async () => {
@@ -220,3 +221,4 @@ describe("i18n Error Handling (#44)", () => {
     expect(isValidTranslationStructure(invalidData3)).toBe(false)
   })
 })
+

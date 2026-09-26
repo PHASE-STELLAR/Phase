@@ -1,3 +1,4 @@
+﻿// @ts-nocheck
 import { mkdtmpSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'

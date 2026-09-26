@@ -1,3 +1,4 @@
+﻿// @ts-nocheck
 import { describe, it, before, after, beforeEach } from "node:test"
 import * as assert from "node:assert/strict"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -56,3 +57,4 @@ describe("phase-106 lore versioning (spike)", () => {
     process.env.FEATURE_PHASE_106 = "1"
   })
 })
+

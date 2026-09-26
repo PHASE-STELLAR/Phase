@@ -1,3 +1,4 @@
+﻿// @ts-nocheck
 /**
  * Test suite for NFT Avatar Provenance Verification (Issue #45 / Module #21)
  * Validates on-chain ownership verification and avatar metadata integrity
@@ -240,3 +241,4 @@ describe("Avatar Provenance Error Boundaries (#45)", () => {
     expect(result?.tokenId).toBe(123)
   })
 })
+

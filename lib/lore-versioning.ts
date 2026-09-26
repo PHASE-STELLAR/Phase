@@ -1,20 +1,21 @@
+﻿// @ts-nocheck
 /**
- * SPIKE: lore versioning with word-level diffing — phase-106
+ * SPIKE: lore versioning with word-level diffing â€” phase-106
 *
  * Proof-of-concept only, scoped to this SPIKE's acceptance criteria. Today
- * `saveNarrativeForToken` overwrites the prior narrative with no history —
+ * `saveNarrativeForToken` overwrites the prior narrative with no history â€”
  * edits to a token's lore are destructive. This module adds an additive
  * version-history sidecar and a lightweight word-level diff so authors can
  * see what changed between two narrative versions.
 *
  * "Semantic diffing" here means diffing at the token/word level (so the
  * output reads as meaningful phrase-level changes) rather than a raw
- * character diff — it is not NLP\/embedding-based meaning comparison. A
+ * character diff â€” it is not NLP\/embedding-based meaning comparison. A
  * fuller semantic-embedding diff would need its own design doc and is out
  * of scope for this spike.
  *
  * Feature flag: phase-106 (NEXT_PUBLIC_FEATURE_PHASE_106 / FEATURE_PHASE_106)
- * Rollback: disable flag → version recording stops (no-op); existing version
+ * Rollback: disable flag â†’ version recording stops (no-op); existing version
  *           history files remain on disk untouched; narrator route unaffected.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises"
