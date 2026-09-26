@@ -3,7 +3,7 @@ import { getHealthSummary } from "@/lib/distributor-health-store"
 
 /**
  * GET /api/faucet/health
- * 
+ *
  * Returns distributor health status for UI display
  * - Current health status
  * - Recent history
@@ -12,7 +12,19 @@ import { getHealthSummary } from "@/lib/distributor-health-store"
 
 export const dynamic = 'force-dynamic'
 
+let lastHealthCheckTime = 0
+const MIN_CHECK_INTERVAL_MS = 5000
+
 export async function GET() {
+  const now = Date.now()
+  if (now - lastHealthCheckTime < MIN_CHECK_INTERVAL_MS) {
+    return NextResponse.json(
+      { ok: false, error: "Rate limited - check again in a moment" },
+      { status: 429, headers: { "Retry-After": "5" } }
+    )
+  }
+  lastHealthCheckTime = now
+
   try {
     const summary = await getHealthSummary()
     

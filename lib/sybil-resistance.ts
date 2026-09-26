@@ -77,8 +77,20 @@ export class SybilResistanceError extends Error {
   }
 }
 
-const SUSPECT_MAX = 34
-const CAUTION_MAX = 64
+function getSuspectThreshold(): number {
+  const envVal = (process.env.NEXT_PUBLIC_SYBIL_SUSPECT_MAX ?? process.env.SYBIL_SUSPECT_MAX ?? "34").trim()
+  const parsed = parseInt(envVal, 10)
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : 34
+}
+
+function getCautionThreshold(): number {
+  const envVal = (process.env.NEXT_PUBLIC_SYBIL_CAUTION_MAX ?? process.env.SYBIL_CAUTION_MAX ?? "64").trim()
+  const parsed = parseInt(envVal, 10)
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : 64
+}
+
+const SUSPECT_MAX = getSuspectThreshold()
+const CAUTION_MAX = getCautionThreshold()
 
 function clampThreshold(value: number | undefined, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback
