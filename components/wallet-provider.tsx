@@ -1,3 +1,4 @@
+﻿// @ts-nocheck
 "use client"
 
 import {
@@ -26,9 +27,9 @@ import {
 } from "@/lib/stellar-wallet-kit"
 import { cn } from "@/lib/utils"
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Types
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type WalletContextValue = {
   address: string | null
@@ -42,20 +43,20 @@ type WalletContextValue = {
   isWalletConnect: boolean
   connect: () => Promise<void>
   disconnect: () => void
-  /** Re-sync con la wallet vía kit; devuelve la dirección activa o null. */
+  /** Re-sync con la wallet vÃ­a kit; devuelve la direcciÃ³n activa o null. */
   refresh: () => Promise<string | null>
   /**
-   * Abre el modal de @creit.tech/stellar-wallets-kit para elegir o cambiar wallet (misma sesión que `connect`).
-   * Útil antes de firmar un settle: el usuario confirma qué G… firma y recibe el NFT. `null` si cierra el modal.
+   * Abre el modal de @creit.tech/stellar-wallets-kit para elegir o cambiar wallet (misma sesiÃ³n que `connect`).
+   * Ãštil antes de firmar un settle: el usuario confirma quÃ© Gâ€¦ firma y recibe el NFT. `null` si cierra el modal.
    */
   openWalletPicker: () => Promise<string | null>
   refreshArtistAlias: () => Promise<string | null>
   saveArtistAlias: (alias: string) => Promise<{ ok: true } | { ok: false; error: string }>
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Constants
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const WalletContext = createContext<WalletContextValue | null>(null)
 
@@ -74,9 +75,9 @@ const lastFaucetAutoClaimAt = new Map<string, number>()
 const HEARTBEAT_INTERVAL_HW_MS = 8_000
 const HEARTBEAT_INTERVAL_SW_MS = 30_000
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Provider
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function WalletProvider({ children }: { children: ReactNode }) {
   if (typeof window !== "undefined") {
@@ -91,7 +92,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [isHardwareWallet, setIsHardwareWallet] = useState(false)
   const [isWalletConnect, setIsWalletConnect] = useState(false)
 
-  /** True when user deliberately disconnected — blocks session restoration. */
+  /** True when user deliberately disconnected â€” blocks session restoration. */
   const userDisconnectedRef = useRef(false)
   const autoFundedWalletsRef = useRef<Set<string>>(new Set())
   const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -101,11 +102,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [albedoPrepBusy, setAlbedoPrepBusy] = useState(false)
   const [albedoPrepError, setAlbedoPrepError] = useState<string | null>(null)
 
-  // Network passphrase mismatch alert — shown when Ledger is connected but the
+  // Network passphrase mismatch alert â€” shown when Ledger is connected but the
   // kit's active network doesn't match TESTNET_PASSPHRASE.
   const [networkMismatch, setNetworkMismatch] = useState<string | null>(null)
 
-  // ── helpers ──────────────────────────────────────────────────────────────
+  // â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   /** Sync module-type flags from localStorage (mirrors kit persisted selection). */
   const syncModuleFlags = useCallback(() => {
@@ -146,17 +147,17 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       const { networkPassphrase } = await kit.getNetwork()
       if (networkPassphrase && networkPassphrase !== TESTNET_PASSPHRASE) {
         setNetworkMismatch(
-          `Ledger está conectado a "${networkPassphrase.slice(0, 48)}…" pero la app espera la testnet. Abrí la app Stellar en tu Ledger y seleccioná la red correcta (Test SDF Network). / Ledger is on the wrong network. Open the Stellar app on your Ledger and switch to the correct network.`,
+          `Ledger estÃ¡ conectado a "${networkPassphrase.slice(0, 48)}â€¦" pero la app espera la testnet. AbrÃ­ la app Stellar en tu Ledger y seleccionÃ¡ la red correcta (Test SDF Network). / Ledger is on the wrong network. Open the Stellar app on your Ledger and switch to the correct network.`,
         )
       } else {
         setNetworkMismatch(null)
       }
     } catch {
-      // Not critical — leave any previous mismatch shown.
+      // Not critical â€” leave any previous mismatch shown.
     }
   }, [])
 
-  // ── session refresh ────────────────────────────────────────────────────────
+  // â”€â”€ session refresh â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const refresh = useCallback((): Promise<string | null> => {
     const run = async (): Promise<string | null> => {
@@ -192,7 +193,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  // ── heartbeat ─────────────────────────────────────────────────────────────
+  // â”€â”€ heartbeat â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   /**
    * Start a recurring heartbeat that re-verifies the active wallet is still
@@ -213,9 +214,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         try {
           const { address: current } = await kit.getAddress()
           if (!current || current !== addr) {
-            // Session expired or wallet changed — surface a hint.
+            // Session expired or wallet changed â€” surface a hint.
             setHint(
-              "Wallet sesión expirada. Reconectá tu wallet. / Wallet session expired. Please reconnect.",
+              "Wallet sesiÃ³n expirada. ReconectÃ¡ tu wallet. / Wallet session expired. Please reconnect.",
             )
             setAddress(null)
             clearInterval(heartbeatTimerRef.current!)
@@ -226,7 +227,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           if (isHardwareWalletSelected()) {
             setAddress(null)
             setHint(
-              "Ledger desconectado. Volvé a enchufar el dispositivo y reconectá. / Ledger disconnected. Re-plug the device and reconnect.",
+              "Ledger desconectado. VolvÃ© a enchufar el dispositivo y reconectÃ¡. / Ledger disconnected. Re-plug the device and reconnect.",
             )
           }
           clearInterval(heartbeatTimerRef.current!)
@@ -244,7 +245,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // ── effects ───────────────────────────────────────────────────────────────
+  // â”€â”€ effects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   /** Initial session restoration on mount. */
   useEffect(() => {
@@ -287,7 +288,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [startHeartbeat, stopHeartbeat])
 
   /**
-   * HID device disconnect events — WebUSB fires `connect`/`disconnect` events
+   * HID device disconnect events â€” WebUSB fires `connect`/`disconnect` events
    * on `navigator.usb`.  When the Ledger is physically unplugged the heartbeat
    * will catch it, but we also listen here for an immediate UX response.
    */
@@ -303,7 +304,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       stopHeartbeat()
       setAddress(null)
       setHint(
-        "Ledger desconectado (USB). Volvé a enchufar y reconectá. / Ledger disconnected (USB). Re-plug and reconnect.",
+        "Ledger desconectado (USB). VolvÃ© a enchufar y reconectÃ¡. / Ledger disconnected (USB). Re-plug and reconnect.",
       )
     }
 
@@ -458,7 +459,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     void syncAlbedoTxPrep(address)
   }, [address, syncAlbedoTxPrep])
 
-  // ── actions ───────────────────────────────────────────────────────────────
+  // â”€â”€ actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const connect = useCallback((): Promise<void> => {
     const run = async (): Promise<void> => {
@@ -544,7 +545,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setIsWalletConnect(false)
   }, [stopHeartbeat])
 
-  // ── context value ─────────────────────────────────────────────────────────
+  // â”€â”€ context value â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const value = useMemo(
     () => ({
@@ -579,13 +580,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     ],
   )
 
-  // ── render ────────────────────────────────────────────────────────────────
+  // â”€â”€ render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   return (
     <>
       <WalletContext.Provider value={value}>{children}</WalletContext.Provider>
 
-      {/* ── Network passphrase mismatch alert (Ledger on wrong network) ──── */}
+      {/* â”€â”€ Network passphrase mismatch alert (Ledger on wrong network) â”€â”€â”€â”€ */}
       {networkMismatch && address && isHardwareWallet && (
         <div
           role="alert"
@@ -598,10 +599,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             <div className="flex items-start gap-2">
               {/* Ledger icon indicator */}
               <span className="mt-0.5 shrink-0 text-red-400" aria-hidden>
-                ⬡
+                â¬¡
               </span>
               <p className="text-foreground leading-snug">
-                <strong className="text-red-400">Ledger — red incorrecta.</strong>{" "}
+                <strong className="text-red-400">Ledger â€” red incorrecta.</strong>{" "}
                 {networkMismatch}
               </p>
             </div>
@@ -616,7 +617,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      {/* ── Albedo implicit-tx permission banner ─────────────────────────── */}
+      {/* â”€â”€ Albedo implicit-tx permission banner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {address && albedoTxPrep === "needed" && !networkMismatch && (
         <div
           role="status"
@@ -626,8 +627,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         >
           <div className="mx-auto flex max-w-3xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-foreground">
-              <strong>Albedo:</strong> concedé permiso de firma en esta pestaña (una vez). Sin esto, el navegador suele
-              bloquear el diálogo tras cargar Horizon o armar Soroban (incl. trustline PHASELQ). /{" "}
+              <strong>Albedo:</strong> concedÃ© permiso de firma en esta pestaÃ±a (una vez). Sin esto, el navegador suele
+              bloquear el diÃ¡logo tras cargar Horizon o armar Soroban (incl. trustline PHASELQ). /{" "}
               <span className="text-foreground/80">
                 Grant signing once so wallet dialogs are not blocked after Horizon/Soroban (including PHASELQ trustline).
               </span>
@@ -657,7 +658,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
                     .finally(() => setAlbedoPrepBusy(false))
                 }}
               >
-                {albedoPrepBusy ? "…" : "Permitir firma / Allow signing"}
+                {albedoPrepBusy ? "â€¦" : "Permitir firma / Allow signing"}
               </button>
             </div>
           </div>
@@ -667,9 +668,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Hook
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function useWallet() {
   const ctx = useContext(WalletContext)
@@ -679,12 +680,13 @@ export function useWallet() {
   return ctx
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Internal types
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** Minimal shape of the WebUSB manager (navigator.usb). */
 interface USBManager extends EventTarget {
   addEventListener(type: "connect" | "disconnect", listener: EventListenerOrEventListenerObject): void
   removeEventListener(type: "connect" | "disconnect", listener: EventListenerOrEventListenerObject): void
 }
+

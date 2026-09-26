@@ -26,17 +26,21 @@ export function playTacticalUiClick(): void {
   const ctx = getTacticalAudioContext()
   if (!ctx) return
   try {
-    void ctx.resume()
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.type = "square"
-    osc.frequency.setValueAtTime(920, ctx.currentTime)
-    gain.gain.setValueAtTime(0.032, ctx.currentTime)
-    gain.gain.exponentialRampToValueAtTime(0.0008, ctx.currentTime + 0.052)
-    osc.connect(gain)
-    gain.connect(ctx.destination)
-    osc.start(ctx.currentTime)
-    osc.stop(ctx.currentTime + 0.058)
+    // Async resume to prevent blocking
+    void ctx.resume().then(() => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = "square"
+      osc.frequency.setValueAtTime(920, ctx.currentTime)
+      gain.gain.setValueAtTime(0.032, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.0008, ctx.currentTime + 0.052)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + 0.058)
+    }).catch(() => {
+      /* ignore audio errors */
+    })
   } catch {
     /* ignore */
   }

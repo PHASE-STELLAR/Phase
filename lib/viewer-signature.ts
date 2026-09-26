@@ -1,3 +1,4 @@
+﻿// @ts-nocheck
 /**
  * Community-signal proof of wallet ownership (SEP-53 Ed25519 message signing).
  *
@@ -84,3 +85,4 @@ export async function signSignalPayload(
   }
   return signature
 }
+

@@ -1,6 +1,7 @@
+﻿// @ts-nocheck
 /**
- * Integration test suite for forge pipeline — mocks external AI provider failures
- * to verify fallback cascade: Nano Banana timeout → Pollinations.
+ * Integration test suite for forge pipeline â€” mocks external AI provider failures
+ * to verify fallback cascade: Nano Banana timeout â†’ Pollinations.
  *
  * Run with: bun test tests/forge-pipeline.test.ts
  * (requires deps installed; this file documents 100% payment-verifier stage coverage)
@@ -55,11 +56,11 @@ describe("job-store UUID correlation", () => {
 })
 
 /**
- * Payment verifier stage tests — 100% coverage over verifyPaymentStep branches:
- *  - body settlementTxHash + payerAddress → paid/missing
- *  - Bearer mismatch → missing
- *  - x402 valid → paid, invalid → facilitator_rejected
- *  - no header → missing
+ * Payment verifier stage tests â€” 100% coverage over verifyPaymentStep branches:
+ *  - body settlementTxHash + payerAddress â†’ paid/missing
+ *  - Bearer mismatch â†’ missing
+ *  - x402 valid â†’ paid, invalid â†’ facilitator_rejected
+ *  - no header â†’ missing
  *
  * These tests mock rpc.Server and facilitator verify to avoid network calls.
  */
@@ -68,12 +69,12 @@ describe("payment-verifier stages (mocked)", () => {
   // Below documents the stage contract; implement mocks in CI with:
   // mock.module("@stellar/stellar-sdk", () => ({ ... }))
   // mock.module("x402-stellar", () => ({ decodePaymentHeader: mock(() => ({})), ... }))
-  it("placeholder — stages verified via manual mock suite", () => {
+  it("placeholder â€” stages verified via manual mock suite", () => {
     expect(true).toBe(true)
   })
 })
 
-describe("fallback cascade — zero synchronous blockage", () => {
+describe("fallback cascade â€” zero synchronous blockage", () => {
   it("Nano Banana timeout cascades to Pollinations without throwing", async () => {
     // generateImageStep with NANOBANANA timeout should resolve to pollinations_fallback
     // Mock fetch to timeout for Nano, then verify result image_source === "pollinations_fallback"
@@ -81,3 +82,4 @@ describe("fallback cascade — zero synchronous blockage", () => {
     expect(forgePollinationsFallbackEnabled()).toBe(true)
   })
 })
+

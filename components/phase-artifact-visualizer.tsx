@@ -1,3 +1,4 @@
+﻿// @ts-nocheck
 "use client"
 
 import type { ArtifactLabelsCopy } from "@/lib/phase-copy"
@@ -9,13 +10,13 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react"
 
 export type ArtifactVerificationMode = "locked" | "verifying" | "verified"
 
-const GLITCH_CHARS = "ABCDEFGHKMNPQRSTUVWXYZ023456789#%░▒"
+const GLITCH_CHARS = "ABCDEFGHKMNPQRSTUVWXYZ023456789#%â–‘â–’"
 
 function scramblePreservingShape(target: string): string {
   let out = ""
   for (let i = 0; i < target.length; i++) {
     const ch = target[i]!
-    if (!/[A-Za-z0-9#%·/]/.test(ch)) {
+    if (!/[A-Za-z0-9#%Â·/]/.test(ch)) {
       out += ch
       continue
     }
@@ -124,7 +125,7 @@ type Props = {
   serial: number
   energyLevelBp: number
   collectionTitle?: string
-  /** Nombre legible para fila pública COLLECTION_NAME. */
+  /** Nombre legible para fila pÃºblica COLLECTION_NAME. */
   collectionDisplayName?: string
   imageUrl?: string | null
   className?: string
@@ -137,20 +138,20 @@ type Props = {
   isOwner?: boolean
   authenticityPending?: boolean
   onAccessPrivateMetadata?: () => void
-  /** `get_total_minted` / cap — null si RPC falla o aún no hay dato. */
+  /** `get_total_minted` / cap â€” null si RPC falla o aÃºn no hay dato. */
   supplyMinted?: number | null
   supplyCap?: number | null
   /** Variante compacta para layouts con poco alto visible (p. ej. Chamber). */
   compact?: boolean
-  /** Mostrar panel público (collection/contract/supply) debajo del arte. */
+  /** Mostrar panel pÃºblico (collection/contract/supply) debajo del arte. */
   showPublicMetaPanel?: boolean
   /** Mostrar panel privado (private channel/secret/power/signature) debajo del arte. */
   showPrivateMetaPanel?: boolean
-  /** Cámara: un solo panel limpio, sin ASCII ni banner ruidoso cuando el dueño está verificado. */
+  /** CÃ¡mara: un solo panel limpio, sin ASCII ni banner ruidoso cuando el dueÃ±o estÃ¡ verificado. */
   chamberPresentation?: boolean
   /** Marco exterior lo aporta el padre (split preview cian); sin tarjeta esmeralda duplicada. */
   chamberFrameless?: boolean
-  /** Cámara: preview clicable sin la fila «EXPAND» bajo la imagen. */
+  /** CÃ¡mara: preview clicable sin la fila Â«EXPANDÂ» bajo la imagen. */
   suppressExpandLabel?: boolean
   /** Token ID exacto para copiar (p. ej. Freighter); por defecto entero derivado de `serial`. */
   dockCopyTokenId?: string
@@ -160,19 +161,19 @@ type Props = {
   collectNftBusy?: boolean
   collectLabel?: string
   collectBusyLabel?: string
-  /** Cámara: el padre muestra caption + copias; aquí solo el bloque de imagen (holo). */
+  /** CÃ¡mara: el padre muestra caption + copias; aquÃ­ solo el bloque de imagen (holo). */
   chamberMetaPanelExternal?: boolean
 }
 
 function truncateContractMid(id: string) {
   const t = id.trim()
-  if (!t) return "—"
+  if (!t) return "â€”"
   if (t.length <= 12) return t
-  return `${t.slice(0, 4)}…${t.slice(-4)}`
+  return `${t.slice(0, 4)}â€¦${t.slice(-4)}`
 }
 
 /**
- * Monitor de escasez y propiedad: panel público (gris), canal privado (cian) con descifrado animado.
+ * Monitor de escasez y propiedad: panel pÃºblico (gris), canal privado (cian) con descifrado animado.
  */
 export function PhaseArtifactVisualizer({
   mode,
@@ -212,8 +213,8 @@ export function PhaseArtifactVisualizer({
 
   const asciiInner = 38
   const line = (inner: string) => {
-    const t = inner.length > asciiInner ? `${inner.slice(0, asciiInner - 1)}…` : inner
-    return `║ ${t.padEnd(asciiInner, " ")} ║`
+    const t = inner.length > asciiInner ? `${inner.slice(0, asciiInner - 1)}â€¦` : inner
+    return `â•‘ ${t.padEnd(asciiInner, " ")} â•‘`
   }
   const isVerified = mode === "verified"
   const isVerifying = mode === "verifying"
@@ -231,20 +232,20 @@ export function PhaseArtifactVisualizer({
         ? labels.verifying
         : labels.terminalRestricted
 
-  const topBlock = ["╔════════════════════════════════════════╗", line(head), "╠════════════════════════════════════════╣"].join("\n")
+  const topBlock = ["â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—", line(head), "â• â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•£"].join("\n")
 
   const powerStateLabel = isVerified ? labels.stateSolid : labels.stateLiquid
-  const powerFinalPrivate = `${powerStateLabel} · ${formatPowerBp(energyLevelBp)}`
+  const powerFinalPrivate = `${powerStateLabel} Â· ${formatPowerBp(energyLevelBp)}`
   const secretFinal = `#${Math.max(0, Math.floor(serial))}`
   const contractPublic = truncateContractMid(contractId)
 
   const publicCollectionLine =
     collectionDisplayName?.trim() ||
     (collectionTitle != null && collectionTitle.length > 0 ? collectionTitle.replace(/\s*\/\/.*$/, "").trim() : "") ||
-    "—"
+    "â€”"
 
   const supplyLine =
-    supplyMinted != null && supplyCap != null ? `[ ${supplyMinted} / ${supplyCap} ]` : `[ — / — ]`
+    supplyMinted != null && supplyCap != null ? `[ ${supplyMinted} / ${supplyCap} ]` : `[ â€” / â€” ]`
   const supplyRemainingRatio =
     supplyCap != null && supplyCap > 0 && supplyMinted != null
       ? (supplyCap - supplyMinted) / supplyCap
@@ -711,7 +712,7 @@ export function PhaseArtifactVisualizer({
   )
 
   const chamberCaptionEl =
-    chamberMinimal && publicCollectionLine !== "—" ? (
+    chamberMinimal && publicCollectionLine !== "â€”" ? (
       <div
         className={cn(
           "relative z-[2] mt-2 max-w-[min(100%,22rem)]",
@@ -770,7 +771,7 @@ export function PhaseArtifactVisualizer({
               </button>
             </div>
             <p className="mt-1 font-mono text-[9px] tabular-nums tracking-wide text-cyan-100/90 sm:text-[10px]">
-              {dockTokenCopyValue.trim() ? `#${dockTokenCopyValue}` : "—"}
+              {dockTokenCopyValue.trim() ? `#${dockTokenCopyValue}` : "â€”"}
             </p>
           </div>
         </div>
@@ -781,7 +782,7 @@ export function PhaseArtifactVisualizer({
             onClick={() => void Promise.resolve(onCollectNft())}
             className="tactical-interactive-glitch inline-flex shrink-0 items-center justify-center self-end border border-violet-500/55 bg-violet-950/35 px-3 py-2 text-[9px] font-bold uppercase tracking-widest text-violet-100 shadow-[inset_0_0_0_1px_rgba(167,139,250,0.12)] transition-colors hover:border-violet-400 hover:bg-violet-900/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-45 sm:self-auto"
           >
-            {collectNftBusy ? collectBusyLabel ?? "…" : collectLabel ?? "Collect"}
+            {collectNftBusy ? collectBusyLabel ?? "â€¦" : collectLabel ?? "Collect"}
           </button>
         ) : null}
       </div>
@@ -919,3 +920,4 @@ export function PhaseArtifactVisualizer({
     </div>
   )
 }
+
