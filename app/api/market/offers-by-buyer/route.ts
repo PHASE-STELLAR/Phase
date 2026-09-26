@@ -11,5 +11,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "valid buyer required" }, { status: 400 })
   }
   const offers = await getOffersByBuyer(buyer)
-  return NextResponse.json({ offers })
+  return NextResponse.json(
+    { offers },
+    {
+      headers: {
+        "Cache-Control": "public, max-age=30, s-maxage=30",
+      },
+    }
+  )
 }
