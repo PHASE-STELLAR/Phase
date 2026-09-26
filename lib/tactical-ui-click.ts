@@ -1,4 +1,6 @@
 let tacticalAudioCtx: AudioContext | null = null
+let lastClickTime = 0
+const DEBOUNCE_MS = 50
 
 function getTacticalAudioContext(): AudioContext | null {
   if (typeof window === "undefined") return null
@@ -16,11 +18,11 @@ function getTacticalAudioContext(): AudioContext | null {
   }
 }
 
-/** 
- * Short electronic UI tick — works after a prior user gesture (click).
- * Issue #296 fix: Use async ctx.resume() to prevent blocking the main thread.
- */
+/** Short electronic UI tick — works after a prior user gesture (click). Debounced to prevent audio spam. */
 export function playTacticalUiClick(): void {
+  const now = Date.now()
+  if (now - lastClickTime < DEBOUNCE_MS) return
+  lastClickTime = now
   const ctx = getTacticalAudioContext()
   if (!ctx) return
   try {
