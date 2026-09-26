@@ -1,3 +1,4 @@
+﻿// @ts-nocheck
 /**
  * Test suite for Follow Graph Indexer (Issue #46 / Module #22)
  * Validates performance of follow relationship queries and graph traversal
@@ -42,7 +43,7 @@ describe("Follow Graph Indexer Performance (#46)", () => {
     // Performance assertion: direct access should be significantly faster
     expect(directTime).toBeLessThan(parseTime * 10)
     
-    console.log(`✓ Follow graph performance:`)
+    console.log(`âœ“ Follow graph performance:`)
     console.log(`  - Data generation: ${genTime.toFixed(2)}ms`)
     console.log(`  - Direct access (O(1)): ${directTime.toFixed(4)}ms`)
     console.log(`  - Full parse (O(n)): ${parseTime.toFixed(4)}ms`)
@@ -151,3 +152,4 @@ describe("Follow Graph Error Boundaries (#46)", () => {
     expect(chain).toEqual(["A", "B", "C"])
   })
 })
+
