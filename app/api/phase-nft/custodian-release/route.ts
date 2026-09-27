@@ -103,6 +103,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: false, error: "Invalid recipientWallet." }, { status: 400 })
   }
 
+  // Require recipient authorization: custodian release must be signed by recipient
+  const authHeader = request.headers.get("authorization") ?? ""
+  if (!authHeader.startsWith("Bearer ")) {
+    return NextResponse.json(
+      { ok: false, code: "MISSING_AUTHORIZATION", error: "Authorization header required; recipient must sign release request." },
+      { status: 401 },
+    )
+  }
+
   const secret = process.env.CLASSIC_LIQ_ISSUER_SECRET?.trim()
   if (!secret) {
     return NextResponse.json(

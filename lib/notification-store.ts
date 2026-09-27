@@ -240,6 +240,50 @@ export async function createNotification(
   await writeStore(store)
 }
 
+export async function createNotificationBatch(
+  wallets: string[],
+  type: NotificationType,
+  data: Record<string, unknown>,
+): Promise<{ succeeded: number; failed: number }> {
+  if (!wallets.length) return { succeeded: 0, failed: 0 }
+
+  const store = await readStore()
+  let succeeded = 0
+  let failed = 0
+  const now = Date.now()
+  const notificationId = randomUUID()
+
+  for (const wallet of wallets) {
+    try {
+      if (!(await shouldStoreNotification(wallet, type))) {
+        failed++
+        continue
+      }
+
+      const list = store[wallet] ?? []
+      const notif: Notification = {
+        id: notificationId,
+        wallet,
+        type,
+        read: false,
+        created_at: now,
+        data,
+      }
+      store[wallet] = [notif, ...list].slice(0, MAX_PER_WALLET)
+      succeeded++
+    } catch {
+      failed++
+    }
+  }
+
+  // Batch write
+  if (succeeded > 0) {
+    await writeStore(store)
+  }
+
+  return { succeeded, failed }
+}
+
 export async function getNotifications(wallet: string, limit = 30): Promise<Notification[]> {
   const store = await readStore()
   return (store[wallet] ?? []).slice(0, limit)
