@@ -127,7 +127,11 @@ export default async function SignalDetailPage({ params }: Props) {
         </article>
 
         {/* Replies + compose (client island) */}
-        <SignalDetailClient signalId={id} initialReplies={replies} />
+        <SignalDetailClient
+          signalId={id}
+          initialSignalVersion={signal.version}
+          initialReplies={replies}
+        />
       </div>
     </div>
   )

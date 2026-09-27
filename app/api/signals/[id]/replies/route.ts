@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
-import { getSignal, createReply } from "@/lib/signal-store"
+import { getSignal, createReply, VersionConflictError } from "@/lib/signal-store"
 import { createNotification } from "@/lib/notification-store"
 import { createApiRequestContext } from "@/lib/api-observability"
 
@@ -11,6 +11,7 @@ type ReplyBody = {
   body?: unknown
   wallet?: unknown
   signature?: unknown
+  parent_version?: unknown
 }
 
 export async function POST(
@@ -51,6 +52,21 @@ export async function POST(
     )
   }
 
+  // Optional: when present, the reply must be composed against this version of
+  // the parent signal. A stale parent_version is rejected rather than silently
+  // accepted against a view the author never saw.
+  let parentVersion: number | undefined
+  if (body.parent_version !== undefined) {
+    const parsed = body.parent_version
+    if (typeof parsed !== "number" || !Number.isInteger(parsed) || parsed < 1) {
+      return api.json(
+        { error: "Invalid parent_version" },
+        { status: 400, event: "signals.reply.validation_failed", metadata: { reason: "parent_version" } },
+      )
+    }
+    parentVersion = parsed
+  }
+
   try {
     const signal = await getSignal(id)
     if (!signal) {
@@ -73,14 +89,17 @@ export async function POST(
       }
     }
 
-    const reply = await createReply({
-      signal_id: id,
-      author_wallet: walletStr,
-      author_display,
-      body: (body.body as string).trim(),
-      upvotes: [],
-      signature: body.signature as string,
-    })
+    const reply = await createReply(
+      {
+        signal_id: id,
+        author_wallet: walletStr,
+        author_display,
+        body: (body.body as string).trim(),
+        upvotes: [],
+        signature: body.signature as string,
+      },
+      parentVersion,
+    )
 
     if (signal.author_wallet !== walletStr) {
       void createNotification(signal.author_wallet, "signal_reply", {
@@ -96,6 +115,16 @@ export async function POST(
       { status: 201, event: "signals.reply.created", metadata: { signal_id: id, reply_id: reply.id } },
     )
   } catch (error) {
+    if (error instanceof VersionConflictError) {
+      return api.json(
+        { error: "Version conflict", current_version: error.currentVersion },
+        {
+          status: 409,
+          event: "signals.version_conflict",
+          metadata: { signal_id: id, route: "replies", current_version: error.currentVersion },
+        },
+      )
+    }
     return api.errorJson(error, 500, "signals.reply.create_failed")
   }
 }

@@ -1,23 +1,38 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextRequest } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
-import { getSignal, upvoteSignal, getReplies } from "@/lib/signal-store"
+import {
+  getSignal,
+  upvoteSignal,
+  getReplies,
+  signalETag,
+  parseVersionHeader,
+  VersionConflictError,
+} from "@/lib/signal-store"
 import { createNotification } from "@/lib/notification-store"
 import { checkAndUnlock } from "@/lib/achievement-store"
+import { createApiRequestContext } from "@/lib/api-observability"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const api = createApiRequestContext(request, "/api/signals/[id]")
   const { id } = await params
   const signal = await getSignal(id)
   if (!signal) {
-    return NextResponse.json({ error: "Signal not found" }, { status: 404 })
+    return api.json(
+      { error: "Signal not found" },
+      { status: 404, event: "signals.get.not_found", metadata: { signal_id: id } },
+    )
   }
   const replies = await getReplies(id)
-  return NextResponse.json({ signal, replies })
+  return api.json(
+    { signal, replies },
+    { status: 200, event: "signals.get.ok", headers: { ETag: signalETag(signal.version) } },
+  )
 }
 
 type UpvoteBody = {
@@ -29,23 +44,48 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const api = createApiRequestContext(request, "/api/signals/[id]")
   const { id } = await params
   let body: UpvoteBody
   try {
     body = (await request.json()) as UpvoteBody
   } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 })
+    return api.json(
+      { error: "Invalid JSON" },
+      { status: 400, event: "signals.upvote.invalid_json" },
+    )
   }
 
   if (typeof body.wallet !== "string" || !StrKey.isValidEd25519PublicKey(body.wallet)) {
-    return NextResponse.json({ error: "Invalid wallet address" }, { status: 400 })
+    return api.json(
+      { error: "Invalid wallet address" },
+      { status: 400, event: "signals.upvote.validation_failed", metadata: { reason: "wallet" } },
+    )
   }
   if (typeof body.signature !== "string" || body.signature.length === 0) {
-    return NextResponse.json({ error: "Signature required" }, { status: 400 })
+    return api.json(
+      { error: "Signature required" },
+      { status: 400, event: "signals.upvote.validation_failed", metadata: { reason: "signature" } },
+    )
+  }
+
+  // If-Match is optional so existing clients keep working; when supplied the
+  // upvote becomes a compare-and-swap against the version the client rendered.
+  const ifMatch = request.headers.get("if-match")
+  let expectedVersion: number | undefined
+  if (ifMatch !== null && ifMatch.trim() !== "*") {
+    const parsed = parseVersionHeader(ifMatch)
+    if (parsed === null) {
+      return api.json(
+        { error: "Invalid If-Match" },
+        { status: 400, event: "signals.upvote.validation_failed", metadata: { reason: "if_match" } },
+      )
+    }
+    expectedVersion = parsed
   }
 
   try {
-    const signal = await upvoteSignal(id, body.wallet)
+    const signal = await upvoteSignal(id, body.wallet, expectedVersion)
     // Notify at milestones: 5, 10, 25 upvotes (fire-and-forget)
     const count = signal.upvotes.length
     if ((count === 5 || count === 10 || count === 25) && signal.author_wallet !== body.wallet) {
@@ -53,14 +93,38 @@ export async function POST(
         signal_id: id,
         signal_title: signal.title,
         upvote_count: count,
-      }).catch(() => { /* silent */ })
+      }).catch((error) => api.log("warn", "signals.upvote.notification_failed", { error }))
     }
     // Achievement: track upvotes for the author (fire-and-forget)
     if (signal.author_wallet !== body.wallet) {
-      void checkAndUnlock(signal.author_wallet, { upvote_delta: 1 }).catch(() => { /* silent */ })
+      void checkAndUnlock(signal.author_wallet, { upvote_delta: 1 }).catch((error) =>
+        api.log("warn", "signals.upvote.achievement_failed", { error }),
+      )
     }
-    return NextResponse.json({ signal })
-  } catch {
-    return NextResponse.json({ error: "Signal not found" }, { status: 404 })
+    return api.json(
+      { signal },
+      {
+        status: 200,
+        event: "signals.upvote.ok",
+        metadata: { signal_id: id, version: signal.version },
+        headers: { ETag: signalETag(signal.version) },
+      },
+    )
+  } catch (error) {
+    if (error instanceof VersionConflictError) {
+      return api.json(
+        { error: "Version conflict", current_version: error.currentVersion },
+        {
+          status: 409,
+          event: "signals.version_conflict",
+          metadata: { signal_id: id, current_version: error.currentVersion },
+          headers: { ETag: signalETag(error.currentVersion) },
+        },
+      )
+    }
+    return api.json(
+      { error: "Signal not found" },
+      { status: 404, event: "signals.upvote.not_found", metadata: { signal_id: id } },
+    )
   }
 }
