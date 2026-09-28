@@ -113,6 +113,34 @@ CREATE TABLE IF NOT EXISTS signal_replies (
 CREATE INDEX IF NOT EXISTS idx_replies_signal_created
   ON signal_replies (signal_id, created_at ASC);
 
+-- Issue #207 (phase-141): the CRDT draft a co-authoring session converges on.
+--
+-- signal_crdt_docs.snapshot_b64 is the folded Yjs document — a Yjs update, not
+-- the rendered text, so the causal history of every merged keystroke survives a
+-- compaction. signal_crdt_updates is the append-only tail the snapshot folds in
+-- on every merge; it is kept only for contributor attribution and is bounded by
+-- COMPACT_AFTER_UPDATES so a long-lived thread cannot grow without limit. Neither
+-- table is the signal: the draft is promoted to a committed, revertible revision
+-- only through the version-guarded write in signal-store.
+CREATE TABLE IF NOT EXISTS signal_crdt_docs (
+  signal_id        TEXT PRIMARY KEY REFERENCES signals(id) ON DELETE CASCADE,
+  snapshot_b64     TEXT NOT NULL,
+  state_vector_b64 TEXT NOT NULL,
+  update_count     INTEGER NOT NULL DEFAULT 0,
+  created_at       INTEGER NOT NULL,
+  updated_at       INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS signal_crdt_updates (
+  id            TEXT PRIMARY KEY,
+  signal_id     TEXT NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+  update_b64    TEXT NOT NULL,
+  author_wallet TEXT NOT NULL,
+  created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_crdt_updates_signal
+  ON signal_crdt_updates (signal_id, created_at ASC);
+
+
 -- Issue #100 (phase-82): word-diffable snapshot of a signal's title/body taken
 -- immediately before each edit is applied, so history is reconstructible
 -- without re-deriving anything from the current row.

@@ -54,6 +54,7 @@ Owns:
 - Signals, replies, edit history and reactions live in SQLite (`lib/sqlite-db.ts`, WAL mode), not the JSON sidecar.
 - x402 endpoints and payment verification support.
 - Concurrency safety for the signal store: version-guarded writes (`WHERE id = ? AND version = ?`) with bounded retry, plus `BEGIN IMMEDIATE` transactions for parent-version checks. Holds across processes, so concurrent Vercel instances no longer interleave. See `docs/TECHNICAL.md` 5.3.
+- Collaborative signal lore drafting (phase-141, issue #207): a Yjs CRDT draft in SQLite (`signal_crdt_docs` / `signal_crdt_updates`) that merges concurrent edits automatically and never writes the `signals` row. The merged draft is promoted to committed lore only through `PUT /api/signals/[id]` with `from_draft: true`, which reuses the same `If-Match` CAS and `signal_versions` snapshot as a manual edit. Sync is HTTP state-vector exchange, not WebSocket, because the app deploys to Vercel serverless. See `docs/TECHNICAL.md` 5.3.
 - Other JSON-backed stores (`follow`, `profile`, `market`, `notification`, `achievement`, `narrative-world`) still do unguarded read-modify-write on their sidecar files. Single-writer is safe; concurrent writers lose updates.
 
 Must not own:
@@ -103,7 +104,14 @@ Owns:
   mutations may echo it back as `If-Match` (or `parent_version` for appends) and
   the server rejects a stale value with `409` rather than silently overwriting a
   concurrent writer. `409` is logged under the `signals.version_conflict` event
-  so conflict rates are observable.
+  and counted in `signal_version_conflicts` so conflict rates are observable.
+- **Optimistic concurrency guards commits, it does not refuse collaboration.**
+  Where many people edit one record at once, `409` on every save is a correct
+  answer to the wrong question. Signals therefore layer a CRDT *draft* over the
+  guarded record: concurrent proposals merge automatically, and the merged
+  result is promoted through the same `If-Match` guard so the authoritative row
+  keeps a single linear history. The guard is never removed; it moves to the one
+  place a decision actually has to be made.
 
 ## 6) Internationalization architecture
 
@@ -184,6 +192,7 @@ is a fixed-size digest of the canonical payload, keeping it under wallet
 | `phase-83` | `NEXT_PUBLIC_FEATURE_PHASE_83` / `FEATURE_PHASE_83` | Emoji-reaction aggregation on signals (curated set, toggle per wallet) with a 20/60s per-wallet rate limit | off | Unset var, restart — reactions route returns 404; existing `signal_reactions` rows remain on disk (no migration to undo) |
 | `phase-139` | `NEXT_PUBLIC_FEATURE_PHASE_139` / `FEATURE_PHASE_139` | Collection-level offer books aggregated from per-token offers, plus bulk-bid across a collection's listings | off | Unset var, restart — offer-book/bulk-bid route returns 404; per-listing offers (`/api/market/[id]/offers`) are unaffected either way |
 | `phase-140` | `NEXT_PUBLIC_FEATURE_PHASE_140` / `FEATURE_PHASE_140` | Royalty enforcement on secondary sales: creator/seller split computed and ledgered at offer-accept time | off | Unset var, restart — listing creation stops accepting `creator_wallet`/`royalty_bps`; offer-accept stops computing a split (100% to seller, pre-140 behavior); existing `royalty_payouts` rows are historical record |
+| `phase-141` | `NEXT_PUBLIC_FEATURE_PHASE_141` / `FEATURE_PHASE_141` | Yjs CRDT collaborative draft for signal lore — concurrent edits merge automatically instead of clobbering, promoted to committed lore via `PUT` (`from_draft: true`) under the normal `If-Match` guard | off | Unset var, restart — the CRDT routes return 404 and the draft panel is hidden; `PUT /api/signals/[id]` still works on its own as an `If-Match`-guarded full replacement; existing `signal_crdt_*` rows are inert scratch state (no migration to undo) |
 
 Flags are read via `lib/feature-flags.ts:isFeatureEnabled`. Client flags use `NEXT_PUBLIC_*`, server also accepts `FEATURE_*`. Zero regression when off.
 

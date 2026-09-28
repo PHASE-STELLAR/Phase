@@ -1,21 +1,26 @@
-﻿// @ts-nocheck
-/**
- * SPIKE: lore versioning with word-level diffing â€” phase-106
-*
+﻿/**
+ * SPIKE: lore versioning with word-level diffing — phase-106
+ *
  * Proof-of-concept only, scoped to this SPIKE's acceptance criteria. Today
- * `saveNarrativeForToken` overwrites the prior narrative with no history â€”
+ * `saveNarrativeForToken` overwrites the prior narrative with no history —
  * edits to a token's lore are destructive. This module adds an additive
  * version-history sidecar and a lightweight word-level diff so authors can
  * see what changed between two narrative versions.
-*
+ *
  * "Semantic diffing" here means diffing at the token/word level (so the
  * output reads as meaningful phrase-level changes) rather than a raw
- * character diff â€” it is not NLP\/embedding-based meaning comparison. A
+ * character diff — it is not NLP/embedding-based meaning comparison. A
  * fuller semantic-embedding diff would need its own design doc and is out
  * of scope for this spike.
  *
+ * This sidecar is unbounded: one JSON file holds every version of every
+ * token. That is acceptable for the spike, and it is *not* the story for
+ * signals — issue #207 moved signal edit history into indexed SQLite
+ * (`signal_versions`) behind a compare-and-swap guard, which is where
+ * concurrent lore editing is actually reconciled.
+ *
  * Feature flag: phase-106 (NEXT_PUBLIC_FEATURE_PHASE_106 / FEATURE_PHASE_106)
- * Rollback: disable flag â†’ version recording stops (no-op); existing version
+ * Rollback: disable flag → version recording stops (no-op); existing version
  *           history files remain on disk untouched; narrator route unaffected.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises"
@@ -79,25 +84,74 @@ export async function getLoreVersions(tokenId: number): Promise<LoreVersionEntry
 export type WordDiffOp = { op: "equal" | "add" | "remove"; words: string[] }
 
 /**
+ * Longest-common-subsequence diff over already-tokenized words. Adjacent
+ * same-type operations are merged so the output reads as phrases rather than
+ * one operation per word.
+ */
+function diffWords(a: string[], b: string[]): WordDiffOp[] {
+  const n = a.length
+  const m = b.length
+  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0))
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i]![j] = a[i] === b[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!)
+    }
+  }
+
+  const ops: WordDiffOp[] = []
+  let i = 0
+  let j = 0
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      ops.push({ op: "equal", words: [a[i]!] })
+      i++
+      j++
+    } else if (lcs[i + 1]![j]! >= lcs[i]![j + 1]!) {
+      ops.push({ op: "remove", words: [a[i]!] })
+      i++
+    } else {
+      ops.push({ op: "add", words: [b[j]!] })
+      j++
+    }
+  }
+  while (i < n) ops.push({ op: "remove", words: [a[i]!] }), i++
+  while (j < m) ops.push({ op: "add", words: [b[j]!] }), j++
+
+  const merged: WordDiffOp[] = []
+  for (const op of ops) {
+    const last = merged[merged.length - 1]
+    if (last && last.op === op.op) last.words.push(...op.words)
+    else merged.push({ op: op.op, words: [...op.words] })
+  }
+  return merged
+}
+
+/**
  * Word-level diff between two narrative strings (LCS-based). PoC-grade
  * "semantic diffing": operates on word tokens rather than characters so the
  * output reads as meaningful phrase-level changes.
  */
 export function diffNarrativeText(from: string, to: string): WordDiffOp[] {
-  const a = from.split(/\s+/).filter(Boolean)
-  const b = to.split(/\s+/).filter(Boolean)
-  return diffWords(a, b)
+  return diffWords(
+    from.split(/\s+/).filter(Boolean),
+    to.split(/\s+/).filter(Boolean),
+  )
 }
 
 /**
- * Returns the most recent narrative arcs for a collection, newest last.
- * If `limit` provided, returns at most that many entries (from the tail).
+ * Diffs two recorded versions of a token's narrative.
+ *
+ * @returns null when either version is missing, so a caller can tell "no
+ *   change" apart from "nothing to compare".
  */
-export async function getNarrativeArc(
-  collectionId: string,
-  limit?: number,
-): Promise<NarrativeArcEntry[]> {
-  const store = await readArcStore()
-  const arcs = store[String(collectionId)] ?? []
-  return limit ? arcs.slice(-limit) : arcs
+export async function diffLoreVersions(
+  tokenId: number,
+  from: number,
+  to: number,
+): Promise<{ from: number; to: number; diff: WordDiffOp[] } | null> {
+  const versions = await getLoreVersions(tokenId)
+  const fromEntry = versions.find((v) => v.version === from)
+  const toEntry = versions.find((v) => v.version === to)
+  if (!fromEntry || !toEntry) return null
+  return { from, to, diff: diffNarrativeText(fromEntry.narrative, toEntry.narrative) }
 }

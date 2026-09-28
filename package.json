@@ -83,6 +83,7 @@
     "tailwindcss-animate": "^1.0.7",
     "vaul": "^1.1.2",
     "x402-stellar": "^0.2.0",
+    "yjs": "^13.6.33",
     "zod": "3.25.76"
   },
   "overrides": {

@@ -35,6 +35,8 @@
  * - phase-83: emoji-reaction aggregation on signals with per-wallet rate limits
  * - phase-139: collection-level offer books aggregated from token offers + bulk bid
  * - phase-140: royalty enforcement on secondary sales via a creator/seller split
+ * - phase-141: CRDT-collaborative lore drafting (Yjs) for signals, with an
+ *   audited compare-and-swap commit path (`PUT /api/signals/[id]`)
  */
 
 export type PhaseFeatureFlag =
@@ -91,7 +93,8 @@ export type PhaseFeatureFlag =
   | "phase-82"
   | "phase-83"
   | "phase-139"
-  | "phase-140";
+  | "phase-140"
+  | "phase-141";
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-66": ["NEXT_PUBLIC_FEATURE_PHASE_66", "FEATURE_PHASE_66"],
@@ -147,6 +150,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-83": ["NEXT_PUBLIC_FEATURE_PHASE_83", "FEATURE_PHASE_83"],
   "phase-139": ["NEXT_PUBLIC_FEATURE_PHASE_139", "FEATURE_PHASE_139"],
   "phase-140": ["NEXT_PUBLIC_FEATURE_PHASE_140", "FEATURE_PHASE_140"],
+  "phase-141": ["NEXT_PUBLIC_FEATURE_PHASE_141", "FEATURE_PHASE_141"],
 };
 
 function isTruthy(v: string | undefined): boolean {
@@ -228,6 +232,7 @@ export function getEnabledFeatureFlags(): PhaseFeatureFlag[] {
     "phase-83",
     "phase-139",
     "phase-140",
+    "phase-141",
   ];
   return all.filter(isFeatureEnabled)
 }
