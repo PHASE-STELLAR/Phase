@@ -16,8 +16,7 @@ const copy = {
     ctaBusy: "[ SENDING… ]",
     noWallet: "[ CONNECT_WALLET_TO_REPLY ]",
     walletBadge: "✓ WALLET",
-    verifiedBadge: "✓ VERIFIED",
-    legacyBadge: "LEGACY",
+    conflict: "[ SIGNAL_CHANGED_REFRESH_AND_RETRY ]",
   },
   es: {
     replies: "RESPUESTAS",
@@ -27,8 +26,7 @@ const copy = {
     ctaBusy: "[ ENVIANDO… ]",
     noWallet: "[ CONECTAR_WALLET_PARA_RESPONDER ]",
     walletBadge: "✓ WALLET",
-    verifiedBadge: "✓ VERIFICADO",
-    legacyBadge: "LEGADO",
+    conflict: "[ SEÑAL_ACTUALIZADA_REFRESCA_Y_REINTENTA ]",
   },
 }
 
@@ -44,18 +42,31 @@ function timeAgo(ts: number): string {
 
 type Props = {
   signalId: string
+  initialSignalVersion: number
   initialReplies: SignalReply[]
 }
 
-export function SignalDetailClient({ signalId, initialReplies }: Props) {
+type PostReplyResponse = {
+  reply?: SignalReply
+  error?: string
+  current_version?: number
+}
+
+export function SignalDetailClient({
+  signalId,
+  initialSignalVersion,
+  initialReplies,
+}: Props) {
   const { address } = useWallet()
   const { lang } = useLang()
   const t = copy[lang] ?? copy.en
 
   const [replies, setReplies] = useState<SignalReply[]>(initialReplies)
+  const [signalVersion, setSignalVersion] = useState(initialSignalVersion)
   const [replyBody, setReplyBody] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [conflict, setConflict] = useState(false)
 
   const baseInput =
     "w-full bg-transparent border border-[var(--color-border-tertiary)] font-mono text-[12px] text-foreground px-3 py-2 focus:outline-none focus:border-[#7F77DD] transition-colors placeholder:text-muted-foreground/40 resize-none"
@@ -63,6 +74,7 @@ export function SignalDetailClient({ signalId, initialReplies }: Props) {
   async function handleReply() {
     if (!address || !replyBody.trim()) return
     setError(null)
+    setConflict(false)
     setBusy(true)
     try {
       const timestamp = Date.now()
@@ -77,11 +89,19 @@ export function SignalDetailClient({ signalId, initialReplies }: Props) {
         body: JSON.stringify({
           body: replyBodyTrimmed,
           wallet: address,
-          signature,
-          timestamp,
+          // TODO: replace provisional signature with Freighter signMessage when available
+          signature: address,
+          parent_version: signalVersion,
         }),
       })
-      const data = (await res.json().catch(() => ({}))) as { reply?: SignalReply; error?: string }
+      const data = (await res.json().catch(() => ({}))) as PostReplyResponse
+      if (res.status === 409) {
+        if (typeof data.current_version === "number") {
+          setSignalVersion(data.current_version)
+        }
+        setConflict(true)
+        return
+      }
       if (!res.ok || !data.reply) {
         setError(data.error ?? "Reply failed")
         return
@@ -162,6 +182,9 @@ export function SignalDetailClient({ signalId, initialReplies }: Props) {
             />
             {error && (
               <p className="font-mono text-[10px] text-destructive">{error}</p>
+            )}
+            {conflict && (
+              <p className="font-mono text-[10px] text-[#7F77DD]">{t.conflict}</p>
             )}
             <button
               type="button"

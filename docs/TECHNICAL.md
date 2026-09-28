@@ -126,6 +126,9 @@ All handlers live in `app/api/**/route.ts`.
 | `POST` | `/api/forge-agent` | Gemini-first forge assistant endpoint with payment gate support. |
 | `GET`, `POST` | `/api/nft-listings` | JSON-backed market listing state. |
 | `GET`, `PUT` | `/api/artist-profile` | JSON-backed artist alias profile. |
+| `GET`, `POST` | `/api/signals` | Signal board listing + creation. |
+| `GET`, `POST` | `/api/signals/[id]` | Signal detail (with `ETag`) + upvote toggle. |
+| `POST` | `/api/signals/[id]/replies` | Append a reply, optionally gated on `parent_version`. |
 | `GET`, `POST`, etc. | `/api/x402/*` | x402 settlement/verify/supported endpoints. |
 
 The legacy local x402 shim is fail-closed. Set `X402_LOCAL_SHIM_ENABLED=true` only for
@@ -174,6 +177,42 @@ settlement verifier and must not accept unsigned base64 payloads.
 | `phase-83` | `GET/POST /api/signals/[id]/reactions` | Toggle a curated emoji reaction per (signal, wallet); `GET` returns per-emoji counts + the viewer's own reacted flags; `POST` rate-limited to 20/60s per wallet (`429` + `Retry-After` over the limit) | `404` disabled |
 | `phase-139` | `GET/POST /api/market/collections/[collection_id]/offer-book` | `GET` aggregates every pending offer across a collection's active listings into price levels (best price first); `POST` fans a single buyer intent into up to 20 per-listing offers, reporting `created`/`skipped` | `404` disabled; per-listing `/api/market/[id]/offers` unaffected |
 | `phase-140` | `POST /api/market/route.ts` (listing create) & `POST /api/market/[id]/offers/[offer_id]` (accept) | Listing create accepts `creator_wallet`/`royalty_bps`; accepting an offer on a secondary sale (`creator_wallet !== seller_wallet`) computes and ledgers a creator/seller split, returned as `royalty` on the accept response | Listing create ignores the fields; accept pays 100% to seller as before |
+
+### 5.3 Signal concurrency contract
+
+`lib/signal-store.ts` guards the JSON sidecar three ways:
+
+1. **Serialized mutation.** Read-modify-write cycles run through a per-file
+   promise queue, so two concurrent mutations cannot both read the same snapshot.
+2. **Atomic replacement.** Writes land in a sibling `*.tmp` file and are moved
+   into place with `rename(2)`. A reader never observes a half-flushed file, and
+   a crash mid-write cannot corrupt the live store.
+3. **Corruption is fatal, not silent.** A JSON parse failure throws instead of
+   degrading to `{}`. Returning `{}` on a parse error meant the next write would
+   overwrite every existing record.
+
+Each `Signal` carries an integer `version`, bumped on every mutation.
+
+| Surface | Contract |
+|---|---|
+| `GET /api/signals/[id]` | Returns `ETag: "<version>"`. |
+| `POST /api/signals/[id]` | Optional `If-Match: "<version>"`. Stale value → `409` with `current_version` and the fresh `ETag`. |
+| `POST /api/signals/[id]/replies` | Optional `parent_version: <int>`. Stale value → `409`. |
+
+`If-Match` and `parent_version` are both optional, so clients that omit them keep
+the previous last-writer-wins behaviour. Conflicts emit the
+`signals.version_conflict` log event.
+
+Records written before this change have no `version`; they are normalized to `1`
+on read, so no migration step is required.
+
+**Known limitation.** The mutation queue is per-process. Two Vercel instances
+mutating the same file can still interleave, because each holds its own queue and
+the deployment shares no writable volume by default. Closing that requires either
+pinning writes to a single instance or moving signals to a store with real
+cross-process transactions (Postgres `UPDATE ... WHERE version = $expected`).
+This is deliberate: it is a bounded, documented limit rather than a CRDT layer
+that would not have fixed the underlying file race.
 
 ---
 
@@ -276,6 +315,10 @@ Rollback: unset the var or set `0` and restart. No ledger migration to revert; o
 - Never commit private credentials.
 - Keep server-only secrets out of client runtime.
 - Use writable server storage abstraction (`server-data-paths`) for platform-safe behavior.
+- Any store mutated by more than one writer needs serialized read-modify-write,
+  atomic file replacement, and a version/compare-and-swap field. See §5.3.
+- Watch for the `signals.version_conflict` log event to detect clients that are
+  writing against stale reads.
 - On contract redeploys, update:
   - env values,
   - architecture/technical docs,
@@ -289,8 +332,14 @@ Rollback: unset the var or set `0` and restart. No ledger migration to revert; o
 npm install
 npm run dev
 npm run build
-npx tsc --noEmit
+npm run typecheck
+npm run lint
+npm test
 ```
+
+`npm test` (vitest) covers the JSON store concurrency contract described in §5.3,
+including the 50-concurrent-writer cases. Each test runs against its own
+`PHASE_SERVER_DATA_DIR` temp directory, so it never touches `.data`.
 
 Contract commands are documented in [`contracts/README.md`](../contracts/README.md).
 

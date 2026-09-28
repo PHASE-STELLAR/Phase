@@ -52,6 +52,7 @@ Owns:
 - Trustline submit relay endpoint (for signed XDR).
 - Persistent JSON data (`faucet claims`, `artist profile`, `listings`) through `lib/server-data-paths.ts`.
 - x402 endpoints and payment verification support.
+- Concurrency safety for JSON-backed stores: serialized read-modify-write plus atomic file replacement (see `lib/signal-store.ts`).
 
 Must not own:
 
@@ -95,6 +96,12 @@ Owns:
 - **Deterministic status codes** (validation, cooldown, authorization, pending).
 - **No implicit success**: all state transitions explicit and auditable.
 - **Compatibility routes** allowed if typed and documented.
+- **Optimistic concurrency on shared mutable records**: a record that more than one
+  client can edit carries an integer `version`. Reads publish it as an `ETag`;
+  mutations may echo it back as `If-Match` (or `parent_version` for appends) and
+  the server rejects a stale value with `409` rather than silently overwriting a
+  concurrent writer. `409` is logged under the `signals.version_conflict` event
+  so conflict rates are observable.
 
 ## 6) Internationalization architecture
 

@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
-import { getSignal, createReply, AttributionInReplySchema, recordReplyAttribution, getSignalContributors, computeCreditLedger, isPhase136Enabled, resolveCidGateway, extractIpfsCidPath } from "@/lib/signal-store"
+import { getSignal, createReply, VersionConflictError } from "@/lib/signal-store"
 import { createNotification } from "@/lib/notification-store"
 import { dispatchPushNotification, extractMentionedWallets, isPhase92Enabled } from "@/lib/push-notifications"
 import { createApiRequestContext } from "@/lib/api-observability"
@@ -32,10 +32,6 @@ type ReplyBody = {
   body?: unknown
   wallet?: unknown
   signature?: unknown
-  timestamp?: unknown
-  attribution?: unknown
-  contributors?: unknown
-  /** Issue #224: signal version this reply was composed against (CAS). */
   parent_version?: unknown
 }
 
@@ -161,6 +157,21 @@ export async function POST(
     }
   }
 
+  // Optional: when present, the reply must be composed against this version of
+  // the parent signal. A stale parent_version is rejected rather than silently
+  // accepted against a view the author never saw.
+  let parentVersion: number | undefined
+  if (body.parent_version !== undefined) {
+    const parsed = body.parent_version
+    if (typeof parsed !== "number" || !Number.isInteger(parsed) || parsed < 1) {
+      return api.json(
+        { error: "Invalid parent_version" },
+        { status: 400, event: "signals.reply.validation_failed", metadata: { reason: "parent_version" } },
+      )
+    }
+    parentVersion = parsed
+  }
+
   try {
     const signal = await getSignal(id)
     if (!signal) {
@@ -211,15 +222,17 @@ export async function POST(
       }
     }
 
-    const reply = await createReply({
-      signal_id: id,
-      author_wallet: walletStr,
-      author_display,
-      body: (body.body as string).trim(),
-      upvotes: [],
-      signature: body.signature as string,
-      signature_verified: signatureVerified,
-    })
+    const reply = await createReply(
+      {
+        signal_id: id,
+        author_wallet: walletStr,
+        author_display,
+        body: (body.body as string).trim(),
+        upvotes: [],
+        signature: body.signature as string,
+      },
+      parentVersion,
+    )
 
     // phase-116: record contributor attribution (flag-gated, best-effort)
     let creditLedger: Awaited<ReturnType<typeof computeCreditLedger>> | null = null
@@ -300,37 +313,16 @@ export async function POST(
       },
     )
   } catch (error) {
+    if (error instanceof VersionConflictError) {
+      return api.json(
+        { error: "Version conflict", current_version: error.currentVersion },
+        {
+          status: 409,
+          event: "signals.version_conflict",
+          metadata: { signal_id: id, route: "replies", current_version: error.currentVersion },
+        },
+      )
+    }
     return api.errorJson(error, 500, "signals.reply.create_failed")
-  }
-}
-
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const api = createApiRequestContext(request, "/api/signals/[id]/replies")
-  const { id } = await params
-  if (!isPhase116Enabled()) {
-    return api.json({ error: "Contributor ledger disabled (phase-116 flag off)" }, { status: 404, event: "signals.ledger.disabled" })
-  }
-  try {
-    const { getSignal } = await import("@/lib/signal-store")
-    const signal = await getSignal(id)
-    if (!signal) return api.json({ error: "Signal not found" }, { status: 404, event: "signals.ledger.signal_missing" })
-    const contributors = await getSignalContributors(id)
-    const creditLedger = await computeCreditLedger(id)
-    const resolvedImage = resolveSignalImage(signal.nft_image)
-    return api.json(
-      {
-        signalId: id,
-        contributors: contributors?.contributors ?? [],
-        totalShareBps: contributors?.totalShareBps ?? 0,
-        creditLedger,
-        ...(resolvedImage ? { signalMedia: resolvedImage } : {}),
-      },
-      { event: "signals.ledger.loaded", metadata: { signal_id: id, phase136: isPhase136Enabled() } },
-    )
-  } catch (error) {
-    return api.errorJson(error, 500, "signals.ledger.load_failed")
   }
 }
