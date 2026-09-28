@@ -7,7 +7,7 @@
  *
  * Run: npx tsx --test lib/__tests__/world-export-stream.test.ts
  */
-import { describe, it, before, after } from "node:test"
+import { describe, it, beforeAll as before, afterAll as after } from "vitest"
 import * as assert from "node:assert/strict"
 import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"

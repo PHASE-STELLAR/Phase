@@ -10,7 +10,7 @@
  * The header guard itself is validated by the route layer; these tests
  * focus on the pure store logic that runs after authentication passes.
  */
-import { describe, it, before, after } from "node:test"
+import { describe, it, beforeAll as before, afterAll as after } from "vitest"
 import * as assert from "node:assert/strict"
 import { mkdir, writeFile, rm } from "node:fs/promises"
 import path from "node:path"

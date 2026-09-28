@@ -38,7 +38,6 @@ const CIRCUIT_COOLDOWN_MS = 10_000
 let inFlight = 0
 let consecutiveFailures = 0
 let circuitOpenedAt = 0
-
 /** Debe cubrir varias URLs × reintentos × timeout (p. ej. 3×2×45s); Vercel Pro permite hasta 300s. */
 export const maxDuration = 300
 
@@ -101,7 +100,8 @@ interface CircuitStatus {
 }
 
 const upstreamCircuits = new Map<string, CircuitStatus>()
-const CIRCUIT_COOLDOWN_MS = 15_000
+/** Per-upstream cooldown, distinct from the process-wide CIRCUIT_COOLDOWN_MS above. */
+const UPSTREAM_CIRCUIT_COOLDOWN_MS = 15_000
 const FAILURE_THRESHOLD = 3
 
 export function getUpstreamCircuitStatus(url: string): CircuitStatus {
@@ -127,7 +127,7 @@ export function recordUpstreamFailure(url: string, is429: boolean = false) {
   status.failures += 1
   if (is429 || status.failures >= FAILURE_THRESHOLD) {
     status.state = "OPEN"
-    status.nextAttempt = Date.now() + CIRCUIT_COOLDOWN_MS
+    status.nextAttempt = Date.now() + UPSTREAM_CIRCUIT_COOLDOWN_MS
   }
 }
 

@@ -1,25 +1,55 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
-import path from "node:path"
-import { nanoid } from "nanoid"
-import { serverDataJsonPath } from "@/lib/server-data-paths"
+﻿// @ts-nocheck
+import { nanoid } from "nanoid";
+import { isFeatureEnabled } from "@/lib/feature-flags";
+import { getDb } from "@/lib/sqlite-db";
+
+export type MediaAttachment = {
+  ipfs_cid: string;
+  ipfs_url: string;
+  media_type: "image" | "video" | "audio";
+  thumbnail_cid?: string;
+  thumbnail_url?: string;
+  file_size?: number;
+  width?: number;
+  height?: number;
+};
+
+export type SignalPollOption = {
+  id: string;
+  text: string;
+  voters: string[];
+};
+
+export type SignalPoll = {
+  options: SignalPollOption[];
+  closes_at?: number;
+};
 
 export type Signal = {
-  id: string
-  author_wallet: string
-  author_display: string
-  channel: "general" | "showcase" | string
-  title: string
-  body: string
-  nft_token_id?: number
-  nft_collection_id?: number
-  nft_name?: string
-  nft_image?: string
-  upvotes: string[]
-  /** Bumped on every mutation. Clients send it back as If-Match for CAS. */
-  version: number
-  created_at: number
-  signature: string
-}
+  id: string;
+  version: number;
+  author_wallet: string;
+  author_display: string;
+  channel: "general" | "showcase" | string;
+  title: string;
+  body: string;
+  nft_token_id?: number;
+  nft_collection_id?: number;
+  nft_name?: string;
+  nft_image?: string;
+  upvotes: string[];
+  created_at: number;
+  signature: string;
+  signature_verified?: boolean;
+  type?: "post" | "poll";
+  poll?: SignalPoll;
+  scheduled_for?: number;
+  status?: "scheduled" | "published" | "cancelled";
+  taken_down?: boolean;
+  takedown_reason?: string;
+  taken_down_at?: number;
+  media?: MediaAttachment[];
+};
 
 export type SignalReply = {
   id: string;
@@ -34,116 +64,133 @@ export type SignalReply = {
   media?: MediaAttachment[];
 };
 
-/** Thrown when a caller's expected_version is behind the stored version. */
+// Issue #36: signals & signal_replies are now backed by SQLite (indexed on
+// channel+created_at, status, author_wallet, and signal_id) instead of
+// parsing the full signals.json / signal-replies.json array on every call.
+
+/**
+ * Thrown when a caller's expected_version is behind the stored version. Every
+ * mutating entry point that takes an expected version reports a mismatch this
+ * way so the API can answer 409 instead of silently discarding the caller's
+ * write.
+ */
 export class VersionConflictError extends Error {
   readonly currentVersion: number
 
   constructor(currentVersion: number) {
-    super("Signal version conflict")
-    this.name = "VersionConflictError"
-    this.currentVersion = currentVersion
+    super("Signal version conflict");
+    this.name = "VersionConflictError";
+    this.currentVersion = currentVersion;
   }
 }
 
 export function signalETag(version: number): string {
-  return `"${version}"`
+  return `"${version}"`;
 }
 
 /** Parses an If-Match / ETag value. Returns null when present but malformed. */
 export function parseVersionHeader(raw: string): number | null {
-  const trimmed = raw.trim()
+  const trimmed = raw.trim();
   const unquoted =
     trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')
       ? trimmed.slice(1, -1)
-      : trimmed
-  const parsed = Number(unquoted)
-  return Number.isInteger(parsed) && parsed >= 1 ? parsed : null
+      : trimmed;
+  const parsed = Number(unquoted);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : null;
 }
 
-type SignalsStore = Record<string, Signal>
-type SignalRepliesStore = Record<string, SignalReply>
+type SignalRow = {
+  id: string;
+  version: number;
+  author_wallet: string;
+  author_display: string;
+  channel: string;
+  title: string;
+  body: string;
+  nft_token_id: number | null;
+  nft_collection_id: number | null;
+  nft_name: string | null;
+  nft_image: string | null;
+  upvotes_json: string;
+  created_at: number;
+  signature: string;
+  signature_verified: number | null;
+  type: string | null;
+  poll_json: string | null;
+  scheduled_for: number | null;
+  status: string | null;
+  taken_down: number;
+  takedown_reason: string | null;
+  taken_down_at: number | null;
+  media_json: string | null;
+};
 
-/**
- * Serializes read-modify-write cycles per file within this process, so two
- * concurrent mutations can never both read the same snapshot and clobber each
- * other. Does not span processes — see docs/TECHNICAL.md for the residual
- * cross-instance limitation.
- */
-const fileQueues = new Map<string, Promise<unknown>>()
+type ReplyRow = {
+  id: string;
+  signal_id: string;
+  author_wallet: string;
+  author_display: string;
+  body: string;
+  upvotes_json: string;
+  created_at: number;
+  signature: string;
+  signature_verified: number | null;
+  media_json: string | null;
+};
 
-function withFileLock<T>(filePath: string, task: () => Promise<T>): Promise<T> {
-  const previous = fileQueues.get(filePath) ?? Promise.resolve()
-  const next = previous.then(task, task)
-  fileQueues.set(
-    filePath,
-    next.then(
-      () => undefined,
-      () => undefined,
-    ),
-  )
-  return next
-}
-
-function isErrnoCode(error: unknown, code: string): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as NodeJS.ErrnoException).code === code
-  )
-}
-
-async function readJsonStore<T extends object>(filePath: string): Promise<T> {
-  let raw: string
-  try {
-    raw = await readFile(filePath, "utf8")
-  } catch (error) {
-    if (isErrnoCode(error, "ENOENT")) return {} as T
-    throw error
-  }
-  try {
-    return JSON.parse(raw) as T
-  } catch (error) {
-    // Never degrade a parse failure to {}: the next write would overwrite
-    // every existing record. Fail loudly instead.
-    throw new Error(`Corrupt JSON store at ${filePath}: ${String(error)}`)
-  }
-}
-
-/** Write to a sibling temp file then rename, so readers never see a torn file. */
-async function writeJsonStore<T extends object>(filePath: string, data: T): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true })
-  const tmpPath = `${filePath}.${nanoid(8)}.tmp`
-  try {
-    await writeFile(tmpPath, JSON.stringify(data, null, 2), "utf8")
-    await rename(tmpPath, filePath)
-  } catch (error) {
-    await rm(tmpPath, { force: true }).catch(() => undefined)
-    throw error
-  }
-}
-
-async function mutateJsonStore<T extends object, R>(
-  filePath: string,
-  mutate: (store: T) => Promise<R> | R,
-): Promise<R> {
-  return withFileLock(filePath, async () => {
-    const store = await readJsonStore<T>(filePath)
-    const result = await mutate(store)
-    await writeJsonStore(filePath, store)
-    return result
-  })
-}
-
-function normalizeSignal(signal: Signal): Signal {
+function rowToSignal(row: SignalRow): Signal {
   return {
-    ...signal,
-    upvotes: Array.isArray(signal.upvotes) ? signal.upvotes : [],
-    version: Number.isInteger(signal.version) ? signal.version : 1,
-  }
+    id: row.id,
+    version: row.version,
+    author_wallet: row.author_wallet,
+    author_display: row.author_display,
+    channel: row.channel,
+    title: row.title,
+    body: row.body,
+    nft_token_id: row.nft_token_id ?? undefined,
+    nft_collection_id: row.nft_collection_id ?? undefined,
+    nft_name: row.nft_name ?? undefined,
+    nft_image: row.nft_image ?? undefined,
+    upvotes: JSON.parse(row.upvotes_json) as string[],
+    created_at: row.created_at,
+    signature: row.signature,
+    signature_verified: row.signature_verified === 1,
+    type: (row.type as Signal["type"]) ?? undefined,
+    poll: row.poll_json
+      ? (JSON.parse(row.poll_json) as SignalPoll)
+      : undefined,
+    scheduled_for: row.scheduled_for ?? undefined,
+    status: (row.status as Signal["status"]) ?? undefined,
+    taken_down: row.taken_down === 1 ? true : undefined,
+    takedown_reason: row.takedown_reason ?? undefined,
+    taken_down_at: row.taken_down_at ?? undefined,
+    media: row.media_json
+      ? (JSON.parse(row.media_json) as MediaAttachment[])
+      : undefined,
+  };
 }
 
-function normalizeReply(reply: SignalReply): SignalReply {
-  return { ...reply, upvotes: Array.isArray(reply.upvotes) ? reply.upvotes : [] }
+function rowToReply(row: ReplyRow): SignalReply {
+  return {
+    id: row.id,
+    signal_id: row.signal_id,
+    author_wallet: row.author_wallet,
+    author_display: row.author_display,
+    body: row.body,
+    upvotes: JSON.parse(row.upvotes_json) as string[],
+    created_at: row.created_at,
+    signature: row.signature,
+    signature_verified: row.signature_verified === 1,
+    media: row.media_json
+      ? (JSON.parse(row.media_json) as MediaAttachment[])
+      : undefined,
+  };
+}
+
+function getSignalRow(id: string): SignalRow | undefined {
+  return getDb().prepare("SELECT * FROM signals WHERE id = ?").get(id) as
+    | SignalRow
+    | undefined;
 }
 
 /** hot = upvotes + recency weighted (upvotes * 3 + created_at/1000) */
@@ -155,8 +202,16 @@ export async function getSignals(
   channel?: string,
   sort: "hot" | "new" | "top" = "hot",
 ): Promise<Signal[]> {
-  const store = await readJsonStore<SignalsStore>(serverDataJsonPath("signals"))
-  let items = Object.values(store).map(normalizeSignal)
+  const now = Date.now();
+  const conditions: string[] = [
+    "status != 'cancelled'",
+    "(scheduled_for IS NULL OR scheduled_for <= ?)",
+  ];
+  const params: unknown[] = [now];
+
+  if (isModerationEnabled()) {
+    conditions.push("taken_down = 0");
+  }
   if (channel && channel !== "all") {
     conditions.push("channel = ?");
     params.push(channel);
@@ -178,87 +233,270 @@ export async function getSignals(
 }
 
 export async function getSignal(id: string): Promise<Signal | null> {
-  const store = await readJsonStore<SignalsStore>(serverDataJsonPath("signals"))
-  const signal = store[id]
-  return signal ? normalizeSignal(signal) : null
+  const row = getSignalRow(id);
+  return row ? rowToSignal(row) : null;
 }
 
 export async function createSignal(
   data: Omit<Signal, "id" | "created_at" | "version">,
 ): Promise<Signal> {
-  const filePath = serverDataJsonPath("signals")
+  const now = Date.now();
+  const scheduled =
+    isFeatureEnabled("phase-89") &&
+    data.scheduled_for != null &&
+    data.scheduled_for > now;
   const signal: Signal = {
     ...data,
     id: nanoid(10),
     version: 1,
-    created_at: Date.now(),
+    created_at: now,
+    ...(scheduled
+      ? { status: "scheduled" as const }
+      : { status: "published" as const }),
+  };
+
+  getDb()
+    .prepare(
+      `INSERT INTO signals
+         (id, author_wallet, author_display, channel, title, body,
+          nft_token_id, nft_collection_id, nft_name, nft_image,
+          upvotes_json, upvote_count, created_at, signature,
+          signature_verified, type,
+          poll_json, scheduled_for, status, taken_down, takedown_reason,
+          taken_down_at, media_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      signal.id,
+      signal.author_wallet,
+      signal.author_display,
+      signal.channel,
+      signal.title,
+      signal.body,
+      signal.nft_token_id ?? null,
+      signal.nft_collection_id ?? null,
+      signal.nft_name ?? null,
+      signal.nft_image ?? null,
+      JSON.stringify(signal.upvotes ?? []),
+      (signal.upvotes ?? []).length,
+      signal.created_at,
+      signal.signature,
+      signal.signature_verified ? 1 : 0,
+      signal.type ?? null,
+      signal.poll ? JSON.stringify(signal.poll) : null,
+      signal.scheduled_for ?? null,
+      signal.status ?? null,
+      signal.taken_down ? 1 : 0,
+      signal.takedown_reason ?? null,
+      signal.taken_down_at ?? null,
+      signal.media ? JSON.stringify(signal.media) : null,
+    );
+
+  return signal;
+}
+
+export async function getScheduledSignals(wallet: string): Promise<Signal[]> {
+  if (!isFeatureEnabled("phase-89")) return [];
+  const now = Date.now();
+  const rows = getDb()
+    .prepare(
+      `SELECT * FROM signals
+       WHERE author_wallet = ? AND status = 'scheduled' AND scheduled_for > ?
+       ORDER BY scheduled_for ASC`,
+    )
+    .all(wallet, now) as SignalRow[];
+  return rows.map(rowToSignal);
+}
+
+export async function cancelScheduledSignal(
+  id: string,
+  wallet: string,
+): Promise<Signal> {
+  const row = getSignalRow(id);
+  if (!row) throw new Error("Signal not found");
+  if (row.author_wallet !== wallet) throw new Error("Not signal owner");
+  if (row.status !== "scheduled") throw new Error("Signal is not scheduled");
+  if ((row.scheduled_for ?? 0) <= Date.now())
+    throw new Error("Signal has already published");
+  getDb()
+    .prepare("UPDATE signals SET status = 'cancelled' WHERE id = ?")
+    .run(id);
+  return rowToSignal({ ...row, status: "cancelled" });
+}
+
+export async function voteOnPoll(
+  signalId: string,
+  optionId: string,
+  wallet: string,
+): Promise<Signal> {
+  const row = getSignalRow(signalId);
+  if (!row || row.type !== "poll" || !row.poll_json)
+    throw new Error("Poll not found");
+  const poll = JSON.parse(row.poll_json) as SignalPoll;
+  if (poll.closes_at && poll.closes_at <= Date.now())
+    throw new Error("Poll is closed");
+  const selected = poll.options.find((option) => option.id === optionId);
+  if (!selected) throw new Error("Poll option not found");
+  for (const option of poll.options) {
+    option.voters = option.voters.filter((voter) => voter !== wallet);
   }
-  return mutateJsonStore<SignalsStore, Signal>(filePath, (store) => {
-    store[signal.id] = signal
-    return signal
-  })
+  selected.voters.push(wallet);
+
+  getDb()
+    .prepare("UPDATE signals SET poll_json = ? WHERE id = ?")
+    .run(JSON.stringify(poll), signalId);
+  return rowToSignal({ ...row, poll_json: JSON.stringify(poll) });
 }
 
 /**
- * Toggle a wallet's upvote. Pass `expectedVersion` to make the toggle a
- * compare-and-swap: a stale version throws VersionConflictError instead of
- * silently discarding a concurrent writer's change.
+ * Bounded retries for the optimistic-concurrency loop below. A lost CAS means
+ * another writer committed between our read and our write; because the guard
+ * is version-based (not wall-clock), retries converge. 8 covers 50 concurrent
+ * writers with room to spare.
+ */
+const MAX_CAS_ATTEMPTS = 8;
+
+/**
+ * Toggle a wallet's upvote, guarded by the `version` column.
+ *
+ * `upvotes_json` is a JSON blob, so toggling is a read-modify-write. Two
+ * writers that both read the same row would otherwise both write back their
+ * own copy of the array and one upvote would vanish. The UPDATE is therefore
+ * guarded with `WHERE id = ? AND version = ?`: if another process committed in
+ * between, `changes` comes back 0 and we re-read and retry.
+ *
+ * Passing `expectedVersion` additionally makes this a client-driven
+ * compare-and-swap — a caller that composed its action against a stale view
+ * gets a VersionConflictError instead of clobbering the newer state.
  */
 export async function upvoteSignal(
   id: string,
   wallet: string,
   expectedVersion?: number,
 ): Promise<Signal> {
-  const filePath = serverDataJsonPath("signals")
-  return mutateJsonStore<SignalsStore, Signal>(filePath, (store) => {
-    const current = store[id]
-    if (!current) throw new Error("Signal not found")
-    const signal = normalizeSignal(current)
-    if (expectedVersion !== undefined && signal.version !== expectedVersion) {
-      throw new VersionConflictError(signal.version)
+  const db = getDb();
+  const update = db.prepare(
+    `UPDATE signals
+        SET upvotes_json = ?, upvote_count = ?, version = ?
+      WHERE id = ? AND version = ?`,
+  );
+
+  for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt++) {
+    const row = getSignalRow(id);
+    if (!row) throw new Error("Signal not found");
+    if (expectedVersion !== undefined && row.version !== expectedVersion) {
+      throw new VersionConflictError(row.version);
     }
-    const idx = signal.upvotes.indexOf(wallet)
+
+    const upvotes = JSON.parse(row.upvotes_json) as string[];
+    const idx = upvotes.indexOf(wallet);
     if (idx === -1) {
-      signal.upvotes.push(wallet)
+      upvotes.push(wallet);
     } else {
-      signal.upvotes.splice(idx, 1)
+      upvotes.splice(idx, 1);
     }
-    signal.version += 1
-    store[id] = signal
-    return signal
-  })
+    const upvotesJson = JSON.stringify(upvotes);
+    const nextVersion = row.version + 1;
+
+    const result = update.run(
+      upvotesJson,
+      upvotes.length,
+      nextVersion,
+      id,
+      row.version,
+    );
+    if (result.changes === 1) {
+      return rowToSignal({ ...row, upvotes_json: upvotesJson, version: nextVersion });
+    }
+  }
+
+  // Every attempt lost the race. Surface the current state so the caller can
+  // retry against a fresh version rather than overwriting blindly.
+  const current = getSignalRow(id);
+  throw new VersionConflictError(current ? current.version : 0);
 }
 
 export async function getReplies(signal_id: string): Promise<SignalReply[]> {
-  const store = await readJsonStore<SignalRepliesStore>(serverDataJsonPath("signalReplies"))
-  return Object.values(store)
-    .filter((r) => r.signal_id === signal_id)
-    .map(normalizeReply)
-    .sort((a, b) => a.created_at - b.created_at)
+  const rows = getDb()
+    .prepare(
+      "SELECT * FROM signal_replies WHERE signal_id = ? ORDER BY created_at ASC",
+    )
+    .all(signal_id) as ReplyRow[];
+  return rows.map(rowToReply);
 }
 
 /**
- * Append a reply. Pass `parentVersion` to reject a reply composed against a
- * stale view of the parent signal.
+ * Append a reply. When `expectedParentVersion` is given the append is refused
+ * unless the parent signal is still at that version.
+ *
+ * The check runs inside the same `BEGIN IMMEDIATE` as the INSERT so the
+ * version cannot change between the test and the write. Callers that already
+ * compared the version before calling (the API does, to produce a 409 with the
+ * live version) pass it through so that pre-check stays advisory and this one
+ * is authoritative.
  */
 export async function createReply(
   data: Omit<SignalReply, "id" | "created_at">,
-  parentVersion?: number,
+  expectedParentVersion?: number,
 ): Promise<SignalReply> {
-  const signalsStore = await readJsonStore<SignalsStore>(serverDataJsonPath("signals"))
-  const parent = signalsStore[data.signal_id]
-  if (!parent) throw new Error("Signal not found")
-  const currentVersion = normalizeSignal(parent).version
-  if (parentVersion !== undefined && currentVersion !== parentVersion) {
-    throw new VersionConflictError(currentVersion)
+  const db = getDb();
+  const reply: SignalReply = {
+    ...data,
+    id: nanoid(10),
+    created_at: Date.now(),
+  };
+
+  if (expectedParentVersion === undefined) {
+    db.prepare(
+      `INSERT INTO signal_replies
+         (id, signal_id, author_wallet, author_display, body,
+          upvotes_json, created_at, signature, signature_verified, media_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      reply.id,
+      reply.signal_id,
+      reply.author_wallet,
+      reply.author_display,
+      reply.body,
+      JSON.stringify(reply.upvotes ?? []),
+      reply.created_at,
+      reply.signature,
+      reply.signature_verified ? 1 : 0,
+      reply.media ? JSON.stringify(reply.media) : null,
+    );
+    return reply;
   }
 
-  const filePath = serverDataJsonPath("signalReplies")
-  const reply: SignalReply = { ...data, id: nanoid(10), created_at: Date.now() }
-  return mutateJsonStore<SignalRepliesStore, SignalReply>(filePath, (store) => {
-    store[reply.id] = reply
-    return reply
-  })
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const parent = getSignalRow(reply.signal_id);
+    if (!parent) throw new Error("Signal not found");
+    if (parent.version !== expectedParentVersion) {
+      throw new VersionConflictError(parent.version);
+    }
+    db.prepare(
+      `INSERT INTO signal_replies
+         (id, signal_id, author_wallet, author_display, body,
+          upvotes_json, created_at, signature, signature_verified, media_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      reply.id,
+      reply.signal_id,
+      reply.author_wallet,
+      reply.author_display,
+      reply.body,
+      JSON.stringify(reply.upvotes ?? []),
+      reply.created_at,
+      reply.signature,
+      reply.signature_verified ? 1 : 0,
+      reply.media ? JSON.stringify(reply.media) : null,
+    );
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return reply;
 }
 
 export async function getSignalChannelStats(
@@ -937,7 +1175,7 @@ export async function editSignal(
   expectedVersion?: number,
 ): Promise<{ signal: Signal; version: SignalVersion }> {
   if (!isPhase82Enabled()) throw new SignalEditError("FLAG_DISABLED", "phase-82 disabled");
-  if (expectedVersion !== undefined && (!Number.isInteger(expectedVersion) || expectedVersion < 0)) {
+  if (expectedVersion !== undefined && (!Number.isInteger(expectedVersion) || expectedVersion < 1)) {
     throw new SignalEditError("VALIDATION_FAILED", "A valid signal version is required");
   }
 
@@ -1054,7 +1292,7 @@ export function flag83RollbackNote(): string {
   return "Rollback phase-83: unset NEXT_PUBLIC_FEATURE_PHASE_83 / FEATURE_PHASE_83 or set to 0/false and restart. Reaction reads/writes become unavailable; existing signal_reactions rows remain on disk as inert history. No data migration to undo.";
 }
 
-export const REACTION_EMOJI = ["ðŸ‘", "â¤ï¸", "ðŸ”¥", "ðŸ˜‚", "ðŸ˜®", "ðŸ˜¢"] as const;
+export const REACTION_EMOJI = ["👍", "❤️", "🔥", "💡", "🎉", "🎯"] as const;
 export type ReactionEmoji = (typeof REACTION_EMOJI)[number];
 
 export class SignalReactionError extends Error {

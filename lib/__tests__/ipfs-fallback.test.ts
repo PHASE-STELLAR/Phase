@@ -1,4 +1,4 @@
-import { describe, it } from "node:test"
+import { describe, it } from "vitest"
 import * as assert from "node:assert/strict"
 import { fetchWithIpfsFallback, resolveIpfsFallbackConfig } from "@/lib/phase-nft-metadata-build"
 import { recordGatewayLatency, resetGatewayHealth } from "@/lib/gateway-health"

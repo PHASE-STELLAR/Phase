@@ -16,6 +16,7 @@ const copy = {
     ctaBusy: "[ SENDING… ]",
     noWallet: "[ CONNECT_WALLET_TO_REPLY ]",
     walletBadge: "✓ WALLET",
+    verifiedBadge: "✓ VERIFIED",
     conflict: "[ SIGNAL_CHANGED_REFRESH_AND_RETRY ]",
   },
   es: {
@@ -26,6 +27,7 @@ const copy = {
     ctaBusy: "[ ENVIANDO… ]",
     noWallet: "[ CONECTAR_WALLET_PARA_RESPONDER ]",
     walletBadge: "✓ WALLET",
+    verifiedBadge: "✓ VERIFICADO",
     conflict: "[ SEÑAL_ACTUALIZADA_REFRESCA_Y_REINTENTA ]",
   },
 }

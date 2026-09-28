@@ -51,8 +51,10 @@ Owns:
 - Reward minting with admin credentials.
 - Trustline submit relay endpoint (for signed XDR).
 - Persistent JSON data (`faucet claims`, `artist profile`, `listings`) through `lib/server-data-paths.ts`.
+- Signals, replies, edit history and reactions live in SQLite (`lib/sqlite-db.ts`, WAL mode), not the JSON sidecar.
 - x402 endpoints and payment verification support.
-- Concurrency safety for JSON-backed stores: serialized read-modify-write plus atomic file replacement (see `lib/signal-store.ts`).
+- Concurrency safety for the signal store: version-guarded writes (`WHERE id = ? AND version = ?`) with bounded retry, plus `BEGIN IMMEDIATE` transactions for parent-version checks. Holds across processes, so concurrent Vercel instances no longer interleave. See `docs/TECHNICAL.md` 5.3.
+- Other JSON-backed stores (`follow`, `profile`, `market`, `notification`, `achievement`, `narrative-world`) still do unguarded read-modify-write on their sidecar files. Single-writer is safe; concurrent writers lose updates.
 
 Must not own:
 
