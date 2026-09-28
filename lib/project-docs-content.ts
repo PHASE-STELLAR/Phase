@@ -618,6 +618,14 @@ const projectDocs: Record<LandingLang, ProjectDocsPage> = {
   },
 }
 
+export function sanitizeDocText(text: string): string {
+  if (typeof text !== "string") return ""
+  return text
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+    .replace(/javascript:/gi, "")
+}
+
 export function pickProjectDocs(lang: LandingLang): ProjectDocsPage {
   return projectDocs[lang]
 }
+

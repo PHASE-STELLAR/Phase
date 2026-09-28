@@ -772,6 +772,10 @@ export default function ForgePage() {
 
       let data: {
         success?: boolean
+        async?: boolean
+        jobId?: string
+        txHash?: string
+        status?: string
         imageUrl?: string
         lore?: string
         description?: string
@@ -782,6 +786,75 @@ export default function ForgePage() {
         console.error("[forge-agent] second POST success body is not JSON", e, paidRaw)
         throw new Error(ff.errors.agentRequest)
       }
+
+      // ── Async job mode: poll /api/jobs/[txHash] until completed ───────────────
+      if (data.async && txHash) {
+        const pollTxHash = data.txHash ?? txHash
+        console.log("[forge-agent] async mode — polling job for txHash:", pollTxHash)
+
+        const POLL_INTERVAL_MS = 3500
+        const POLL_TIMEOUT_MS = 4 * 60 * 1000 // 4 minutes
+        const deadline = Date.now() + POLL_TIMEOUT_MS
+
+        while (Date.now() < deadline) {
+          await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS))
+
+          let pollRes: Response
+          try {
+            pollRes = await fetch(`/api/jobs/${encodeURIComponent(pollTxHash)}`, { cache: "no-store" })
+          } catch {
+            continue
+          }
+
+          if (!pollRes.ok && pollRes.status !== 404) {
+            console.warn("[forge-agent] poll returned non-ok status", pollRes.status)
+            continue
+          }
+
+          let pollData: {
+            found?: boolean
+            job?: {
+              status?: string
+              imageUrl?: string
+              error?: string
+              result?: {
+                imageUrl?: string
+                lore?: string
+              }
+            }
+          }
+          try {
+            pollData = (await pollRes.json()) as typeof pollData
+          } catch {
+            continue
+          }
+
+          if (!pollData.found || !pollData.job) continue
+
+          const { status: jobStatus, result, error: jobError } = pollData.job
+
+          if (jobStatus === "completed" && result?.imageUrl) {
+            const imgUrl = result.imageUrl
+            const loreText = result.lore ?? ""
+            setAgentImageUrl(imgUrl)
+            setLore(loreText)
+            setAgentState("COMPLETE")
+            return { imageUrl: imgUrl, lore: loreText }
+          }
+
+          if (jobStatus === "failed") {
+            throw new Error(jobError ?? "ORACLE_OFFLINE_ENERGY_CONSUMED")
+          }
+
+          // Still pending / processing / webhook_received — keep polling
+          console.log("[forge-agent] job still in progress:", jobStatus)
+        }
+
+        // Polling timeout
+        throw new Error("ORACLE_OFFLINE_ENERGY_CONSUMED")
+      }
+
+      // ── Synchronous mode: result available immediately ────────────────────────
       if (!data.imageUrl) {
         console.error("[forge-agent] success payload missing imageUrl", data)
         throw new Error(ff.errors.agentRequest)

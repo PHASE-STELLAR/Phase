@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog"
 import { useWallet } from "@/components/wallet-provider"
 import { useLang } from "@/components/lang-context"
+import { signSignalPayload } from "@/lib/viewer-signature"
 import type { Signal } from "@/lib/signal-store"
 
 type ChannelOption = { id: string; label: string; count: number }
@@ -30,6 +31,10 @@ const copy = {
     bodyLabel: "BODY",
     bodyPlaceholder: "What's the signal?",
     attachNft: "ATTACH NFT",
+    poll: "COMMUNITY POLL",
+    pollOption: "Option",
+    addOption: "+ ADD OPTION",
+    schedule: "SCHEDULE BROADCAST",
     nftSelect: "Select NFT",
     nftLoading: "Loading NFTs…",
     nftNone: "No NFTs found",
@@ -47,6 +52,10 @@ const copy = {
     bodyLabel: "CUERPO",
     bodyPlaceholder: "¿Cuál es la señal?",
     attachNft: "ADJUNTAR NFT",
+    poll: "ENCUESTA COMUNITARIA",
+    pollOption: "Opción",
+    addOption: "+ AÑADIR OPCIÓN",
+    schedule: "PROGRAMAR TRANSMISIÓN",
     nftSelect: "Seleccionar NFT",
     nftLoading: "Cargando NFTs…",
     nftNone: "Sin NFTs",
@@ -76,6 +85,9 @@ export function SignalCompose({ open, onOpenChange, channels, onCreated }: Props
   const [nfts, setNfts] = useState<NftItem[]>([])
   const [nftsLoading, setNftsLoading] = useState(false)
   const [selectedNft, setSelectedNft] = useState<NftItem | null>(null)
+  const [signalType, setSignalType] = useState<"post" | "poll">("post")
+  const [pollOptions, setPollOptions] = useState(["", ""])
+  const [scheduledFor, setScheduledFor] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -86,6 +98,9 @@ export function SignalCompose({ open, onOpenChange, channels, onCreated }: Props
       setAttachNft(false)
       setSelectedNft(null)
       setError(null)
+      setSignalType("post")
+      setPollOptions(["", ""])
+      setScheduledFor("")
     }
   }, [open])
 
@@ -113,15 +128,22 @@ export function SignalCompose({ open, onOpenChange, channels, onCreated }: Props
     setError(null)
     setBusy(true)
     try {
-      // TODO: replace provisional signature with Freighter signMessage when available
-      const signature = address
+      const timestamp = Date.now()
+      const signature = await signSignalPayload(
+        { title: titleVal.trim(), body: bodyVal.trim(), timestamp },
+        address,
+      )
       const body: Record<string, unknown> = {
         title: titleVal,
         body: bodyVal,
         channel,
         wallet: address,
         signature,
+        timestamp,
+        type: signalType,
       }
+      if (signalType === "poll") body.poll_options = pollOptions
+      if (scheduledFor) body.scheduled_for = new Date(scheduledFor).toISOString()
       if (attachNft && selectedNft) {
         body.nft_token_id = selectedNft.tokenId
         body.nft_collection_id = selectedNft.collectionId
@@ -151,6 +173,12 @@ export function SignalCompose({ open, onOpenChange, channels, onCreated }: Props
     "w-full bg-transparent border border-[var(--color-border-tertiary)] font-mono text-[12px] text-foreground px-3 py-2 focus:outline-none focus:border-[#7F77DD] transition-colors placeholder:text-muted-foreground/40"
 
   const worldChannels = channels.filter((c) => c.id !== "all" && c.id !== "general" && c.id !== "showcase")
+  const pollsEnabled = ["1", "true", "yes", "on"].includes(
+    (process.env.NEXT_PUBLIC_FEATURE_PHASE_90 ?? "").trim().toLowerCase(),
+  )
+  const schedulingEnabled = ["1", "true", "yes", "on"].includes(
+    (process.env.NEXT_PUBLIC_FEATURE_PHASE_89 ?? "").trim().toLowerCase(),
+  )
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -230,6 +258,67 @@ export function SignalCompose({ open, onOpenChange, channels, onCreated }: Props
               />
             </div>
 
+            {pollsEnabled && (
+              <div className="flex flex-col gap-2 border-y border-[var(--color-border-tertiary)] py-3">
+                <label className="flex cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={signalType === "poll"}
+                    onChange={(event) => setSignalType(event.target.checked ? "poll" : "post")}
+                    className="accent-[#7F77DD]"
+                  />
+                  <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground">{t.poll}</span>
+                </label>
+                {signalType === "poll" && pollOptions.map((option, index) => (
+                  <div key={index} className="flex items-center gap-2">
+                    <input
+                      value={option}
+                      maxLength={80}
+                      aria-label={`${t.pollOption} ${index + 1}`}
+                      placeholder={`${t.pollOption} ${index + 1}`}
+                      onChange={(event) => setPollOptions((current) => current.map((value, i) => i === index ? event.target.value : value))}
+                      className={baseInput}
+                    />
+                    {pollOptions.length > 2 && (
+                      <button
+                        type="button"
+                        aria-label={`Remove ${t.pollOption.toLowerCase()} ${index + 1}`}
+                        onClick={() => setPollOptions((current) => current.filter((_, i) => i !== index))}
+                        className="px-2 py-2 text-muted-foreground transition-colors hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#7F77DD]"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {signalType === "poll" && pollOptions.length < 6 && (
+                  <button
+                    type="button"
+                    onClick={() => setPollOptions((current) => [...current, ""])}
+                    className="self-start font-mono text-[9px] text-[#7F77DD] hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#7F77DD]"
+                  >
+                    {t.addOption}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {schedulingEnabled && (
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="signal-scheduled-for" className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
+                  {t.schedule}
+                </label>
+                <input
+                  id="signal-scheduled-for"
+                  type="datetime-local"
+                  value={scheduledFor}
+                  min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)}
+                  onChange={(event) => setScheduledFor(event.target.value)}
+                  className={baseInput}
+                />
+              </div>
+            )}
+
             {/* Attach NFT */}
             <label className="flex cursor-pointer items-center gap-2">
               <input
@@ -293,7 +382,7 @@ export function SignalCompose({ open, onOpenChange, channels, onCreated }: Props
 
             <button
               type="button"
-              disabled={busy || titleVal.trim().length === 0 || bodyVal.trim().length === 0}
+              disabled={busy || titleVal.trim().length === 0 || bodyVal.trim().length === 0 || (signalType === "poll" && pollOptions.some((option) => option.trim().length === 0))}
               onClick={handleBroadcast}
               className="mt-1 w-full border border-[#534AB7] bg-[#534AB7]/10 py-2.5 font-mono text-[11px] uppercase tracking-[0.15em] text-[#7F77DD] transition-colors hover:bg-[#534AB7]/20 disabled:cursor-not-allowed disabled:opacity-40"
             >

@@ -41,12 +41,43 @@ function validG(addr: string) {
 }
 
 /** Listados públicos de venta (testnet / demo). El pago PHASELQ es P2P; la transferencia NFT es on-chain vía `transfer_phase_nft`. */
-export async function GET() {
-  const listings = (await readListings()).filter((l) => l.active)
-  return NextResponse.json({ listings })
+export async function GET(req: NextRequest) {
+  const limit = Math.min(100, Math.max(1, Number(req.nextUrl.searchParams.get("limit") ?? 50) || 50))
+  const cursor = Math.max(0, Number(req.nextUrl.searchParams.get("cursor") ?? 0) || 0)
+  const active = (await readListings()).filter((l) => l.active)
+  const listings = active.slice(cursor, cursor + limit)
+  return NextResponse.json({ listings, nextCursor: cursor + listings.length < active.length ? cursor + listings.length : null })
 }
 
 export async function POST(req: NextRequest) {
+  const contentType = req.headers.get("content-type")?.toLowerCase() ?? ""
+  if (contentType.includes("application/x-ndjson")) {
+    const raw = await req.text()
+    if (raw.length > 20 * 1024 * 1024) return NextResponse.json({ ok: false, error: "NDJSON body too large" }, { status: 413 })
+    const rows = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    if (rows.length === 0 || rows.length > 100_000) return NextResponse.json({ ok: false, error: "NDJSON must contain 1-100000 listings" }, { status: 400 })
+    let parsed: Array<Partial<{ seller: string; collectionId: number; tokenId: number; priceStroops: string }>>
+    try {
+      parsed = rows.map((line) => JSON.parse(line))
+    } catch {
+      return NextResponse.json({ ok: false, error: "Invalid NDJSON" }, { status: 400 })
+    }
+    const all = await readListings()
+    const created: Listing[] = []
+    for (const item of parsed) {
+      const seller = typeof item.seller === "string" ? item.seller.trim() : ""
+      const collectionId = Number(item.collectionId)
+      const tokenId = Number(item.tokenId)
+      const priceStroops = String(item.priceStroops ?? "").trim() || "0"
+      if (!validG(seller) || !Number.isInteger(collectionId) || collectionId < 0 || !Number.isInteger(tokenId) || tokenId < 1 || !/^\d+$/.test(priceStroops)) {
+        return NextResponse.json({ ok: false, error: "Invalid listing in NDJSON batch" }, { status: 400 })
+      }
+      for (let i = all.length - 1; i >= 0; i--) if (all[i]!.active && all[i]!.seller === seller && all[i]!.tokenId === tokenId && all[i]!.collectionId === collectionId) all[i]!.active = false
+      created.push({ id: randomUUID(), seller, collectionId, tokenId, priceStroops, createdAt: new Date().toISOString(), active: true })
+    }
+    await writeListings([...all, ...created])
+    return NextResponse.json({ ok: true, accepted: created.length }, { status: 202 })
+  }
   const body = (await req.json().catch(() => null)) as Partial<{
     seller: string
     collectionId: number

@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation"
 import Link from "next/link"
 import { WalletAvatar } from "@/components/wallet-avatar"
-import { getSignal, getReplies } from "@/lib/signal-store"
+import { getSignal, getReplies, getSignalContributors, computeCreditLedger, isPhase116Enabled, isPhase136Enabled, resolveCidGateway, extractIpfsCidPath } from "@/lib/signal-store"
 import { SignalDetailClient } from "./signal-detail-client"
 
 export const dynamic = "force-dynamic"
@@ -38,6 +38,41 @@ export default async function SignalDetailPage({ params }: Props) {
   const replies = await getReplies(id)
   const shortWallet = `${signal.author_wallet.slice(0, 4)}…${signal.author_wallet.slice(-4)}`
 
+  // phase-136: resolve the signal's NFT image CID through the cached gateway picker
+  let nftImageSrc = signal.nft_image
+  const nftCidPath = extractIpfsCidPath(signal.nft_image)
+  if (isPhase136Enabled() && nftCidPath) {
+    try {
+      nftImageSrc = resolveCidGateway(nftCidPath).url
+    } catch {
+      // fall back to the stored URL (zero regression)
+    }
+  }
+
+  // phase-116: load contributor ledger when flag enabled (preserves signal detail wiring)
+  const phase116 = isPhase116Enabled()
+  let contributors: Awaited<ReturnType<typeof getSignalContributors>> = null
+  let creditLedger: Awaited<ReturnType<typeof computeCreditLedger>> = []
+  if (phase116) {
+    try {
+      contributors = await getSignalContributors(id)
+      creditLedger = await computeCreditLedger(id)
+    } catch {
+      // best-effort
+    }
+  }
+
+  // phase-156 (Module #56): flag whether this signal's author is on the governed
+  // deny-list, so the detail view can show it. Best-effort; false when flag off.
+  let authorRestricted = false
+  if (isFaucetDenyListEnabled()) {
+    try {
+      authorRestricted = await isWalletDenied(signal.author_wallet)
+    } catch {
+      // best-effort
+    }
+  }
+
   return (
     <div className="min-h-screen" style={{ fontFamily: "var(--font-mono)" }}>
       <div className="mx-auto max-w-2xl px-4 py-16">
@@ -70,9 +105,13 @@ export default async function SignalDetailPage({ params }: Props) {
             </span>
             <span
               className="font-mono text-[9px] px-1.5 py-0.5"
-              style={{ background: "#EEEDFE", color: "#534AB7" }}
+              style={
+                signal.signature_verified
+                  ? { background: "#E1F5EE", color: "#0F6E56" }
+                  : { background: "#EEEDFE", color: "#534AB7" }
+              }
             >
-              ✓ WALLET
+              {signal.signature_verified ? "✓ VERIFIED" : "✓ WALLET"}
             </span>
             <span className="font-mono text-[9px] text-muted-foreground/40 border border-[var(--color-border-tertiary)] px-1.5 py-0.5 uppercase tracking-widest">
               {signal.channel.toUpperCase()}
@@ -86,11 +125,17 @@ export default async function SignalDetailPage({ params }: Props) {
             {signal.title}
           </h1>
 
+          {authorRestricted && (
+            <p className="font-mono text-[9px] uppercase tracking-widest text-amber-600 border border-amber-600/40 px-1.5 py-0.5 self-start">
+              ⚠ AUTHOR ON DENY-LIST
+            </p>
+          )}
+
           {signal.nft_token_id !== undefined && (
             <div className="flex items-center gap-3 border border-[var(--color-border-tertiary)] p-2">
-              {signal.nft_image && (
+              {nftImageSrc && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={signal.nft_image} alt={signal.nft_name} className="h-10 w-10 object-cover" />
+                <img src={nftImageSrc} alt={signal.nft_name} className="h-10 w-10 object-cover" />
               )}
               <div className="flex flex-col">
                 <span className="font-mono text-[10px] text-foreground/80">{signal.nft_name}</span>
@@ -124,6 +169,29 @@ export default async function SignalDetailPage({ params }: Props) {
               {shortWallet}
             </span>
           </div>
+
+          {/* phase-116: contributor attribution & credit ledger (flag-gated) */}
+          {phase116 && contributors && contributors.contributors.length > 0 ? (
+            <div className="mt-3 border border-violet-200/50 bg-violet-50/50 p-3">
+              <p className="font-mono text-[9px] uppercase tracking-widest text-violet-700">CONTRIBUTORS & CREDIT LEDGER</p>
+              <div className="mt-2 flex flex-col gap-1.5">
+                {creditLedger.map((c) => (
+                  <div key={c.wallet} className="flex items-center gap-2 font-mono text-[10px]">
+                    <WalletAvatar wallet={c.wallet} displayName={c.displayName} size={20} />
+                    <span className="font-medium text-foreground">{c.displayName}</span>
+                    <span className="text-muted-foreground/60">{c.wallet.slice(0, 4)}…{c.wallet.slice(-4)}</span>
+                    <span className="ml-auto text-violet-700">{(c.totalShareBps / 100).toFixed(1)}%</span>
+                    <span className="rounded bg-violet-100 px-1 py-0.5 text-[8px] uppercase tracking-widest text-violet-700">{c.roles.join(", ")}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 font-mono text-[9px] text-muted-foreground/50">Total share: {contributors.totalShareBps / 100}% · {contributors.contributors.length} attribution(s)</p>
+            </div>
+          ) : phase116 ? (
+            <div className="mt-3 border border-dashed border-[var(--color-border-tertiary)] p-2">
+              <p className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground/40">No co-authors yet — reply with attribution to add credit</p>
+            </div>
+          ) : null}
         </article>
 
         {/* Replies + compose (client island) */}

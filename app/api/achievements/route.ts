@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
-import { getAchievements, getWalletData } from "@/lib/achievement-store"
+import { getAchievements, getWalletData, getAchievementTimeline, isTimelineVisualizationEnabled } from "@/lib/achievement-store"
 import { createApiRequestContext } from "@/lib/api-observability"
 
 export const runtime = "nodejs"
@@ -23,9 +23,12 @@ export async function GET(request: NextRequest) {
       getWalletData(wallet),
     ])
 
+    const timeline = isTimelineVisualizationEnabled() ? await getAchievementTimeline(wallet) : undefined
+
     return api.json(
       {
         achievements,
+        ...(timeline !== undefined ? { timeline } : {}),
         counters: {
           mint_count: data.mint_count ?? 0,
           daily_streak: data.daily_streak ?? 0,

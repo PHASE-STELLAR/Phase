@@ -56,6 +56,7 @@ export async function isIpfsUploadConfigured(): Promise<boolean> {
 
 /**
  * Uploads a `Blob` or `File` via `POST /api/ipfs`. Returns a content URI for `create_collection`.
+ * Legacy path — single attempt. For retry + checksum, use `uploadToIPFSWithRetry`.
  */
 export async function uploadToIPFS(fileOrBlob: Blob | File): Promise<string> {
   const prepared = await shrinkImageBlobForUpload(fileOrBlob)
@@ -79,4 +80,39 @@ export async function uploadToIPFS(fileOrBlob: Blob | File): Promise<string> {
     throw new Error("Respuesta de subida inválida.")
   }
   return data.uri
+}
+
+// ─── phase-120: retry + checksum wrapper (isolated, flag-gated) ─────────────
+// Re-export for convenience; keeps lib/ipfs-upload as single import surface
+// for UI components while new logic lives in lib/ipfs-upload-retry.ts
+export {
+  isPhase120Enabled,
+  computeSha256Hex,
+  computeChecksumForBlob,
+  verifyChecksum,
+  exponentialBackoffMs,
+  pinFileToIpfsWithRetry,
+  uploadToIpfsWithRetry,
+  type IpfsUploadRetryConfig,
+  type IpfsUploadResult,
+  type ChecksumRecord,
+} from "@/lib/ipfs-upload-retry"
+
+/**
+ * Feature-flag aware uploader:
+ *  - flag off → legacy single attempt (zero regression)
+ *  - flag on  → retry with exponential backoff + checksum verification
+ */
+export async function uploadToIPFSWithFlag(fileOrBlob: Blob | File): Promise<string> {
+  // dynamic import to avoid bundling node:crypto in client when flag off
+  try {
+    const mod = await import("@/lib/ipfs-upload-retry")
+    if (mod.isPhase120Enabled()) {
+      const res = await mod.uploadToIpfsWithRetry(fileOrBlob)
+      return res.uri
+    }
+  } catch {
+    // fall through to legacy
+  }
+  return uploadToIPFS(fileOrBlob)
 }

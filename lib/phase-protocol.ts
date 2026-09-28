@@ -24,6 +24,28 @@ import {
   DEFAULT_PHASE_CONTRACT,
   DEFAULT_TOKEN_CONTRACT,
 } from "@/lib/phase-contract-defaults"
+import { getGatewayHealthSnapshot as _getGatewayHealthSnapshot, recordGatewayLatency as _recordGatewayLatency } from "@/lib/gateway-health"
+import { withHorizonBulkhead } from "@/lib/horizon-bulkhead"
+
+// ── phase-121: gateway health dashboard (isolated, flag-gated) ──
+// Operators cannot see which gateway is slow. Scoring lives in @/lib/gateway-health;
+// this re-export keeps phase-protocol as the single import for UI/API.
+export { recordGatewayLatency, getGatewayHealthSnapshot, getGatewayRanking, resetGatewayHealth } from "@/lib/gateway-health"
+export type { GatewayHealthEntry, GatewayHealthSnapshot } from "@/lib/gateway-health"
+
+function isPhase121Enabled(): boolean {
+  const v = (typeof process !== "undefined" ? (process.env.NEXT_PUBLIC_FEATURE_PHASE_121 ?? process.env.FEATURE_PHASE_121 ?? "") : "")?.trim().toLowerCase()
+  return v === "1" || v === "true" || v === "yes" || v === "on"
+}
+// Light wrapper for dashboard consumers (adds flag context, structured error)
+export function getGatewayHealthDashboardSafe(): { enabled: boolean; snapshot: import("@/lib/gateway-health").GatewayHealthSnapshot | null; error: string | null } {
+  if (!isPhase121Enabled()) return { enabled: false, snapshot: null, error: "phase-121 flag disabled (set NEXT_PUBLIC_FEATURE_PHASE_121=1)" }
+  try {
+    return { enabled: true, snapshot: _getGatewayHealthSnapshot(), error: null }
+  } catch (e) {
+    return { enabled: true, snapshot: null, error: e instanceof Error ? e.message : String(e) }
+  }
+}
 
 // Validación temprana de entorno en build/startup
 if (typeof process !== "undefined" && process.env.NODE_ENV !== "test") {
@@ -1230,6 +1252,267 @@ export async function getTransactionResult(txHash: string): Promise<unknown> {
   throw new Error("Transaction timeout")
 }
 
+export type PhaseSettleEventInfo = {
+  txHash: string
+  contractId: string
+  functionName: "settle"
+  amountStroops: string
+  invoiceId: number | null
+  collectionId: number | null
+}
+
+export type PhaseSettleVerificationResult =
+  | { ok: true; event: PhaseSettleEventInfo }
+  | { ok: false; code: string; reason: string }
+
+function phaseSettleFail(code: string, reason: string): PhaseSettleVerificationResult {
+  return { ok: false, code, reason }
+}
+
+function parseTransactionMeta(result: unknown): xdr.TransactionMeta | null {
+  const raw = result && typeof result === "object" ? (result as Record<string, unknown>).resultMetaXdr : null
+  if (!raw) return null
+  try {
+    if (typeof raw === "string") return xdr.TransactionMeta.fromXDR(raw, "base64")
+    if (raw instanceof xdr.TransactionMeta || typeof (raw as xdr.TransactionMeta).v1 === "function") {
+      return raw as xdr.TransactionMeta
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+function collectSorobanContractEvents(meta: xdr.TransactionMeta): xdr.ContractEvent[] {
+  const events: xdr.ContractEvent[] = []
+  const push = (items: readonly unknown[]) => {
+    for (const item of items) {
+      if (item && typeof item === "object") events.push(item as xdr.ContractEvent)
+    }
+  }
+  const anyMeta = meta as unknown as Record<string, () => unknown>
+  for (const version of ["v0", "v1", "v2"] as const) {
+    try {
+      const txMeta = anyMeta[version]?.() as Record<string, unknown> | undefined
+      if (!txMeta) continue
+      const operations =
+        typeof txMeta.operations === "function"
+          ? (txMeta.operations as () => readonly unknown[])()
+          : Array.isArray(txMeta.operations)
+            ? txMeta.operations
+            : []
+      for (const op of operations) {
+        const opRecord = op as Record<string, unknown>
+        const opEvents =
+          typeof opRecord.events === "function"
+            ? (opRecord.events as () => readonly unknown[])()
+            : Array.isArray(opRecord.events)
+              ? opRecord.events
+              : []
+        push(opEvents)
+      }
+      if (typeof txMeta.events === "function") push((txMeta.events as () => readonly unknown[])())
+      else if (Array.isArray(txMeta.events)) push(txMeta.events)
+    } catch {
+      // not this transaction meta version
+    }
+  }
+  return events
+}
+
+function scvToNativeLoose(scv: unknown): unknown {
+  try {
+    return scValToNative(scv as xdr.ScVal)
+  } catch {
+    return null
+  }
+}
+
+type PhaseSettleEventV0Like = {
+  topics?: unknown
+  data?: unknown
+}
+
+function phaseSettleEventV0(event: xdr.ContractEvent): PhaseSettleEventV0Like | null {
+  try {
+    const body = (event as unknown as { body?: () => { v0?: unknown; value?: unknown } }).body?.()
+    if (!body) return null
+    const v0 = typeof body.v0 === "function" ? body.v0() : body.v0
+    if (v0 && typeof v0 === "object") return v0 as PhaseSettleEventV0Like
+    const value = typeof body.value === "function" ? body.value() : body.value
+    return value && typeof value === "object" ? (value as PhaseSettleEventV0Like) : null
+  } catch {
+    return null
+  }
+}
+
+function eventContractId(event: xdr.ContractEvent): string | null {
+  try {
+    const raw = (event as unknown as { contractId?: () => unknown }).contractId?.()
+    if (!raw) return null
+    if (typeof raw === "string" && StrKey.isValidContract(raw)) return raw
+    if (typeof raw === "string" && /^[0-9a-fA-F]{64}$/.test(raw)) {
+      return StrKey.encodeContract(Buffer.from(raw, "hex"))
+    }
+    const buf = Buffer.from(raw as Uint8Array)
+    return buf.byteLength === 32 ? StrKey.encodeContract(buf) : null
+  } catch {
+    return null
+  }
+}
+
+function eventFunctionName(event: xdr.ContractEvent): string | null {
+  const v0 = phaseSettleEventV0(event)
+  if (!v0) return null
+  const topics = typeof v0.topics === "function" ? v0.topics() : Array.isArray(v0.topics) ? v0.topics : []
+  const names = Array.from(topics).map(scvToNativeLoose)
+  return typeof names[0] === "string" ? names[0] : null
+}
+
+function eventDataValue(event: xdr.ContractEvent): unknown {
+  const v0 = phaseSettleEventV0(event)
+  if (!v0) return null
+  return typeof v0.data === "function" ? scvToNativeLoose(v0.data()) : scvToNativeLoose(v0.data)
+}
+
+function bigintFromUnknown(value: unknown): bigint | null {
+  if (typeof value === "bigint") return value
+  if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.trunc(value))
+  if (typeof value === "string" && value.trim() !== "") {
+    try {
+      return BigInt(value.trim())
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function firstNumericValue(obj: Record<string, unknown>, keys: string[]): bigint | null {
+  for (const key of keys) {
+    if (key in obj) {
+      const n = bigintFromUnknown(obj[key])
+      if (n != null) return n
+    }
+  }
+  return null
+}
+
+function parseSettleEventData(data: unknown): {
+  amountStroops: string | null
+  invoiceId: number | null
+  collectionId: number | null
+} {
+  const out: { amountStroops: string | null; invoiceId: number | null; collectionId: number | null } = {
+    amountStroops: null,
+    invoiceId: null,
+    collectionId: null,
+  }
+  if (data == null) return out
+  if (typeof data === "object" && !Array.isArray(data)) {
+    const o = data as Record<string, unknown>
+    const amount = firstNumericValue(o, ["amount", "amount_stroops", "amountStroops", "value", "price", "payment", "0"])
+    if (amount != null) out.amountStroops = amount.toString()
+    const invoice = firstNumericValue(o, ["invoice_id", "invoiceId", "invoice", "1"])
+    if (invoice != null) out.invoiceId = Number(invoice)
+    const collection = firstNumericValue(o, ["collection_id", "collectionId", "collection", "2"])
+    if (collection != null) out.collectionId = Number(collection)
+  } else if (Array.isArray(data)) {
+    for (const item of data) {
+      const n = bigintFromUnknown(item)
+      if (n != null) {
+        out.amountStroops = n.toString()
+        break
+      }
+    }
+  } else {
+    const n = bigintFromUnknown(data)
+    if (n != null) out.amountStroops = n.toString()
+  }
+  return out
+}
+
+export async function verifyPhaseSettleTxOnChain(
+  txHash: string,
+  options: {
+    expectedContractId?: string
+    minimumAmountStroops?: string
+    expectedInvoiceId?: number
+    expectedCollectionId?: number
+  } = {},
+): Promise<PhaseSettleVerificationResult> {
+  const normalizedHash = txHash.trim()
+  if (!normalizedHash) return phaseSettleFail("INVALID_TX_HASH", "Transaction hash is required.")
+  const expectedContractId = options.expectedContractId?.trim() || phaseProtocolContractIdForServer()
+  const minimumAmountStroops = options.minimumAmountStroops?.trim() || REQUIRED_AMOUNT
+
+  let result: unknown
+  try {
+    result = await getTransactionResult(normalizedHash)
+  } catch (e) {
+    return phaseSettleFail("TX_FETCH_FAILED", e instanceof Error ? e.message : String(e))
+  }
+
+  const meta = parseTransactionMeta(result)
+  if (!meta) return phaseSettleFail("META_MISSING", "Transaction result does not include parseable resultMetaXdr.")
+
+  const events = collectSorobanContractEvents(meta)
+  if (events.length === 0) return phaseSettleFail("NO_EVENTS", "Transaction did not emit Soroban contract events.")
+
+  for (const event of events) {
+    const emittedContractId = eventContractId(event)
+    if (!emittedContractId || emittedContractId !== expectedContractId) continue
+    if (eventFunctionName(event)?.toLowerCase() !== "settle") continue
+
+    const parsed = parseSettleEventData(eventDataValue(event))
+    if (parsed.amountStroops == null) {
+      return phaseSettleFail("AMOUNT_MISSING", "Settle event did not include an amount.")
+    }
+    try {
+      if (BigInt(parsed.amountStroops) < BigInt(minimumAmountStroops)) {
+        return phaseSettleFail(
+          "AMOUNT_TOO_LOW",
+          `Settle payment ${parsed.amountStroops} stroops is below minimum ${minimumAmountStroops} stroops.`,
+        )
+      }
+    } catch {
+      return phaseSettleFail("AMOUNT_INVALID", `Settle amount "${parsed.amountStroops}" is not a valid integer.`)
+    }
+    if (
+      options.expectedInvoiceId != null &&
+      parsed.invoiceId != null &&
+      parsed.invoiceId !== options.expectedInvoiceId
+    ) {
+      return phaseSettleFail(
+        "INVOICE_MISMATCH",
+        `Settle invoice id ${parsed.invoiceId} does not match expected ${options.expectedInvoiceId}.`,
+      )
+    }
+    if (
+      options.expectedCollectionId != null &&
+      parsed.collectionId != null &&
+      parsed.collectionId !== options.expectedCollectionId
+    ) {
+      return phaseSettleFail(
+        "COLLECTION_MISMATCH",
+        `Settle collection id ${parsed.collectionId} does not match expected ${options.expectedCollectionId}.`,
+      )
+    }
+    return {
+      ok: true,
+      event: {
+        txHash: normalizedHash,
+        contractId: emittedContractId,
+        functionName: "settle",
+        amountStroops: parsed.amountStroops,
+        invoiceId: parsed.invoiceId ?? null,
+        collectionId: parsed.collectionId ?? null,
+      },
+    }
+  }
+
+  return phaseSettleFail("NOT_SETTLE", "No settle event from the expected contract was found.")
+}
 export type PhaseArtifact = {
   tokenId: number
   energyLevelBp: number
@@ -1523,13 +1806,18 @@ export function extractIpfsGatewaySubpath(uri: string): string | null {
   return sub.length > 0 ? sub : null
 }
 
-/** Lista de URLs HTTPS para `<img src>` (reintento gateway si la primera cae). */
+/**
+ * Lista de URLs HTTPS para `<img src>` (reintento gateway si la primera cae).
+ * El proxy propio (`/api/ipfs`) va primero: hace fallback multi-gateway y health
+ * scoring en el servidor, y cachea la respuesta. Los gateways públicos directos
+ * quedan como red de seguridad si el proxy mismo no responde.
+ */
 export function ipfsHttpsGatewayUrls(uri: string): string[] {
   const t = uri.trim()
   if (!t) return []
   const ipfsPath = extractIpfsGatewaySubpath(t)
   if (ipfsPath) {
-    const out: string[] = []
+    const out: string[] = [`/api/ipfs/${ipfsPath}`]
     for (const b of ipfsGatewayBasesOrdered()) {
       const u = `${b}/${ipfsPath}`
       if (!out.includes(u)) out.push(u)
@@ -1886,6 +2174,21 @@ export async function checkHasPhased(
 }
 
 /**
+ * Multi-claim guard for the custodian-release pipeline: custody alone (token held
+ * by the PHASELQ issuer) is not authorization to release it to an arbitrary
+ * wallet. This is authorized only when the requested tokenId matches the
+ * on-chain phase artifact (`get_user_phase`) already resolved for the
+ * requesting recipient — i.e. they are the wallet that actually phased/settled
+ * this exact token.
+ */
+export function isCustodianReleaseAuthorized(
+  recipientArtifact: { tokenId: number } | null,
+  requestedTokenId: number,
+): boolean {
+  return recipientArtifact != null && recipientArtifact.tokenId === requestedTokenId
+}
+
+/**
  * Escaneo defensivo para detectar propiedad real de cualquier NFT PHASE,
  * incluso fuera de `collection_id=0` o de la colección creada por el usuario.
  */
@@ -2088,12 +2391,12 @@ export async function fetchTokenOwnerAddress(
 ): Promise<string | null> {
   if (!Number.isFinite(tokenId) || tokenId <= 0) return null
   const tryOwner = async (method: "owner_of" | "owner_of_u64", type: "u32" | "u64") => {
-    const native = await simulateContractCall(
+    const native = await withHorizonBulkhead(() => simulateContractCall(
       contractId,
       method,
       [nativeToScVal(tokenId, { type })],
       READONLY_SIM_SOURCE_G,
-    )
+    ))
     return parseOwnerOfReturn(native)
   }
   try {

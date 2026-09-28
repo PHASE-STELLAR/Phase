@@ -18,6 +18,7 @@ type NotificationType =
   | "offer_accepted"
   | "offer_rejected"
   | "achievement_unlocked"
+  | "content_takedown"
 
 type Notification = {
   id: string
@@ -28,7 +29,34 @@ type Notification = {
   data: Record<string, unknown>
 }
 
+type NotificationPreferences = {
+  enabled: boolean
+  types: Partial<Record<NotificationType, boolean>>
+  updated_at: number
+}
+
+const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+  enabled: true,
+  types: {},
+  updated_at: 0,
+}
+
+const PREFERENCE_TYPES: NotificationType[] = [
+  "new_follower",
+  "signal_reply",
+  "signal_upvote",
+  "new_offer",
+  "achievement_unlocked",
+  "content_takedown",
+]
+
 const POLL_INTERVAL_MS = 30_000
+
+type ClaimFunnelSummary = {
+  totalEvents: number
+  overallConversion: number
+  stages: { stage: string; uniqueSubjects: number; conversionFromPrev: number | null }[]
+}
 
 const copy = {
   en: {
@@ -38,6 +66,8 @@ const copy = {
     emptyDesc: "Nothing here yet — activity will appear as you interact.",
     viewAll: "[ VIEW_ALL ]",
     unread: "unread",
+    preferences: "Preferences",
+    all: "All notifications",
   },
   es: {
     title: "◆ NOTIFICACIONES",
@@ -46,6 +76,8 @@ const copy = {
     emptyDesc: "Aún no hay nada — la actividad aparecerá conforme interactúas.",
     viewAll: "[ VER_TODO ]",
     unread: "sin leer",
+    preferences: "Preferencias",
+    all: "Todas las notificaciones",
   },
 }
 
@@ -126,9 +158,31 @@ function notifText(n: Notification, lang: string): { text: string; url: string }
           : `Achievement unlocked: ${String(d.achievement_name ?? "")}`,
         url: `/profile`,
       }
+    case "content_takedown":
+      return {
+        text: es
+          ? `Tu señal "${String(d.signal_title ?? "")}" fue retirada: ${String(d.reason ?? "")}`
+          : `Your signal "${String(d.signal_title ?? "")}" was taken down: ${String(d.reason ?? "")}`,
+        url: `/signals`,
+      }
     default:
       return { text: es ? "Nueva actividad" : "New activity", url: "/" }
   }
+}
+
+const NOTIF_LABELS: Record<NotificationType, { en: string; es: string }> = {
+  mint_in_collection: { en: "Collection mints", es: "Mints de coleccion" },
+  narrator_generated: { en: "Narrator updates", es: "Actualizaciones del narrador" },
+  new_follower: { en: "New followers", es: "Nuevos seguidores" },
+  signal_reply: { en: "Signal replies", es: "Respuestas a senales" },
+  signal_upvote: { en: "Signal upvotes", es: "Votos de senales" },
+  quest_completed: { en: "Quest rewards", es: "Recompensas de quests" },
+  world_mint: { en: "World mints", es: "Mints de mundo" },
+  new_offer: { en: "New offers", es: "Nuevas ofertas" },
+  offer_accepted: { en: "Accepted offers", es: "Ofertas aceptadas" },
+  offer_rejected: { en: "Rejected offers", es: "Ofertas rechazadas" },
+  achievement_unlocked: { en: "Achievements", es: "Logros" },
+  content_takedown: { en: "Moderation", es: "Moderacion" },
 }
 
 const NOTIF_ICONS: Record<NotificationType, string> = {
@@ -143,6 +197,7 @@ const NOTIF_ICONS: Record<NotificationType, string> = {
   offer_accepted: "✓",
   offer_rejected: "✕",
   achievement_unlocked: "★",
+  content_takedown: "⚠",
 }
 
 function timeAgo(ts: number): string {
@@ -164,15 +219,37 @@ export function NotificationsModal() {
   const [open, setOpen] = useState(false)
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
+  const [preferences, setPreferences] = useState<NotificationPreferences>(DEFAULT_NOTIFICATION_PREFERENCES)
+  // module #53 (phase-53): compact faucet claim-funnel readout, operator-facing, flag-gated.
+  const [funnel, setFunnel] = useState<ClaimFunnelSummary | null>(null)
 
   const fetchNotifications = useCallback(async () => {
     if (!address) return
     try {
       const res = await fetch(`/api/notifications?wallet=${encodeURIComponent(address)}`)
       if (!res.ok) return
-      const data = (await res.json()) as { notifications: Notification[]; unread_count: number }
+      const data = (await res.json()) as {
+        notifications: Notification[]
+        unread_count: number
+        preferences?: NotificationPreferences
+        gateway_auth_rotation_feature_enabled?: boolean
+        faucet_analytics_feature_enabled?: boolean
+      }
       setNotifications(data.notifications)
       setUnreadCount(data.unread_count)
+      setPreferences(data.preferences ?? DEFAULT_NOTIFICATION_PREFERENCES)
+
+      if (data.faucet_analytics_feature_enabled) {
+        try {
+          const funnelRes = await fetch(`/api/notifications?funnel=1`)
+          if (funnelRes.ok) {
+            const funnelData = (await funnelRes.json()) as { funnel?: ClaimFunnelSummary }
+            setFunnel(funnelData.funnel ?? null)
+          }
+        } catch { /* silent */ }
+      } else {
+        setFunnel(null)
+      }
     } catch { /* silent */ }
   }, [address])
 
@@ -191,6 +268,32 @@ export function NotificationsModal() {
     return () => clearInterval(timer)
   }, [address, fetchNotifications])
 
+  async function savePreferences(next: NotificationPreferences) {
+    if (!address) return
+    setPreferences(next)
+    try {
+      await fetch("/api/notifications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: address, action: "update_preferences", preferences: next }),
+      })
+    } catch { /* silent */ }
+  }
+
+  function togglePreference(type: NotificationType) {
+    const next: NotificationPreferences = {
+      ...preferences,
+      types: {
+        ...preferences.types,
+        [type]: !(preferences.types[type] ?? true),
+      },
+    }
+    void savePreferences(next)
+  }
+
+  function toggleAllPreferences() {
+    void savePreferences({ ...preferences, enabled: !preferences.enabled })
+  }
   async function handleMarkAll() {
     if (!address) return
     try {
@@ -261,6 +364,63 @@ export function NotificationsModal() {
             </button>
           )}
         </div>
+
+        {/* Preferences */}
+        <div className="border-b border-violet-800/20 px-5 py-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <span className="font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-violet-400/80">
+              {t.preferences}
+            </span>
+            <label className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-widest text-zinc-500">
+              <input
+                type="checkbox"
+                checked={preferences.enabled}
+                onChange={toggleAllPreferences}
+                className="h-3 w-3 accent-violet-500"
+              />
+              {t.all}
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {PREFERENCE_TYPES.map((type) => (
+              <label key={type} className="flex items-center gap-2 font-mono text-[9px] text-zinc-500">
+                <input
+                  type="checkbox"
+                  checked={preferences.types[type] ?? true}
+                  disabled={!preferences.enabled}
+                  onChange={() => togglePreference(type)}
+                  className="h-3 w-3 accent-violet-500 disabled:opacity-50"
+                />
+                {NOTIF_LABELS[type][lang]}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Faucet claim funnel — module #53 (phase-53), operator readout */}
+        {funnel && funnel.stages.length > 0 && (
+          <div className="border-b border-violet-800/20 px-5 py-3">
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-violet-400/80">
+                {lang === "es" ? "Embudo de claims" : "Claim funnel"}
+              </span>
+              <span className="font-mono text-[8px] uppercase tracking-widest text-zinc-600">
+                {Math.round(funnel.overallConversion * 100)}% · {funnel.totalEvents} ev
+              </span>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              {funnel.stages.map((s) => (
+                <div key={s.stage} className="flex items-center justify-between font-mono text-[9px] text-zinc-500">
+                  <span>{s.stage}</span>
+                  <span className="text-zinc-600">
+                    {s.uniqueSubjects}
+                    {s.conversionFromPrev != null ? ` · ${Math.round(s.conversionFromPrev * 100)}%` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* List */}
         <div className="flex-1 overflow-y-auto min-h-0">

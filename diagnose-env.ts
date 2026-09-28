@@ -5,8 +5,14 @@
 
 import {
   validatePhaseEnv,
+  validateServerEnv,
+  validateClientEnv,
   formatEnvValidationErrors,
   validateFaucetIssuerConfig,
+  auditFollowGraphPortabilityWiring,
+  isPhase95Enabled,
+  auditQuestExperimentWiring,
+  isQuestExperimentEnabled,
 } from "@/lib/env-validation"
 import {
   classicLiqIssuerForStellarToml,
@@ -14,13 +20,33 @@ import {
 } from "@/lib/classic-liq"
 import { getPhaserLiqDiagnostic } from "@/lib/phaser-liq-sac-warn"
 import { TOKEN_ADDRESS, CONTRACT_ID } from "@/lib/phase-protocol"
+import { auditFaucetRateLimitWiring, isFaucetRateLimitRedisEnabled } from "@/lib/profile-store"
+import { auditQuestExpiryWiring, isQuestExpiryEnabled } from "@/lib/explore-domain"
+import { auditFaucetAnalyticsWiring, isFaucetAnalyticsEnabled } from "@/lib/notification-store"
 
 console.log("=".repeat(70))
 console.log("DIAGNÓSTICO DE CONFIGURACIÓN PHASE")
 console.log("=".repeat(70))
 
-// 1. Validación general de entorno
-console.log("\n📋 Validación general de variables de entorno:")
+// 1. Validación general y esquemas Zod (server vs client)
+console.log("\n📋 Validación de esquemas de entorno (Zod serverSchema & clientSchema):")
+const serverCheck = validateServerEnv()
+const clientCheck = validateClientEnv()
+
+if (serverCheck.valid) {
+  console.log("   ✅ serverSchema: Variables de servidor válidas")
+} else {
+  console.log("   ❌ serverSchema errores:")
+  console.log(formatEnvValidationErrors(serverCheck))
+}
+
+if (clientCheck.valid) {
+  console.log("   ✅ clientSchema: Variables cliente NEXT_PUBLIC_* válidas y seguras")
+} else {
+  console.log("   ❌ clientSchema errores:")
+  console.log(formatEnvValidationErrors(clientCheck))
+}
+
 const validation = validatePhaseEnv()
 if (validation.valid) {
   console.log("   ✅ Todas las variables de entorno requeridas están configuradas")
@@ -120,6 +146,44 @@ if (!classicIssuerEnv) {
   console.warn("      Se usará el issuer por defecto. Para producción, configura esta variable.")
 }
 
+// 5b. Follow-graph export/import portability (phase-95)
+if (isPhase95Enabled()) {
+  console.log("\n🔀 Follow-graph export/import portability (phase-95):")
+  const portabilityAudit = auditFollowGraphPortabilityWiring()
+  console.log(`   ${portabilityAudit.ok ? "✅" : "❌"} ${portabilityAudit.note}`)
+}
+
+// 5c. Quest A/B variant experimentation framework (module #50 / phase-50)
+if (isQuestExperimentEnabled()) {
+  console.log("\n🧪 Quest A/B variant experimentation (module #50):")
+  const questExpAudit = auditQuestExperimentWiring()
+  console.log(`   ${questExpAudit.ok ? "✅" : "❌"} ${questExpAudit.note}`)
+}
+
+// 5d. Race-safe faucet claim rate-limits (module #51 / phase-51)
+if (isFaucetRateLimitRedisEnabled()) {
+  console.log("\n🚦 Race-safe faucet claim rate-limits (module #51):")
+  const rateLimitAudit = auditFaucetRateLimitWiring()
+  console.log(`   ${rateLimitAudit.ok ? "✅" : "❌"} ${rateLimitAudit.note}`)
+  if (!process.env.FAUCET_RATE_LIMIT_REDIS_URL && !process.env.REDIS_URL && !process.env.KV_URL) {
+    console.warn("   ⚠️  No REDIS_URL / KV_URL / FAUCET_RATE_LIMIT_REDIS_URL set — using the process-local memory backend (safe for a single instance only).")
+  }
+}
+
+// 5e. quest_expiry windows with grace-period extension (module #52 / phase-52)
+if (isQuestExpiryEnabled()) {
+  console.log("\n⏳ quest_expiry windows with grace-period extension (module #52):")
+  const questExpiryAudit = auditQuestExpiryWiring()
+  console.log(`   ${questExpiryAudit.ok ? "✅" : "❌"} ${questExpiryAudit.note}`)
+}
+
+// 5f. Faucet analytics — claim funnel metrics (module #53 / phase-53)
+if (isFaucetAnalyticsEnabled()) {
+  console.log("\n📉 Faucet analytics — claim funnel metrics (module #53):")
+  const funnelAudit = auditFaucetAnalyticsWiring()
+  console.log(`   ${funnelAudit.ok ? "✅" : "❌"} ${funnelAudit.note}`)
+}
+
 // 6. Resumen
 console.log("\n" + "=".repeat(70))
 if (validation.valid && tokenDiagnostic.isContract && !tokenDiagnostic.errors.length) {
@@ -129,3 +193,40 @@ if (validation.valid && tokenDiagnostic.isContract && !tokenDiagnostic.errors.le
   process.exit(1)
 }
 console.log("=".repeat(70))
+
+
+// 7. CSP Header Compliance Verification
+console.log("\n🔒 Content Security Policy (CSP) Compliance:")
+try {
+  const nextConfigPath = "./next.config.mjs"
+  const fs = require("fs")
+  if (fs.existsSync(nextConfigPath)) {
+    const configContent = fs.readFileSync(nextConfigPath, "utf8")
+    const hasCsp = configContent.includes("Content-Security-Policy")
+    if (hasCsp) {
+      console.log("   ✅ Content-Security-Policy header configured in next.config.mjs")
+      
+      // Check for key CSP directives
+      const hasDefaultSrc = /default-src\s+'self'/.test(configContent)
+      const hasScriptSrc = /script-src/.test(configContent)
+      const hasStyleSrc = /style-src/.test(configContent)
+      const hasImgSrc = /img-src/.test(configContent)
+      
+      if (hasDefaultSrc) console.log("   ✅ default-src directive present")
+      if (hasScriptSrc) console.log("   ✅ script-src directive present")
+      if (hasStyleSrc) console.log("   ✅ style-src directive present")
+      if (hasImgSrc) console.log("   ✅ img-src directive present")
+      
+      if (!hasDefaultSrc || !hasScriptSrc) {
+        console.warn("   ⚠️  WARNING: Some critical CSP directives may be missing")
+      }
+    } else {
+      console.error("   ❌ ERROR: No Content-Security-Policy header found in next.config.mjs")
+      console.error("      Add CSP headers to protect against XSS and injection attacks")
+    }
+  } else {
+    console.warn("   ⚠️  next.config.mjs not found")
+  }
+} catch (e) {
+  console.error("   ❌ ERROR checking CSP configuration:", e instanceof Error ? e.message : String(e))
+}

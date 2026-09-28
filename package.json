@@ -19,7 +19,8 @@
     "seed:phaser-prueba": "cd scripts && npx tsx seed-phaser-prueba.ts",
     "start": "next start",
     "security:audit": "npm audit --audit-level=high",
-    "security:secret-rotation": "tsx scripts/check-secret-rotation.ts"
+    "security:secret-rotation": "tsx scripts/check-secret-rotation.ts",
+    "migrate:sqlite": "tsx scripts/migrate-json-to-sqlite.ts"
   },
   "dependencies": {
     "@albedo-link/intent": "0.12.0",
@@ -105,5 +106,6 @@
     "firefox >= 104",
     "safari >= 16",
     "edge >= 105"
-  ]
+  ],
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }

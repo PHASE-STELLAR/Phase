@@ -1,6 +1,11 @@
 import type { AppLang } from "@/components/lang-context"
 import type { ImageUriValidationMessages } from "@/lib/phase-protocol"
 
+function getNodeEnv(): string {
+  if (typeof process === "undefined" || !process.env) return "production"
+  return process.env.NODE_ENV ?? "production"
+}
+
 export type ChamberLogsCopy = {
   chamberOnline: string
   walletRequest: string
@@ -1686,6 +1691,16 @@ export const phaseCopy: Record<
   },
 }
 
-export function pickCopy(lang: AppLang) {
-  return phaseCopy[lang]
+/** Only accept locales that are part of the copy registry.  This deliberately
+ * avoids indexing the object with attacker-controlled keys such as
+ * `__proto__` or `constructor`.
+ */
+export const SUPPORTED_LANGS = ["en", "es"] as const satisfies readonly AppLang[]
+
+export function pickCopy(lang: unknown) {
+  const safeLang: AppLang =
+    typeof lang === "string" && (SUPPORTED_LANGS as readonly string[]).includes(lang)
+      ? (lang as AppLang)
+      : "en"
+  return phaseCopy[safeLang]
 }

@@ -129,10 +129,67 @@ Owns:
 - Testnet-only assumptions must be explicit in docs and code comments.
 - Any privileged operation must validate input shape and origin intent.
 
-## 10) Change-management rules
+## 9a) Signal & reply authorship proof (SEP-53)
+
+Community signals and replies now carry a Verifiable Ed25519 proof of wallet
+ownership instead of a mock signature:
+
+- **Client** (`components/signal-compose.tsx`, `app/signals/[id]/signal-detail-client.tsx`)
+  signs a canonical payload `{ title, body, timestamp }` via the selected
+  wallet's SEP-53 `signMessage` (`lib/viewer-signature.ts:signSignalPayload`).
+- **Server** (`app/api/signals/route.ts`, `app/api/signals/[id]/replies/route.ts`)
+  reconstructs the same payload and verifies it with
+  `Keypair.fromPublicKey(author).verify(prefix + message, signature)`
+  (`lib/viewer-signature.ts:verifySignalSignature`). Missing, malformed, or
+  forged signatures (signature claiming another wallet) are rejected with
+  `400`.
+- **Badge**: verified authorship is persisted as `signature_verified` on the
+  `signals` / `signal_replies` SQLite rows and surfaced in the UI, so verified
+  signals are visually distinguished from legacy posts.
+
+All signing stays client-side; the server never holds user keys. Signed string
+is a fixed-size digest of the canonical payload, keeping it under wallet
+`sign_message` size limits.
+
+## 10) Feature flags (rolling delivery)
+
+| Flag | Env | Purpose | Default | Rollback |
+|------|-----|---------|---------|----------|
+| `phase-105` | `NEXT_PUBLIC_FEATURE_PHASE_105` / `FEATURE_PHASE_105` | Co-authored world conflict detection: `POST /api/world` compares `expected_version` / `expected_vector_clock` (object, `Map` or `[node, counter]` entries — normalized before comparison) with the stored world and returns `409 WORLD_VERSION_CONFLICT` with `order` (`before`/`after`/`concurrent`) | off | Unset var, restart — saves overwrite unconditionally; stored `vector_clock` fields are ignored |
+| `phase-109` | `NEXT_PUBLIC_FEATURE_PHASE_109` / `FEATURE_PHASE_109` | Collaborative world permissions: owner-enforced role assignment (`editor`/`viewer`) per wallet via `GET/POST /api/world/[collection_id]/roles`; POST requires `X-Wallet-Signature` | off | Unset var, restart — roles endpoint returns 404; existing role data on disk is unaffected |
+| `phase-110` | `NEXT_PUBLIC_FEATURE_PHASE_110` / `FEATURE_PHASE_110` | Full-text narrative search across world collections: filter by entity ID, location, or free text via `GET /api/world/search` | off | Unset var, restart — search route returns 404 |
+| `phase-112` | `NEXT_PUBLIC_FEATURE_PHASE_112` / `FEATURE_PHASE_112` | World export to portable formats (`json`, `markdown`) via `GET /api/world/[collection_id]/export?format=` with `Content-Disposition` download headers | off | Unset var, restart — export route returns 404 |
+| `phase-115` | `NEXT_PUBLIC_FEATURE_PHASE_115` / `FEATURE_PHASE_115` | Cross-artifact lore linking: `GET/POST /api/world/narrative/[token_id]/links` stores directed `from → to` links with an optional note and exposes `outgoing`/`incoming` back-references | off | Unset var, restart — links route returns 404; existing link data on disk is unaffected |
+| `phase-88` | `NEXT_PUBLIC_FEATURE_PHASE_88` / `FEATURE_PHASE_88` | Follow suggestions ranked from mutual follows and bounded Stellar trustline co-membership | off | Unset var, restart — suggestions endpoint returns 404 and profile suggestion UI stays hidden |
+| `phase-89` | `NEXT_PUBLIC_FEATURE_PHASE_89` / `FEATURE_PHASE_89` | Scheduled creator broadcasts with list/cancel queue API | off | Unset var, restart — scheduling input stays hidden; scheduled records remain intact |
+| `phase-90` | `NEXT_PUBLIC_FEATURE_PHASE_90` / `FEATURE_PHASE_90` | Poll signal subtype with 2–6 options and one active vote per wallet | off | Unset var, restart — poll composer stays hidden and vote endpoint returns 404; poll data remains intact |
+| `phase-91` | `NEXT_PUBLIC_FEATURE_PHASE_91` / `FEATURE_PHASE_91` | Immutable moderation audit events with moderator wallet and signature | off | Unset var, restart — phase-113 moderation retains legacy behavior and audit reads return 404; records remain intact |
+| `phase-107` | `NEXT_PUBLIC_FEATURE_PHASE_107` / `FEATURE_PHASE_107` | AI story-arc continuity check against a world's recent narratives (Gemini) | off | Unset var, restart — generation skips the check, narratives save unconditionally as before |
+| `phase-111` | `NEXT_PUBLIC_FEATURE_PHASE_111` / `FEATURE_PHASE_111` | Localized narrative caching per (tokenId, lang) with short TTL | off | Unset var, restart — reads bypass the cache and hit the JSON store directly |
+| `phase-113` | `NEXT_PUBLIC_FEATURE_PHASE_113` / `FEATURE_PHASE_113` | Narrative content moderation with takedown/restore flow for signals | off | Unset var, restart — moderate endpoint returns 404, taken-down signals remain visible (data untouched) |
+| `phase-114` | `NEXT_PUBLIC_FEATURE_PHASE_114` / `FEATURE_PHASE_114` | Achievement timeline visualization (chronological world-event view) | off | Unset var, restart — `timeline` field omitted from `/api/achievements`, badge grid unchanged |
+| `phase-116` | `NEXT_PUBLIC_FEATURE_PHASE_116` / `FEATURE_PHASE_116` | Narrative contributor attribution & credit ledger (co-author on-chain credit) | off | Unset var, restart — ledger reads return empty, writes no-op; JSON sidecar remains on disk (no ledger revert) |
+| `phase-117` | `NEXT_PUBLIC_FEATURE_PHASE_117` / `FEATURE_PHASE_117` | Multi-gateway IPFS pinning with redundancy (quorum, gateway fallback) | off | Unset var, restart — pin reverts to single Pinata gateway, avatar reads use legacy single URL |
+| `phase-119` | `NEXT_PUBLIC_FEATURE_PHASE_119` / `FEATURE_PHASE_119` | CID content-addressing cache with integrity checks (tamper-evident) | off | Unset var, restart — cache disabled, verification skipped; cached files remain inert |
+| `phase-120` | `NEXT_PUBLIC_FEATURE_PHASE_120` / `FEATURE_PHASE_120` | IPFS upload retry with exponential backoff + checksum verification | off | Unset var, restart — upload reverts to single-shot Pinata POST, no retry/checksum; prior pins remain on IPFS |
+| `phase-121` | `NEXT_PUBLIC_FEATURE_PHASE_121` / `FEATURE_PHASE_121` | Gateway health dashboard with latency scoring | off | Unset var, restart — dashboard returns 404, protocol falls back to static gateway list |
+| `phase-122` | `NEXT_PUBLIC_FEATURE_PHASE_122` / `FEATURE_PHASE_122` | Off-chain metadata delta storage (reduce on-chain rent) | off | Unset var, restart — verify falls back to on-chain `token_uri`, off-chain files remain on disk (no ledger revert) |
+| `phase-123` | `NEXT_PUBLIC_FEATURE_PHASE_123` / `FEATURE_PHASE_123` | IPFS timeout fallback chain across providers | off | Unset var, restart — reverts to 8s sequential fallback; no data migration |
+| `phase-124` | `NEXT_PUBLIC_FEATURE_PHASE_124` / `FEATURE_PHASE_124` | Metadata version migration tool (v1→v2) | off | Unset var, restart — v2 payloads remain readable as v1 where additive; no destructive rewrite without `--apply` |
+| `phase-134` | `NEXT_PUBLIC_FEATURE_PHASE_134` / `FEATURE_PHASE_134` | Rate-limit-aware batch trustline submission to Horizon (bounded concurrency + 429/503 backoff) | off | Unset var, restart — each XDR submits immediately and sequentially with no retry (pre-phase-134 behavior) |
+| `phase-135` | `NEXT_PUBLIC_FEATURE_PHASE_135` / `FEATURE_PHASE_135` | Cached wallet/explore NFT ownership index (LRU) with stale-on-error fallback | off | Unset var, restart — no cache, no stale degrade; both routes revert to their pre-phase-135 behavior exactly |
+| `phase-82` | `NEXT_PUBLIC_FEATURE_PHASE_82` / `FEATURE_PHASE_82` | Signal edit history: pre-edit title/body snapshot on every author edit, with atomic SQLite version checks; API edits require `If-Match` and return `409` on stale versions | off | Unset var, restart — `PATCH /api/signals/[id]` and the history route become unavailable; existing `signal_versions` rows remain on disk (no migration to undo) |
+| `phase-83` | `NEXT_PUBLIC_FEATURE_PHASE_83` / `FEATURE_PHASE_83` | Emoji-reaction aggregation on signals (curated set, toggle per wallet) with a 20/60s per-wallet rate limit | off | Unset var, restart — reactions route returns 404; existing `signal_reactions` rows remain on disk (no migration to undo) |
+| `phase-139` | `NEXT_PUBLIC_FEATURE_PHASE_139` / `FEATURE_PHASE_139` | Collection-level offer books aggregated from per-token offers, plus bulk-bid across a collection's listings | off | Unset var, restart — offer-book/bulk-bid route returns 404; per-listing offers (`/api/market/[id]/offers`) are unaffected either way |
+| `phase-140` | `NEXT_PUBLIC_FEATURE_PHASE_140` / `FEATURE_PHASE_140` | Royalty enforcement on secondary sales: creator/seller split computed and ledgered at offer-accept time | off | Unset var, restart — listing creation stops accepting `creator_wallet`/`royalty_bps`; offer-accept stops computing a split (100% to seller, pre-140 behavior); existing `royalty_payouts` rows are historical record |
+
+Flags are read via `lib/feature-flags.ts:isFeatureEnabled`. Client flags use `NEXT_PUBLIC_*`, server also accepts `FEATURE_*`. Zero regression when off.
+
+## 11) Change-management rules
 
 - Architectural changes require updates to:
   - `PROJECT_ARCHITECTURE.md` (this file)
   - `docs/TECHNICAL.md`
   - relevant API docs
 - Contract/address changes require synchronized env and docs updates.
+- Flag-gated features must document rollback in this table and in `docs/TECHNICAL.md` § Feature Flags.

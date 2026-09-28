@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getNarrativeForToken } from "@/lib/narrative-world-store"
+import { getNarrativeForTokenCached } from "@/lib/narrative-world-store"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ token_id: string }> },
 ) {
   const { token_id } = await context.params
@@ -14,6 +14,7 @@ export async function GET(
     return NextResponse.json({ error: "token_id inválido" }, { status: 400 })
   }
 
-  const narrative = await getNarrativeForToken(tokenId)
+  const lang = request.nextUrl.searchParams.get("lang")?.trim() || "en"
+  const narrative = await getNarrativeForTokenCached(tokenId, lang)
   return NextResponse.json({ narrative })
 }

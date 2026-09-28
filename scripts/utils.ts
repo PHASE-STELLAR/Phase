@@ -2,7 +2,7 @@
  * Utilidades compartidas para scripts de PHASE Protocol
  */
 
-import { Horizon, SorobanRpc, Contract, TransactionBuilder, Networks, Asset, Operation, Keypair, Transaction } from '@stellar/stellar-sdk';
+import { Horizon, rpc, Contract, TransactionBuilder, Networks, Asset, Operation, Keypair, Transaction } from '@stellar/stellar-sdk';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
@@ -18,7 +18,7 @@ export const TOKEN_ICON_PATH = process.env.TOKEN_ICON_PATH || '/phaser-liq-token
 export const TESTING_SECRET_KEY = process.env.TESTING_SECRET_KEY;
 
 // RPC client
-export const sorobanRpc = new SorobanRpc.Server(RPC_URL, { allowHttp: true });
+export const sorobanRpc = new rpc.Server(RPC_URL, { allowHttp: true });
 export const horizon = new Horizon.Server('https://horizon-testnet.stellar.org');
 
 // Contract IDs
@@ -60,7 +60,7 @@ export const waitForTransaction = async (hash: string): Promise<any> => {
   while (attempts < maxAttempts) {
     result = await sorobanRpc.getTransaction(hash);
 
-    if (result.status !== SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+    if (result.status !== rpc.Api.GetTransactionStatus.NOT_FOUND) {
       return result;
     }
 

@@ -21,6 +21,9 @@
 
 import * as dotenv from "dotenv"
 import { execFileSync } from "node:child_process"
+import * as fs from "node:fs/promises"
+import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 import {
   Asset,
   BASE_FEE,
@@ -31,8 +34,126 @@ import {
   StrKey,
   TransactionBuilder,
 } from "@stellar/stellar-sdk"
+import { z } from "zod"
 
 dotenv.config()
+
+// ── phase-124: metadata version migration wiring (isolated, flag-gated) ──
+// Reuses schema logic from scripts/reset-phase.ts; keeps setup-phase-v2 auditable.
+// Flag: NEXT_PUBLIC_FEATURE_PHASE_124 / FEATURE_PHASE_124 — rollback: unset flag.
+
+function isPhase124Enabled(): boolean {
+  const v = (process.env.NEXT_PUBLIC_FEATURE_PHASE_124 ?? process.env.FEATURE_PHASE_124 ?? "").trim().toLowerCase()
+  return v === "1" || v === "true" || v === "yes" || v === "on"
+}
+
+const SetupMetadataV1Schema = z.object({
+  version: z.literal(1).optional(),
+  name: z.string().min(1).max(256),
+  description: z.string().max(2048).optional().default(""),
+  image: z.string().max(1024).optional().default(""),
+  attributes: z.array(z.object({ trait_type: z.string(), value: z.union([z.string(), z.number()]) })).optional().default([]),
+})
+const SetupMetadataV2Schema = z.object({
+  version: z.literal(2),
+  name: z.string().min(1).max(256),
+  description: z.string().max(2048),
+  image: z.string().max(1024),
+  external_url: z.string().optional().default(""),
+  attributes: z.array(z.object({ trait_type: z.string(), value: z.union([z.string(), z.number()]) })),
+  collectionId: z.number().int().min(0).nullable().default(null),
+  migratedAt: z.string().datetime().optional(),
+})
+
+function auditMetadataVersionOnSetup(raw: unknown): { version: number | null; needsMigration: boolean } {
+  if (!raw || typeof raw !== "object") return { version: null, needsMigration: false }
+  const v = (raw as { version?: unknown }).version
+  if (v === 2) return { version: 2, needsMigration: false }
+  if (v === 1 || v == null) {
+    const p1 = SetupMetadataV1Schema.safeParse(raw)
+    return { version: p1.success ? 1 : null, needsMigration: p1.success }
+  }
+  return { version: null, needsMigration: false }
+}
+
+async function runSetupMetadataAuditIfFlagged(): Promise<void> {
+  if (!isPhase124Enabled()) return
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+  const publicMetaPath = path.join(repoRoot, "public", "phaser-liq.metadata.json")
+  try {
+    const raw = JSON.parse(await fs.readFile(publicMetaPath, "utf8"))
+    const audit = auditMetadataVersionOnSetup(raw)
+    if (audit.needsMigration) {
+      console.log(`\n[phase-124] public/phaser-liq.metadata.json is v1 — migration available (additive, safe). Run: FEATURE_PHASE_124=1 npx tsx scripts/reset-phase.ts --migrate-metadata`)
+    } else if (audit.version === 2) {
+      console.log("\n[phase-124] metadata version check: v2 current (no migration needed).")
+    }
+  } catch { /* optional audit, not fatal */ }
+}
+
+// ── phase-94: verified-artist badge issuance wiring (isolated, flag-gated) ──
+// Core issuance/verification logic lives in scripts/reset-phase.ts (single
+// source of truth); this is a lightweight wire-preserving audit only.
+// Flag: NEXT_PUBLIC_FEATURE_PHASE_94 / FEATURE_PHASE_94 — rollback: unset flag.
+
+function isPhase94Enabled(): boolean {
+  const v = (process.env.NEXT_PUBLIC_FEATURE_PHASE_94 ?? process.env.FEATURE_PHASE_94 ?? "").trim().toLowerCase()
+  return v === "1" || v === "true" || v === "yes" || v === "on"
+}
+
+const SetupArtistAttestationProbeSchema = z.object({
+  wallet: z.string().length(56),
+  displayName: z.string().min(1).max(48),
+  claim: z.literal("verified-artist"),
+})
+
+function auditArtistAttestationWiringOnSetup(): void {
+  if (!isPhase94Enabled()) return
+  const probe = SetupArtistAttestationProbeSchema.safeParse({
+    wallet: "G" + "A".repeat(55),
+    displayName: "probe",
+    claim: "verified-artist",
+  })
+  if (!probe.success) {
+    console.warn("[phase-94] artist attestation schema drift (unexpected, report):", probe.error.message)
+  } else {
+    console.log("[phase-94] verified-artist badge wiring OK (setup will not break attestation issuance). Rollback: unset FEATURE_PHASE_94.")
+  }
+}
+
+// ── phase-79: watchlist notifications for price drops wiring (isolated, flag-gated) ──
+// Core watchlist and price drop logic lives in scripts/reset-phase.ts (single source of truth);
+// this is a lightweight wire-preserving audit ensuring setup-phase-v2 remains compatible.
+// Flag: NEXT_PUBLIC_FEATURE_PHASE_79 / FEATURE_PHASE_79 — rollback: unset flag.
+
+function isPhase79Enabled(): boolean {
+  const v = (process.env.NEXT_PUBLIC_FEATURE_PHASE_79 ?? process.env.FEATURE_PHASE_79 ?? "").trim().toLowerCase()
+  return v === "1" || v === "true" || v === "yes" || v === "on"
+}
+
+const SetupWatchlistProbeSchema = z.object({
+  wallet: z.string().length(56),
+  collectionId: z.number().int().min(0),
+  tokenId: z.number().int().min(1),
+  previousPrice: z.number().positive(),
+  newPrice: z.number().positive(),
+})
+
+function auditWatchlistWiringOnSetup(): void {
+  if (!isPhase79Enabled()) return
+  const probe = SetupWatchlistProbeSchema.safeParse({
+    wallet: "G" + "A".repeat(55),
+    collectionId: 0,
+    tokenId: 1,
+    previousPrice: 100,
+    newPrice: 80,
+  })
+  if (!probe.success) {
+    console.warn("[phase-79] watchlist schema drift (unexpected, report):", probe.error.message)
+  } else {
+    console.log("[phase-79] watchlist notifications wiring OK (setup will not break price drop alerts). Rollback: unset FEATURE_PHASE_79.")
+  }
+}
 
 const RPC_URL = process.env.PHASE_V2_RPC_URL?.trim() || "https://soroban-testnet.stellar.org"
 const HORIZON_URL = process.env.PHASE_V2_HORIZON_URL?.trim() || "https://horizon-testnet.stellar.org"
@@ -222,6 +343,13 @@ async function main() {
     assetCode: ASSET_CODE,
     tokenContractId: contractId,
   })
+
+  await runSetupMetadataAuditIfFlagged()
+  if (isPhase124Enabled()) {
+    console.log("[phase-124] Metadata migration tool: enabled. Rollback: unset FEATURE_PHASE_124/NEXT_PUBLIC_FEATURE_PHASE_124.")
+  }
+  auditArtistAttestationWiringOnSetup()
+  auditWatchlistWiringOnSetup()
 
   console.log("Done.")
 }

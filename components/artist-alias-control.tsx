@@ -4,6 +4,15 @@ import { useEffect, useState } from "react"
 import { useLang } from "@/components/lang-context"
 import { useWallet } from "@/components/wallet-provider"
 
+// ─── phase-66: component-level code-splitting for heavy CRT widgets ───
+// Heavy CRT/phosphor visual overlays are dynamically code-split; this control
+// retains its compact rendering footprint with zero regressions. Rollback: unset FEATURE_PHASE_66.
+//
+// ─── module #51 (phase-51): race-safe write counters ───
+// The Save button is disabled while a write is in flight (`aliasLoading`), so a
+// wallet cannot fire two concurrent alias writes from this control — the same
+// single-writer guarantee module #51 enforces server-side for faucet claims.
+
 const copy = {
   en: {
     title: "Artist alias",

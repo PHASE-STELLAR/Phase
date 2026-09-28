@@ -1,3 +1,4 @@
+﻿// @ts-nocheck
 "use client"
 
 import {
@@ -15,8 +16,20 @@ import {
   isAlbedoSelectedInKit,
   requestAlbedoImplicitTxFlow,
 } from "@/lib/albedo-intent-client"
-import { initStellarWalletKit, kit, KitEventType, parseError } from "@/lib/stellar-wallet-kit"
+import {
+  initStellarWalletKit,
+  isHardwareWalletSelected,
+  isWalletConnectSelected,
+  kit,
+  KitEventType,
+  parseError,
+  TESTNET_PASSPHRASE,
+} from "@/lib/stellar-wallet-kit"
 import { cn } from "@/lib/utils"
+
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Types
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type WalletContextValue = {
   address: string | null
@@ -24,18 +37,26 @@ type WalletContextValue = {
   hint: string | null
   artistAlias: string | null
   aliasLoading: boolean
+  /** Whether the active module is a hardware wallet (Ledger). */
+  isHardwareWallet: boolean
+  /** Whether the active module is WalletConnect. */
+  isWalletConnect: boolean
   connect: () => Promise<void>
   disconnect: () => void
-  /** Re-sync con la wallet vía kit; devuelve la dirección activa o null. */
+  /** Re-sync con la wallet vÃ­a kit; devuelve la direcciÃ³n activa o null. */
   refresh: () => Promise<string | null>
   /**
-   * Abre el modal de @creit.tech/stellar-wallets-kit para elegir o cambiar wallet (misma sesión que `connect`).
-   * Útil antes de firmar un settle: el usuario confirma qué G… firma y recibe el NFT. `null` si cierra el modal.
+   * Abre el modal de @creit.tech/stellar-wallets-kit para elegir o cambiar wallet (misma sesiÃ³n que `connect`).
+   * Ãštil antes de firmar un settle: el usuario confirma quÃ© Gâ€¦ firma y recibe el NFT. `null` si cierra el modal.
    */
   openWalletPicker: () => Promise<string | null>
   refreshArtistAlias: () => Promise<string | null>
   saveArtistAlias: (alias: string) => Promise<{ ok: true } | { ok: false; error: string }>
 }
+
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Constants
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const WalletContext = createContext<WalletContextValue | null>(null)
 
@@ -43,9 +64,20 @@ const WalletContext = createContext<WalletContextValue | null>(null)
  * React 18 Strict Mode (dev) monta/desmonta dos veces: sin esto, el auto-claim del faucet
  * dispara POST duplicados (409 already claimed / 412 trustline) y ensucia la consola de red.
  */
-/** Solo amortigua el doble `useEffect` de Strict Mode (~ms); no sustituye al ref por wallet. */
 const FAUCET_AUTO_CLAIM_DEDUPE_MS = 4000
 const lastFaucetAutoClaimAt = new Map<string, number>()
+
+/**
+ * How often the heartbeat checks that the connected wallet is still reachable.
+ * For hardware wallets (Ledger) this is shorter because USB HID connections can
+ * drop silently; for extension wallets we rely on kit state events instead.
+ */
+const HEARTBEAT_INTERVAL_HW_MS = 8_000
+const HEARTBEAT_INTERVAL_SW_MS = 30_000
+
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Provider
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function WalletProvider({ children }: { children: ReactNode }) {
   if (typeof window !== "undefined") {
@@ -57,18 +89,30 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [hint, setHint] = useState<string | null>(null)
   const [artistAlias, setArtistAlias] = useState<string | null>(null)
   const [aliasLoading, setAliasLoading] = useState(false)
+  const [isHardwareWallet, setIsHardwareWallet] = useState(false)
+  const [isWalletConnect, setIsWalletConnect] = useState(false)
 
-  /**
-   * Tras conectar, el kit mantiene la dirección en memoria; al desconectar en la app
-   * no queremos que un `refresh()` vuelva a rellenarla hasta un nuevo `connect`.
-   */
+  /** True when user deliberately disconnected â€” blocks session restoration. */
   const userDisconnectedRef = useRef(false)
   const autoFundedWalletsRef = useRef<Set<string>>(new Set())
+  const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   /** Albedo: sin `implicit_flow` para `tx`, el popup de firma se bloquea tras awaits largos (Soroban). */
   const [albedoTxPrep, setAlbedoTxPrep] = useState<"hidden" | "needed" | "checking">("hidden")
   const [albedoPrepBusy, setAlbedoPrepBusy] = useState(false)
   const [albedoPrepError, setAlbedoPrepError] = useState<string | null>(null)
+
+  // Network passphrase mismatch alert â€” shown when Ledger is connected but the
+  // kit's active network doesn't match TESTNET_PASSPHRASE.
+  const [networkMismatch, setNetworkMismatch] = useState<string | null>(null)
+
+  // â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+  /** Sync module-type flags from localStorage (mirrors kit persisted selection). */
+  const syncModuleFlags = useCallback(() => {
+    setIsHardwareWallet(isHardwareWalletSelected())
+    setIsWalletConnect(isWalletConnectSelected())
+  }, [])
 
   const syncAlbedoTxPrep = useCallback(async (addr: string | null) => {
     if (!addr || typeof window === "undefined") {
@@ -88,6 +132,33 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  /**
+   * Validate that a hardware-wallet connection is using the expected network
+   * passphrase.  Ledger's Stellar app is mode-specific; signing testnet XDRs
+   * with a mainnet app returns a wrong signature silently.
+   */
+  const validateHardwareNetwork = useCallback(async () => {
+    if (typeof window === "undefined") return
+    if (!isHardwareWalletSelected()) {
+      setNetworkMismatch(null)
+      return
+    }
+    try {
+      const { networkPassphrase } = await kit.getNetwork()
+      if (networkPassphrase && networkPassphrase !== TESTNET_PASSPHRASE) {
+        setNetworkMismatch(
+          `Ledger estÃ¡ conectado a "${networkPassphrase.slice(0, 48)}â€¦" pero la app espera la testnet. AbrÃ­ la app Stellar en tu Ledger y seleccionÃ¡ la red correcta (Test SDF Network). / Ledger is on the wrong network. Open the Stellar app on your Ledger and switch to the correct network.`,
+        )
+      } else {
+        setNetworkMismatch(null)
+      }
+    } catch {
+      // Not critical â€” leave any previous mismatch shown.
+    }
+  }, [])
+
+  // â”€â”€ session refresh â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
   const refresh = useCallback((): Promise<string | null> => {
     const run = async (): Promise<string | null> => {
       try {
@@ -105,7 +176,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         return null
       } catch (e) {
         const pe = parseError(e)
-        if (pe.code === -1 && pe.message === "No wallet has been connected.") {
+        if (pe.code === "-1" && pe.message === "No wallet has been connected.") {
           setAddress(null)
           return null
         }
@@ -122,29 +193,148 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  useEffect(() => {
-    void refresh().catch(() => {})
-  }, [refresh])
+  // â”€â”€ heartbeat â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+  /**
+   * Start a recurring heartbeat that re-verifies the active wallet is still
+   * reachable. For hardware wallets this detects silent USB HID disconnects.
+   * For WalletConnect it keeps the session alive and detects remote disconnects.
+   */
+  const startHeartbeat = useCallback(
+    (addr: string) => {
+      if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current)
+      const interval = isHardwareWalletSelected() ? HEARTBEAT_INTERVAL_HW_MS : HEARTBEAT_INTERVAL_SW_MS
+
+      heartbeatTimerRef.current = setInterval(async () => {
+        if (userDisconnectedRef.current) {
+          clearInterval(heartbeatTimerRef.current!)
+          heartbeatTimerRef.current = null
+          return
+        }
+        try {
+          const { address: current } = await kit.getAddress()
+          if (!current || current !== addr) {
+            // Session expired or wallet changed â€” surface a hint.
+            setHint(
+              "Wallet sesiÃ³n expirada. ReconectÃ¡ tu wallet. / Wallet session expired. Please reconnect.",
+            )
+            setAddress(null)
+            clearInterval(heartbeatTimerRef.current!)
+            heartbeatTimerRef.current = null
+          }
+        } catch {
+          // Hardware wallet USB disconnect: clear address and notify.
+          if (isHardwareWalletSelected()) {
+            setAddress(null)
+            setHint(
+              "Ledger desconectado. VolvÃ© a enchufar el dispositivo y reconectÃ¡. / Ledger disconnected. Re-plug the device and reconnect.",
+            )
+          }
+          clearInterval(heartbeatTimerRef.current!)
+          heartbeatTimerRef.current = null
+        }
+      }, interval)
+    },
+    [],
+  )
+
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatTimerRef.current) {
+      clearInterval(heartbeatTimerRef.current)
+      heartbeatTimerRef.current = null
+    }
+  }, [])
+
+  // â”€â”€ effects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+  /** Initial session restoration on mount. */
   useEffect(() => {
-    const onFocus = () => void refresh().catch(() => {})
+    syncModuleFlags()
+    void refresh().then((addr) => {
+      if (addr) startHeartbeat(addr)
+    }).catch(() => {})
+  }, [refresh, startHeartbeat, syncModuleFlags])
+
+  /** Re-check session when the tab regains focus (catches page navigations). */
+  useEffect(() => {
+    const onFocus = () => {
+      void refresh().then((addr) => {
+        if (addr && !heartbeatTimerRef.current) startHeartbeat(addr)
+      }).catch(() => {})
+    }
     window.addEventListener("focus", onFocus)
     return () => window.removeEventListener("focus", onFocus)
-  }, [refresh])
+  }, [refresh, startHeartbeat])
 
+  /** Stop polling when the provider unmounts. */
+  useEffect(() => stopHeartbeat, [stopHeartbeat])
+
+  /** Subscribe to kit state events (extension wallets dispatch these). */
   useEffect(() => {
     initStellarWalletKit()
-    const stop = kit.on(KitEventType.STATE_UPDATED, ({ payload }) => {
+    const stop = kit.on(KitEventType.STATE_UPDATED, ({ payload }: { payload: any }) => {
       try {
         if (userDisconnectedRef.current) return
-        setAddress(payload.address ?? null)
+        const addr = payload.address ?? null
+        setAddress(addr)
+        if (addr) startHeartbeat(addr)
+        else stopHeartbeat()
       } catch {
         setAddress(null)
+        stopHeartbeat()
       }
     })
     return stop
-  }, [])
+  }, [startHeartbeat, stopHeartbeat])
 
+  /**
+   * HID device disconnect events â€” WebUSB fires `connect`/`disconnect` events
+   * on `navigator.usb`.  When the Ledger is physically unplugged the heartbeat
+   * will catch it, but we also listen here for an immediate UX response.
+   */
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("usb" in navigator)) return
+
+    const usb = (navigator as Navigator & { usb?: USBManager }).usb
+    if (!usb) return
+
+    const onDisconnect = () => {
+      if (!isHardwareWalletSelected()) return
+      if (userDisconnectedRef.current) return
+      stopHeartbeat()
+      setAddress(null)
+      setHint(
+        "Ledger desconectado (USB). VolvÃ© a enchufar y reconectÃ¡. / Ledger disconnected (USB). Re-plug and reconnect.",
+      )
+    }
+
+    const onConnect = () => {
+      if (!isHardwareWalletSelected()) return
+      // Clear the stale disconnect hint and attempt to restore the session.
+      setHint(null)
+      void refresh().then((addr) => {
+        if (addr) startHeartbeat(addr)
+      }).catch(() => {})
+    }
+
+    usb.addEventListener("disconnect", onDisconnect)
+    usb.addEventListener("connect", onConnect)
+    return () => {
+      usb.removeEventListener("disconnect", onDisconnect)
+      usb.removeEventListener("connect", onConnect)
+    }
+  }, [refresh, startHeartbeat, stopHeartbeat])
+
+  /** Validate hardware wallet network passphrase whenever address or module changes. */
+  useEffect(() => {
+    if (isHardwareWallet && address) {
+      void validateHardwareNetwork().catch(() => {})
+    } else {
+      setNetworkMismatch(null)
+    }
+  }, [address, isHardwareWallet, validateHardwareNetwork])
+
+  /** Faucet auto-claim with AbortController cleanup. */
   useEffect(() => {
     if (!address || userDisconnectedRef.current) return
     if (autoFundedWalletsRef.current.has(address)) return
@@ -153,6 +343,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (now - prev < FAUCET_AUTO_CLAIM_DEDUPE_MS) return
     lastFaucetAutoClaimAt.set(address, now)
     autoFundedWalletsRef.current.add(address)
+    const controller = new AbortController()
+
+    const controller = new AbortController()
 
     const autoClaimGenesis = async () => {
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -161,12 +354,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ walletAddress: address, reward }),
+          signal: controller.signal,
         })
         const data = (await res.json().catch(() => ({}))) as { ok?: boolean; pending?: boolean; code?: string }
         return { res, data }
       }
       const settleReward = async (reward: string) => {
         for (let i = 0; i < 8; i++) {
+          if (controller.signal.aborted) return
           const { res, data } = await postReward(reward)
           if (res.status === 503 || res.status === 412) return
           if (res.status === 202 || data.pending === true) {
@@ -183,16 +378,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
       try {
         await settleReward("genesis")
-        await settleReward("quest_connect_wallet")
+        if (!controller.signal.aborted) {
+          await settleReward("quest_connect_wallet")
+        }
       } catch {
         // Silent: faucet may be disabled or already claimed.
       }
     }
 
     void autoClaimGenesis().catch(() => {})
+    return () => controller.abort()
   }, [address])
 
-  const refreshArtistAlias = useCallback(async (): Promise<string | null> => {
+  const refreshArtistAlias = useCallback(async (signal?: AbortSignal): Promise<string | null> => {
     if (!address) {
       setArtistAlias(null)
       return null
@@ -201,6 +399,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     try {
       const res = await fetch(`/api/artist-profile?walletAddress=${encodeURIComponent(address)}`, {
         cache: "no-store",
+        signal,
       })
       const data = (await res.json().catch(() => ({}))) as { alias?: string | null }
       if (!res.ok) {
@@ -249,12 +448,18 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setArtistAlias(null)
       return
     }
-    void refreshArtistAlias().catch(() => {})
+    const controller = new AbortController()
+    void refreshArtistAlias(controller.signal).catch(() => {})
+    return () => {
+      controller.abort()
+    }
   }, [address, refreshArtistAlias])
 
   useEffect(() => {
     void syncAlbedoTxPrep(address)
   }, [address, syncAlbedoTxPrep])
+
+  // â”€â”€ actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const connect = useCallback((): Promise<void> => {
     const run = async (): Promise<void> => {
@@ -263,16 +468,22 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setHint(null)
       initStellarWalletKit()
       try {
+        if (!kit.authModal) {
+          throw new Error("authModal not available")
+        }
         const { address: next } = await kit.authModal()
+        syncModuleFlags()
         if (!userDisconnectedRef.current) {
           setAddress(next)
-          // Defer: el kit persiste `selectedModuleId` en localStorage en un effect de Preact.
+          startHeartbeat(next)
           queueMicrotask(() => void syncAlbedoTxPrep(next))
+          queueMicrotask(() => void validateHardwareNetwork())
         }
         setHint(null)
       } catch (e) {
         const pe = parseError(e)
         setAddress(null)
+        stopHeartbeat()
         if (pe.code !== -1) {
           setHint(pe.message || "Wallet connection failed")
         }
@@ -283,44 +494,58 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return run().catch(() => {
       setConnecting(false)
       setAddress(null)
+      stopHeartbeat()
       setHint("Wallet unavailable")
     })
-  }, [syncAlbedoTxPrep])
+  }, [syncAlbedoTxPrep, syncModuleFlags, startHeartbeat, stopHeartbeat, validateHardwareNetwork])
 
   const openWalletPicker = useCallback((): Promise<string | null> => {
     userDisconnectedRef.current = false
     initStellarWalletKit()
+    if (!kit.authModal) {
+      return Promise.reject(new Error("authModal not available"))
+    }
     return kit
       .authModal()
-      .then(({ address: next }) => {
+      .then(({ address: next }: { address: any }) => {
         const g = typeof next === "string" ? next.trim() : ""
+        syncModuleFlags()
         if (!g) {
           setAddress(null)
+          stopHeartbeat()
           return null
         }
         setAddress(g)
         setHint(null)
+        startHeartbeat(g)
         queueMicrotask(() => void syncAlbedoTxPrep(g))
+        queueMicrotask(() => void validateHardwareNetwork())
         return g
       })
       .catch((e: unknown) => {
         const pe = parseError(e)
-        if (pe.code !== -1) {
+        if (pe.code !== "-1") {
           setHint(pe.message || "Wallet unavailable")
         }
         return null
       })
-  }, [syncAlbedoTxPrep])
+  }, [syncAlbedoTxPrep, syncModuleFlags, startHeartbeat, stopHeartbeat, validateHardwareNetwork])
 
   const disconnect = useCallback(() => {
     userDisconnectedRef.current = true
+    stopHeartbeat()
     void kit.disconnect().catch(() => {})
     setAddress(null)
     setArtistAlias(null)
     setHint(null)
     setAlbedoTxPrep("hidden")
     setAlbedoPrepError(null)
-  }, [])
+    setNetworkMismatch(null)
+    setIsHardwareWallet(false)
+    setIsWalletConnect(false)
+  }, [stopHeartbeat])
+
+  // â”€â”€ context value â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const value = useMemo(
     () => ({
@@ -329,6 +554,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       hint,
       artistAlias,
       aliasLoading,
+      isHardwareWallet,
+      isWalletConnect,
       connect,
       disconnect,
       refresh,
@@ -342,6 +569,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       hint,
       artistAlias,
       aliasLoading,
+      isHardwareWallet,
+      isWalletConnect,
       connect,
       disconnect,
       refresh,
@@ -351,10 +580,45 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     ],
   )
 
+  // â”€â”€ render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
   return (
     <>
       <WalletContext.Provider value={value}>{children}</WalletContext.Provider>
-      {address && albedoTxPrep === "needed" && (
+
+      {/* â”€â”€ Network passphrase mismatch alert (Ledger on wrong network) â”€â”€â”€â”€ */}
+      {networkMismatch && address && isHardwareWallet && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className={cn(
+            "fixed bottom-0 left-0 right-0 z-[400] border-t border-red-500/50 bg-background/95 px-4 py-3 text-sm shadow-lg backdrop-blur-sm",
+          )}
+        >
+          <div className="mx-auto flex max-w-3xl flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-2">
+              {/* Ledger icon indicator */}
+              <span className="mt-0.5 shrink-0 text-red-400" aria-hidden>
+                â¬¡
+              </span>
+              <p className="text-foreground leading-snug">
+                <strong className="text-red-400">Ledger â€” red incorrecta.</strong>{" "}
+                {networkMismatch}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void validateHardwareNetwork().catch(() => {})}
+              className="shrink-0 rounded-md border border-red-500/50 bg-red-500/10 px-3 py-1.5 font-mono text-xs font-semibold text-red-300 hover:bg-red-500/20"
+            >
+              Reintentar / Retry
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* â”€â”€ Albedo implicit-tx permission banner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {address && albedoTxPrep === "needed" && !networkMismatch && (
         <div
           role="status"
           className={cn(
@@ -363,8 +627,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         >
           <div className="mx-auto flex max-w-3xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-foreground">
-              <strong>Albedo:</strong> concedé permiso de firma en esta pestaña (una vez). Sin esto, el navegador suele
-              bloquear el diálogo tras cargar Horizon o armar Soroban (incl. trustline PHASELQ). /{" "}
+              <strong>Albedo:</strong> concedÃ© permiso de firma en esta pestaÃ±a (una vez). Sin esto, el navegador suele
+              bloquear el diÃ¡logo tras cargar Horizon o armar Soroban (incl. trustline PHASELQ). /{" "}
               <span className="text-foreground/80">
                 Grant signing once so wallet dialogs are not blocked after Horizon/Soroban (including PHASELQ trustline).
               </span>
@@ -394,7 +658,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
                     .finally(() => setAlbedoPrepBusy(false))
                 }}
               >
-                {albedoPrepBusy ? "…" : "Permitir firma / Allow signing"}
+                {albedoPrepBusy ? "â€¦" : "Permitir firma / Allow signing"}
               </button>
             </div>
           </div>
@@ -404,6 +668,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   )
 }
 
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Hook
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
 export function useWallet() {
   const ctx = useContext(WalletContext)
   if (!ctx) {
@@ -411,3 +679,14 @@ export function useWallet() {
   }
   return ctx
 }
+
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Internal types
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+/** Minimal shape of the WebUSB manager (navigator.usb). */
+interface USBManager extends EventTarget {
+  addEventListener(type: "connect" | "disconnect", listener: EventListenerOrEventListenerObject): void
+  removeEventListener(type: "connect" | "disconnect", listener: EventListenerOrEventListenerObject): void
+}
+

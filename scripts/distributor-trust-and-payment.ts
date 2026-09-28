@@ -15,6 +15,8 @@
  * Uso:
  *   npm run classic:distributor-trust-and-pay
  *   cd scripts && npm run distributor-trust-and-pay
+ * 
+ * Phase-134: Enhanced with balance monitoring and recommendations
  */
 import * as dotenv from "dotenv"
 import * as path from "node:path"
@@ -183,6 +185,40 @@ async function main() {
   console.log(`  OK — payment. Hash: ${payRes.hash}`)
   console.log(`  ${base}/transactions/${payRes.hash}`)
   console.log(`  ${base}/accounts/${distPub}`)
+  
+  // Phase-134: Show post-payment balances and recommendations
+  console.log("\n=== Post-Payment Status ===")
+  try {
+    const distAccount = await server.loadAccount(distPub)
+    const phaseLiqBalance = distAccount.balances.find(
+      (b: any) => b.asset_code === code && b.asset_issuer === issuerPub
+    )
+    const xlmBalance = distAccount.balances.find((b: any) => b.asset_type === "native")
+    
+    if (phaseLiqBalance) {
+      console.log(`Distributor PHASELQ: ${phaseLiqBalance.balance} ${code}`)
+    }
+    if (xlmBalance) {
+      console.log(`Distributor XLM: ${xlmBalance.balance} XLM`)
+      const xlm = parseFloat(xlmBalance.balance)
+      if (xlm < 50) {
+        console.log(`\n⚠️  WARNING: Distributor XLM is low (${xlm.toFixed(2)} XLM)`)
+        console.log(`   Recommended: Fund with at least 50 XLM for reliable operations`)
+        console.log(`   Friendbot: https://friendbot.stellar.org/?addr=${distPub}`)
+      }
+    }
+    
+    console.log("\n💡 Next Steps:")
+    console.log("   1. Configure FAUCET_DISTRIBUTOR_SECRET_KEY in production")
+    console.log("   2. Set up cron job: /api/cron/faucet-health (hourly)")
+    console.log("   3. Configure webhooks for alerts (optional):")
+    console.log("      - DISCORD_WEBHOOK_URL")
+    console.log("      - TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID")
+    console.log("      - SLACK_WEBHOOK_URL")
+    console.log("   4. Monitor health: GET /api/faucet/health")
+  } catch (e) {
+    console.log("   (Could not fetch post-payment balances)")
+  }
 }
 
 main().catch((e) => {

@@ -7,6 +7,8 @@ import {
   getNarrativeForToken,
 } from "@/lib/narrative-world-store"
 import { createNotification } from "@/lib/notification-store"
+import { checkNarrativeContinuity } from "@/lib/story-arc-continuity"
+import { isLoreVersioningEnabled, recordLoreVersion } from "@/lib/lore-versioning"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -89,7 +91,7 @@ export async function POST(request: NextRequest) {
   const tone = toneInstructions[world.narrator_tone ?? "enigmatic"] ?? toneInstructions["enigmatic"]
 
   const loreInput = typeof body.lore === "string" ? body.lore.trim() : ""
-  const recentNarratives = await getRecentNarrativesForCollection(collectionId, 2)
+  const recentNarratives = await getRecentNarrativesForCollection(collectionId, 5)
   const previousContext =
     recentNarratives.length > 0
       ? `\n\nPrevious narrative connections in this world:\n${recentNarratives.map((n, i) => `${i + 1}. ${n.narrative}`).join("\n")}`
@@ -126,11 +128,28 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `Gemini error: ${msg}` }, { status: 500 })
   }
 
+  const continuity = await checkNarrativeContinuity(
+    world.world_name,
+    narrative,
+    recentNarratives.map((n) => n.narrative),
+  )
+  if (continuity && !continuity.consistent) {
+    return NextResponse.json(
+      { error: `Continuity check failed: ${continuity.reason}`, code: "CONTINUITY_CONTRADICTION" },
+      { status: 409 },
+    )
+  }
+
   await saveNarrativeForToken(tokenId, {
     narrative,
     collection_id: collectionId,
     lore_input: loreInput,
   })
+
+  // phase-106 (spike): record an additive version-history entry, fire-and-forget
+  if (isLoreVersioningEnabled()) {
+    void recordLoreVersion(tokenId, { narrative, lore_input: loreInput }).catch(() => { /* silent */ })
+  }
 
   // Notify world creator if provided (fire-and-forget)
   const creatorWallet = typeof body.creator_wallet === "string" ? body.creator_wallet.trim() : ""

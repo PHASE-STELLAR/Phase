@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  contracts:
+    name: Soroban contracts (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        crate: [mock-token, phase-protocol]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/${{ matrix.crate }}
+      - name: Run contract tests
+        working-directory: contracts/${{ matrix.crate }}
+        run: cargo test
+      - name: Compile release WASM
+        working-directory: contracts/${{ matrix.crate }}
+        run: cargo build --target wasm32-unknown-unknown --release
+
+  web:
+    name: Next.js build & lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Lint
+        # eslint had no config/devDependency before this change (npm run lint
+        # failed outright); now that it runs, ~95 pre-existing errors surface
+        # across unrelated files. Non-blocking until tracked and fixed separately.
+        continue-on-error: true
+        run: npm run lint
+      - name: Type check
+        # Pre-existing type errors exist outside this change's scope; surfaced but
+        # non-blocking until tracked and fixed separately.
+        continue-on-error: true
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_PHASER_TOKEN_ID: ${{ vars.NEXT_PUBLIC_PHASER_TOKEN_ID }}
+          NEXT_PUBLIC_CLASSIC_LIQ_ISSUER: ${{ vars.NEXT_PUBLIC_CLASSIC_LIQ_ISSUER }}
+
+  deploy-staging:
+    name: Deploy contracts to testnet staging
+    needs: contracts
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            contracts/mock-token
+            contracts/phase-protocol
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli --version ^23
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install app dependencies
+        run: npm ci
+      - name: Install scripts dependencies
+        working-directory: scripts
+        run: npm ci
+      - name: Build and optimize phase-protocol
+        run: |
+          cd contracts/phase-protocol
+          cargo build --target wasm32-unknown-unknown --release
+          stellar contract optimize \
+            --wasm target/wasm32-unknown-unknown/release/phase_protocol.wasm \
+            --wasm-out target/wasm32-unknown-unknown/release/phase_protocol.optimized.wasm
+      - name: Deploy phase-protocol (SEP-50) to testnet
+        working-directory: scripts
+        run: npx tsx deploy-phase-sep50.ts
+        env:
+          ADMIN_SECRET_KEY: ${{ secrets.ADMIN_SECRET_KEY }}
+          NEXT_PUBLIC_PHASER_TOKEN_ID: ${{ vars.NEXT_PUBLIC_PHASER_TOKEN_ID }}
+          NEXT_PUBLIC_CLASSIC_LIQ_ISSUER: ${{ vars.NEXT_PUBLIC_CLASSIC_LIQ_ISSUER }}
+          STELLAR_RPC_URL: ${{ vars.STELLAR_RPC_URL }}
+          STELLAR_NETWORK_PASSPHRASE: ${{ vars.STELLAR_NETWORK_PASSPHRASE }}

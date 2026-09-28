@@ -1,11 +1,58 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
+import { nftGridOverscanPx } from "@/lib/nft-grid-virtualization"
+
+// ??? phase-117: multi-gateway fallback client wiring ????????????????????????
+// Preserves original lazy-load + initials fallback. When an image fails,
+// tries alternate gateways for the same CID (redundancy).
+
+const FALLBACK_GATEWAYS = [
+  "https://gateway.pinata.cloud/ipfs",
+  "https://w3s.link/ipfs",
+  "https://dweb.link/ipfs",
+  "https://ipfs.io/ipfs",
+  "https://cloudflare-ipfs.com/ipfs",
+] as const
+
+function extractCidPath(url: string): string | null {
+  const m = url.match(/\/ipfs\/([A-Za-z0-9._\/-]+)/)
+  if (m) return m[1]!
+  const n = url.match(/ipfs:\/\/([A-Za-z0-9._\/-]+)/)
+  if (n) return n[1]!
+  return null
+}
+
+function buildFallbackUrls(original: string): string[] {
+  const cidPath = extractCidPath(original)
+  if (!cidPath) return []
+  // rotate gateways that aren't already the current one
+  const currentGw = original.match(/(https:\/\/[^\/]+\/ipfs)/)?.[1] ?? ""
+  return FALLBACK_GATEWAYS.filter((g) => !original.startsWith(g) && g !== currentGw).map((g) => `${g}/${cidPath}`)
+}
 
 type AvatarData = {
   tokenId: number
   image?: string
   name: string
+  locale?: string
+}
+
+// phase-137: structured error taxonomy — the avatar route may answer with
+// { code, category, retryable } instead of a bare { avatar: null }. A retryable
+// code (upstream timeout / unreachable gateway) earns one silent retry before
+// the component settles on initials.
+type AvatarErrorEnvelope = {
+  avatar: AvatarData | null
+  code?: string
+  category?: string
+  retryable?: boolean
+}
+
+async function fetchAvatarOnce(wallet: string, signal: AbortSignal): Promise<AvatarErrorEnvelope> {
+  const r = await fetch(`/api/profile/avatar?wallet=${encodeURIComponent(wallet)}`, { signal })
+  const data = (await r.json().catch(() => ({ avatar: null }))) as AvatarErrorEnvelope
+  return data
 }
 
 function getInitials(wallet: string, displayName?: string): string {
@@ -33,9 +80,15 @@ export function WalletAvatar({
   const [avatar, setAvatar] = useState<AvatarData | null>(null)
   const [loading, setLoading] = useState(true)
   const [visible, setVisible] = useState(false)
+  const [fallbackIndex, setFallbackIndex] = useState(0)
+  const [fallbackUrls, setFallbackUrls] = useState<string[]>([])
+  const [errorCode, setErrorCode] = useState<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
 
-  // IntersectionObserver for lazy loading
+  // IntersectionObserver for lazy loading.
+  // phase-157 (Module #57): widen the overscan margin when grid virtualization
+  // is enabled so avatars in a large scrolling grid mount just ahead of view
+  // instead of all at once (or too late). Falls back to the legacy 50px.
   useEffect(() => {
     if (!ref.current) return
 
@@ -46,7 +99,7 @@ export function WalletAvatar({
           observer.disconnect()
         }
       },
-      { rootMargin: "50px" }
+      { rootMargin: `${nftGridOverscanPx()}px` }
     )
 
     observer.observe(ref.current)
@@ -57,23 +110,49 @@ export function WalletAvatar({
   useEffect(() => {
     if (!visible || !wallet) return
 
+    const controller = new AbortController()
     let aborted = false
     setLoading(true)
+    setFallbackIndex(0)
+    setFallbackUrls([])
+    setErrorCode(null)
 
-    fetch(`/api/profile/avatar?wallet=${encodeURIComponent(wallet)}`)
-      .then((r) => r.json() as Promise<{ avatar: AvatarData | null }>)
-      .then((data) => {
-        if (!aborted) setAvatar(data.avatar)
-      })
-      .catch(() => {
+    ;(async () => {
+      try {
+        let data = await fetchAvatarOnce(wallet, controller.signal)
+        // phase-137: one silent retry when the taxonomy flags a retryable upstream blip
+        if (!data.avatar && data.retryable) {
+          setErrorCode(data.code ?? null)
+          await new Promise((resolve) => setTimeout(resolve, 400))
+          if (aborted) return
+          data = await fetchAvatarOnce(wallet, controller.signal)
+        }
+        if (aborted) return
+        setAvatar(data.avatar)
+        setErrorCode(data.avatar ? null : data.code ?? null)
+        if (data.avatar?.image) {
+          setFallbackUrls(buildFallbackUrls(data.avatar.image))
+        }
+      } catch {
         // Silently fail - will show initials
-      })
-      .finally(() => {
+      } finally {
         if (!aborted) setLoading(false)
-      })
+      }
+    })()
 
-    return () => { aborted = true }
+    return () => {
+      aborted = true
+      controller.abort()
+    }
   }, [visible, wallet])
+
+  const handleImgError = useCallback(() => {
+    if (fallbackIndex < fallbackUrls.length && avatar?.image) {
+      const nextUrl = fallbackUrls[fallbackIndex]
+      setFallbackIndex((i) => i + 1)
+      setAvatar((prev) => (prev ? { ...prev, image: nextUrl } : prev))
+    }
+  }, [fallbackIndex, fallbackUrls, avatar?.image])
 
   const initials = getInitials(wallet, displayName)
   const hasImage = avatar?.image && avatar.image.length > 0
@@ -89,20 +168,22 @@ export function WalletAvatar({
     )
   }
 
-  // Has NFT image: show circular image
+  // Has NFT image: show circular image (phase-117: fallback on error)
   if (hasImage) {
     return (
       <div
         ref={ref}
         className={`shrink-0 rounded-full overflow-hidden border border-violet-700/40 ${className}`}
         style={{ width: size, height: size }}
-        title={avatar?.name}
+        title={avatar?.locale ? `${avatar.name} (${avatar.locale})` : avatar?.name}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={avatar.image}
           alt={avatar.name}
           className="w-full h-full object-cover"
+          onError={handleImgError}
+          loading="lazy"
         />
       </div>
     )
@@ -120,6 +201,8 @@ export function WalletAvatar({
         background: "#534AB7",
         fontSize: `${fontSize}px`,
       }}
+      data-avatar-error={errorCode ?? undefined}
+      title={errorCode ? `Avatar unavailable (${errorCode})` : undefined}
     >
       {initials}
     </div>

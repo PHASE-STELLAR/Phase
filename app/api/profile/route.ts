@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getProfile, saveProfile } from "@/lib/profile-store"
+import { isProfile2faEnabled, touchesHighValueField, verifyProfileChangeConfirmation } from "@/lib/profile-2fa"
 
 export const dynamic = "force-dynamic"
 
@@ -20,6 +21,8 @@ type ProfileBody = {
   telegram?: unknown
   avatar_token_id?: unknown
   avatar_image_url?: unknown
+  /** Code from POST /api/profile/request-change — only checked when phase-104 is enabled. */
+  confirmation_code?: unknown
 }
 
 function sanitizeHandle(value: unknown, prefix: string): string | undefined {
@@ -40,6 +43,26 @@ export async function POST(request: NextRequest) {
   const wallet = typeof body.wallet === "string" ? body.wallet.trim() : ""
   if (!wallet || wallet.length < 10) {
     return NextResponse.json({ error: "wallet required" }, { status: 400 })
+  }
+
+  // phase-104: require a two-factor confirmation code before applying
+  // high-value profile changes (display name / socials)
+  if (isProfile2faEnabled() && touchesHighValueField(body as Record<string, unknown>)) {
+    const confirmation = verifyProfileChangeConfirmation(
+      wallet,
+      body as Record<string, unknown>,
+      typeof body.confirmation_code === "string" ? body.confirmation_code : undefined,
+    )
+    if (!confirmation.ok) {
+      return NextResponse.json(
+        {
+          error: "confirmation_required",
+          reason: confirmation.reason,
+          hint: "POST /api/profile/request-change first, then resubmit with confirmation_code",
+        },
+        { status: 428 },
+      )
+    }
   }
 
   const display_name =
