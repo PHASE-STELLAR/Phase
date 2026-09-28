@@ -1,5 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { readJsonFile, updateStore, updateStoreWithReader } from "@/lib/json-store";
 import { serverDataJsonPath } from "@/lib/server-data-paths";
 import { createNotification } from "@/lib/notification-store";
 
@@ -79,27 +78,33 @@ function mergeEntries(
   };
 }
 
-async function readStore(): Promise<AchievementStore> {
-  let raw: AchievementStore;
-  try {
-    raw = JSON.parse(
-      await readFile(serverDataJsonPath("achievements"), "utf8"),
-    ) as AchievementStore;
-  } catch {
-    return {};
-  }
+/** Normalizes wallet keys and merges duplicate-cased rows, as the old reader did. */
+function readAchievementStore(raw: unknown): AchievementStore {
+  if (!raw || typeof raw !== "object") return {};
   const store: AchievementStore = {};
-  for (const [wallet, entry] of Object.entries(raw)) {
+  for (const [wallet, entry] of Object.entries(raw as AchievementStore)) {
     const key = walletKey(wallet);
     store[key] = store[key] ? mergeEntries(store[key]!, entry) : entry;
   }
   return store;
 }
 
-async function writeStore(data: AchievementStore): Promise<void> {
-  const fp = serverDataJsonPath("achievements");
-  await mkdir(path.dirname(fp), { recursive: true });
-  await writeFile(fp, JSON.stringify(data, null, 2), "utf8");
+async function readStore(): Promise<AchievementStore> {
+  return readJsonFile<unknown>(
+    serverDataJsonPath("achievements"),
+    undefined,
+  ).then(readAchievementStore);
+}
+
+/** Locked read-modify-write that normalizes wallet keys before mutating. */
+function updateAchievementStore<R>(
+  mutate: (store: AchievementStore) => R | Promise<R>,
+): Promise<R> {
+  return updateStoreWithReader<AchievementStore, R>(
+    "achievements",
+    readAchievementStore,
+    mutate,
+  );
 }
 
 function ensureEntry(
@@ -128,20 +133,23 @@ export async function unlockAchievement(
   id: AchievementId,
   evidence?: string,
 ): Promise<boolean> {
-  const store = await readStore();
-  const entry = ensureEntry(store, wallet);
-  if (entry.unlocked.some((a) => a.id === id)) return false; // idempotent
-  entry.unlocked.push({ id, unlocked_at: Date.now(), tx_evidence: evidence });
-  store[walletKey(wallet)] = entry;
-  await writeStore(store);
-  // Notify (fire-and-forget)
-  void createNotification(wallet, "achievement_unlocked", {
-    achievement_id: id,
-    achievement_name: ACHIEVEMENT_NAMES[id] ?? id,
-  }).catch(() => {
-    /* silent */
+  const didUnlock = await updateAchievementStore((store) => {
+    const entry = ensureEntry(store, wallet);
+    if (entry.unlocked.some((a) => a.id === id)) return false; // idempotent
+    entry.unlocked.push({ id, unlocked_at: Date.now(), tx_evidence: evidence });
+    store[walletKey(wallet)] = entry;
+    return true;
   });
-  return true;
+  if (didUnlock) {
+    // Notify (fire-and-forget) after the store lock is released.
+    void createNotification(wallet, "achievement_unlocked", {
+      achievement_id: id,
+      achievement_name: ACHIEVEMENT_NAMES[id] ?? id,
+    }).catch(() => {
+      /* silent */
+    });
+  }
+  return didUnlock;
 }
 
 /** Checks counters and unlocks newly earned achievements. Returns newly unlocked IDs. */
@@ -159,75 +167,90 @@ export async function checkAndUnlock(
     phaselq_earned?: number;
   },
 ): Promise<AchievementId[]> {
-  const store = await readStore();
-  const entry = ensureEntry(store, wallet);
-  const unlocked = new Set(entry.unlocked.map((a) => a.id));
-  const newUnlocks: AchievementId[] = [];
+  // The whole counter update and every unlock it triggers happen in ONE locked
+  // mutation. Previously this read the store, let tryUnlock call
+  // unlockAchievement (its own read-modify-write), then wrote this stale
+  // snapshot back over the top — so checkAndUnlock reported unlocks to its
+  // caller and sent "achievement unlocked" notifications for achievements that
+  // were never persisted. Re-entering the store lock from inside a locked
+  // mutation would deadlock, so unlocks are applied to the in-flight store.
+  const newUnlocks = await updateAchievementStore((store) => {
+    const entry = ensureEntry(store, wallet);
+    const unlocked = new Set(entry.unlocked.map((a) => a.id));
+    const newlyUnlocked: AchievementId[] = [];
 
-  async function tryUnlock(id: AchievementId, evidence?: string) {
-    if (unlocked.has(id)) return;
-    const didUnlock = await unlockAchievement(wallet, id, evidence);
-    if (didUnlock) {
-      newUnlocks.push(id);
+    function tryUnlock(id: AchievementId) {
+      if (unlocked.has(id)) return;
+      entry.unlocked.push({ id, unlocked_at: Date.now() });
       unlocked.add(id);
+      newlyUnlocked.push(id);
     }
+
+    // Mint counts
+    if (hints?.mints !== undefined) {
+      entry.mint_count = (entry.mint_count ?? 0) + hints.mints;
+      if (entry.mint_count >= 1) tryUnlock("first_mint");
+      if (entry.mint_count >= 5) tryUnlock("collector_5");
+      if (entry.mint_count >= 10) tryUnlock("collector_10");
+    }
+
+    // First collection
+    if (hints?.has_collection) tryUnlock("first_collection");
+
+    // World builder
+    if (hints?.has_world) tryUnlock("world_builder");
+
+    // Signal pioneer
+    if (hints?.signal_posted) tryUnlock("signal_pioneer");
+
+    // Upvotes
+    if (hints?.upvote_delta !== undefined) {
+      entry.total_upvotes = (entry.total_upvotes ?? 0) + hints.upvote_delta;
+      if (entry.total_upvotes >= 25) tryUnlock("community_voice");
+    }
+
+    // Followers
+    if (hints?.follower_delta !== undefined) {
+      entry.follower_count = (entry.follower_count ?? 0) + hints.follower_delta;
+      if (entry.follower_count >= 10) tryUnlock("connector_10");
+    }
+
+    // Narrator
+    if (hints?.narrator_delta !== undefined) {
+      entry.narrator_count = (entry.narrator_count ?? 0) + hints.narrator_delta;
+      if (entry.narrator_count >= 10) tryUnlock("narrator_10");
+    }
+
+    // Daily streak
+    if (hints?.daily_claim) {
+      const now = Date.now();
+      const last = entry.last_daily ?? 0;
+      const dayMs = 86_400_000;
+      const withinWindow = last > 0 && now - last < dayMs * 2;
+      entry.daily_streak = withinWindow ? (entry.daily_streak ?? 0) + 1 : 1;
+      entry.last_daily = now;
+      if (entry.daily_streak >= 7) tryUnlock("daily_streak_7");
+      if (entry.daily_streak >= 30) tryUnlock("daily_streak_30");
+    }
+
+    // PHASELQ (placeholder — would need tracking from faucet totals)
+    // For now just check if they've earned any
+    if (hints?.phaselq_earned !== undefined && hints.phaselq_earned >= 100) {
+      tryUnlock("phaselq_100");
+    }
+
+    store[walletKey(wallet)] = entry;
+    return newlyUnlocked;
+  });
+
+  // Notify after the store lock is released, matching unlockAchievement.
+  for (const id of newUnlocks) {
+    void createNotification(wallet, "achievement_unlocked", {
+      achievement_id: id,
+      achievement_name: ACHIEVEMENT_NAMES[id] ?? id,
+    }).catch(() => { /* silent */ });
   }
 
-  // Mint counts
-  if (hints?.mints !== undefined) {
-    entry.mint_count = (entry.mint_count ?? 0) + hints.mints;
-    if (entry.mint_count >= 1) await tryUnlock("first_mint");
-    if (entry.mint_count >= 5) await tryUnlock("collector_5");
-    if (entry.mint_count >= 10) await tryUnlock("collector_10");
-  }
-
-  // First collection
-  if (hints?.has_collection) await tryUnlock("first_collection");
-
-  // World builder
-  if (hints?.has_world) await tryUnlock("world_builder");
-
-  // Signal pioneer
-  if (hints?.signal_posted) await tryUnlock("signal_pioneer");
-
-  // Upvotes
-  if (hints?.upvote_delta !== undefined) {
-    entry.total_upvotes = (entry.total_upvotes ?? 0) + hints.upvote_delta;
-    if (entry.total_upvotes >= 25) await tryUnlock("community_voice");
-  }
-
-  // Followers
-  if (hints?.follower_delta !== undefined) {
-    entry.follower_count = (entry.follower_count ?? 0) + hints.follower_delta;
-    if (entry.follower_count >= 10) await tryUnlock("connector_10");
-  }
-
-  // Narrator
-  if (hints?.narrator_delta !== undefined) {
-    entry.narrator_count = (entry.narrator_count ?? 0) + hints.narrator_delta;
-    if (entry.narrator_count >= 10) await tryUnlock("narrator_10");
-  }
-
-  // Daily streak
-  if (hints?.daily_claim) {
-    const now = Date.now();
-    const last = entry.last_daily ?? 0;
-    const dayMs = 86_400_000;
-    const withinWindow = last > 0 && now - last < dayMs * 2;
-    entry.daily_streak = withinWindow ? (entry.daily_streak ?? 0) + 1 : 1;
-    entry.last_daily = now;
-    if (entry.daily_streak >= 7) await tryUnlock("daily_streak_7");
-    if (entry.daily_streak >= 30) await tryUnlock("daily_streak_30");
-  }
-
-  // PHASELQ (placeholder — would need tracking from faucet totals)
-  // For now just check if they've earned any
-  if (hints?.phaselq_earned !== undefined && hints.phaselq_earned >= 100) {
-    await tryUnlock("phaselq_100");
-  }
-
-  store[walletKey(wallet)] = entry;
-  await writeStore(store);
   return newUnlocks;
 }
 

@@ -1,7 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { z } from "zod";
 import { isFeatureEnabled, flagRollbackNote } from "@/lib/feature-flags";
+import { readJsonFile, updateStore } from "@/lib/json-store";
 import { serverDataJsonPath } from "@/lib/server-data-paths";
 import { HORIZON_URL } from "@/lib/phase-protocol";
 
@@ -220,19 +219,7 @@ export function validateSep50MetadataBeforePin(
 }
 
 async function readStore(): Promise<FollowStore> {
-  try {
-    return JSON.parse(
-      await readFile(serverDataJsonPath("profileFollows"), "utf8"),
-    ) as FollowStore;
-  } catch {
-    return {};
-  }
-}
-
-async function writeStore(data: FollowStore): Promise<void> {
-  const filePath = serverDataJsonPath("profileFollows");
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
+  return readJsonFile<FollowStore>(serverDataJsonPath("profileFollows"), {});
 }
 
 function ensureEntry(store: FollowStore, wallet: string): FollowEntry {
@@ -245,24 +232,24 @@ export async function followUser(
   toWallet: string,
 ): Promise<void> {
   if (fromWallet === toWallet) return;
-  const store = await readStore();
-  const from = ensureEntry(store, fromWallet);
-  const to = ensureEntry(store, toWallet);
-  if (!from.following.includes(toWallet)) from.following.push(toWallet);
-  if (!to.followers.includes(fromWallet)) to.followers.push(fromWallet);
-  await writeStore(store);
+  await updateStore<FollowStore>("profileFollows", (store) => {
+    const from = ensureEntry(store, fromWallet);
+    const to = ensureEntry(store, toWallet);
+    if (!from.following.includes(toWallet)) from.following.push(toWallet);
+    if (!to.followers.includes(fromWallet)) to.followers.push(fromWallet);
+  });
 }
 
 export async function unfollowUser(
   fromWallet: string,
   toWallet: string,
 ): Promise<void> {
-  const store = await readStore();
-  const from = ensureEntry(store, fromWallet);
-  const to = ensureEntry(store, toWallet);
-  from.following = from.following.filter((w) => w !== toWallet);
-  to.followers = to.followers.filter((w) => w !== fromWallet);
-  await writeStore(store);
+  await updateStore<FollowStore>("profileFollows", (store) => {
+    const from = ensureEntry(store, fromWallet);
+    const to = ensureEntry(store, toWallet);
+    from.following = from.following.filter((w) => w !== toWallet);
+    to.followers = to.followers.filter((w) => w !== fromWallet);
+  });
 }
 
 export async function getFollowers(wallet: string): Promise<string[]> {

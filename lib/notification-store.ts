@@ -1,9 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import path from "node:path"
 import { randomUUID } from "node:crypto"
 import { createHash } from "node:crypto"
 import { z } from "zod"
 import { isFeatureEnabled, flagRollbackNote } from "@/lib/feature-flags"
+import { readJsonFile, updateStore, updateStoreWithReader } from "@/lib/json-store"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
 
 export type NotificationType =
@@ -106,20 +105,12 @@ function gatewayRotationKey(gateway: string, privateTier: string): string {
 }
 
 async function readGatewayAuthRotationStore(): Promise<GatewayAuthRotationStore> {
-  try {
-    const raw = await readFile(serverDataJsonPath("ipfsGatewayAuthRotations"), "utf8")
-    const parsed = JSON.parse(raw) as GatewayAuthRotationStore
-    return parsed && typeof parsed === "object" ? parsed : {}
-  } catch {
-    return {}
-  }
+  return readJsonFile<GatewayAuthRotationStore>(
+    serverDataJsonPath("ipfsGatewayAuthRotations"),
+    {},
+  )
 }
 
-async function writeGatewayAuthRotationStore(data: GatewayAuthRotationStore): Promise<void> {
-  const filePath = serverDataJsonPath("ipfsGatewayAuthRotations")
-  await mkdir(path.dirname(filePath), { recursive: true })
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8")
-}
 
 export async function rotateIpfsGatewayAuth(input: unknown, opts: { force?: boolean; now?: number } = {}): Promise<GatewayAuthRotation> {
   if (!opts.force && !isPhase128Enabled()) {
@@ -135,45 +126,40 @@ export async function rotateIpfsGatewayAuth(input: unknown, opts: { force?: bool
 
   const now = opts.now ?? Date.now()
   const data = parsed.data
-  const store = await readGatewayAuthRotationStore()
   const key = gatewayRotationKey(data.gateway, data.private_tier)
-  const current = store[key]
-  const activeTokenHash = hashGatewayToken(data.next_token)
+  return updateStore<GatewayAuthRotationStore, GatewayAuthRotation>(
+    "ipfsGatewayAuthRotations",
+    (store) => {
+      const current = store[key]
+      const activeTokenHash = hashGatewayToken(data.next_token)
 
-  const rotation: GatewayAuthRotation = {
-    gateway: data.gateway,
-    private_tier: data.private_tier,
-    active_token_hash: activeTokenHash,
-    previous_token_hash: current?.active_token_hash && current.active_token_hash !== activeTokenHash
-      ? current.active_token_hash
-      : current?.previous_token_hash ?? null,
-    previous_expires_at: current?.active_token_hash && current.active_token_hash !== activeTokenHash
-      ? now + data.overlap_ms
-      : current?.previous_expires_at ?? null,
-    rotated_by: data.rotated_by,
-    rotated_at: now,
-  }
+      const rotation: GatewayAuthRotation = {
+        gateway: data.gateway,
+        private_tier: data.private_tier,
+        active_token_hash: activeTokenHash,
+        previous_token_hash: current?.active_token_hash && current.active_token_hash !== activeTokenHash
+          ? current.active_token_hash
+          : current?.previous_token_hash ?? null,
+        previous_expires_at: current?.active_token_hash && current.active_token_hash !== activeTokenHash
+          ? now + data.overlap_ms
+          : current?.previous_expires_at ?? null,
+        rotated_by: data.rotated_by,
+        rotated_at: now,
+      }
 
-  store[key] = rotation
-  await writeGatewayAuthRotationStore(store)
-  return rotation
+      store[key] = rotation
+      return rotation
+    },
+  )
 }
 
 async function readPreferenceStore(): Promise<NotificationPreferenceStore> {
-  try {
-    const raw = await readFile(serverDataJsonPath("notificationPreferences"), "utf8")
-    const parsed = JSON.parse(raw) as NotificationPreferenceStore
-    return parsed && typeof parsed === "object" ? parsed : {}
-  } catch {
-    return {}
-  }
+  return readJsonFile<NotificationPreferenceStore>(
+    serverDataJsonPath("notificationPreferences"),
+    {},
+  )
 }
 
-async function writePreferenceStore(data: NotificationPreferenceStore): Promise<void> {
-  const filePath = serverDataJsonPath("notificationPreferences")
-  await mkdir(path.dirname(filePath), { recursive: true })
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8")
-}
 
 export async function getNotificationPreferences(wallet: string): Promise<NotificationPreferences> {
   const store = await readPreferenceStore()
@@ -184,16 +170,24 @@ export async function saveNotificationPreferences(
   wallet: string,
   preferences: Partial<Omit<NotificationPreferences, "updated_at">>,
 ): Promise<NotificationPreferences> {
-  const current = await getNotificationPreferences(wallet)
-  const next: NotificationPreferences = {
-    enabled: preferences.enabled ?? current.enabled,
-    types: { ...current.types, ...(preferences.types ?? {}) },
-    updated_at: Date.now(),
-  }
-  const store = await readPreferenceStore()
-  store[wallet] = next
-  await writePreferenceStore(store)
-  return next
+  // Read the merged defaults inside the lock so two concurrent preference
+  // updates cannot both start from the same base and lose one field.
+  return updateStore<NotificationPreferenceStore, NotificationPreferences>(
+    "notificationPreferences",
+    (store) => {
+      const current = {
+        ...DEFAULT_NOTIFICATION_PREFERENCES,
+        ...(store[wallet] ?? {}),
+      }
+      const next: NotificationPreferences = {
+        enabled: preferences.enabled ?? current.enabled,
+        types: { ...current.types, ...(preferences.types ?? {}) },
+        updated_at: Date.now(),
+      }
+      store[wallet] = next
+      return next
+    },
+  )
 }
 
 export async function shouldStoreNotification(wallet: string, type: NotificationType): Promise<boolean> {
@@ -204,17 +198,7 @@ export async function shouldStoreNotification(wallet: string, type: Notification
 }
 
 async function readStore(): Promise<NotificationStore> {
-  try {
-    return JSON.parse(await readFile(serverDataJsonPath("notifications"), "utf8")) as NotificationStore
-  } catch {
-    return {}
-  }
-}
-
-async function writeStore(data: NotificationStore): Promise<void> {
-  const filePath = serverDataJsonPath("notifications")
-  await mkdir(path.dirname(filePath), { recursive: true })
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8")
+  return readJsonFile<NotificationStore>(serverDataJsonPath("notifications"), {})
 }
 
 export async function createNotification(
@@ -224,8 +208,6 @@ export async function createNotification(
 ): Promise<void> {
   if (!(await shouldStoreNotification(wallet, type))) return
 
-  const store = await readStore()
-  const list = store[wallet] ?? []
   const notif: Notification = {
     id: randomUUID(),
     wallet,
@@ -234,10 +216,11 @@ export async function createNotification(
     created_at: Date.now(),
     data,
   }
-  // Prepend newest first; cap at MAX_PER_WALLET
-  const updated = [notif, ...list].slice(0, MAX_PER_WALLET)
-  store[wallet] = updated
-  await writeStore(store)
+  await updateStore<NotificationStore>("notifications", (store) => {
+    const list = store[wallet] ?? []
+    // Prepend newest first; cap at MAX_PER_WALLET
+    store[wallet] = [notif, ...list].slice(0, MAX_PER_WALLET)
+  })
 }
 
 export async function createNotificationBatch(
@@ -247,41 +230,42 @@ export async function createNotificationBatch(
 ): Promise<{ succeeded: number; failed: number }> {
   if (!wallets.length) return { succeeded: 0, failed: 0 }
 
-  const store = await readStore()
-  let succeeded = 0
-  let failed = 0
   const now = Date.now()
   const notificationId = randomUUID()
 
+  // Preference checks read a different store, so resolve them before taking the
+  // notifications lock instead of holding it across the awaits.
+  const eligible: string[] = []
+  let failed = 0
   for (const wallet of wallets) {
     try {
-      if (!(await shouldStoreNotification(wallet, type))) {
-        failed++
-        continue
-      }
-
-      const list = store[wallet] ?? []
-      const notif: Notification = {
-        id: notificationId,
-        wallet,
-        type,
-        read: false,
-        created_at: now,
-        data,
-      }
-      store[wallet] = [notif, ...list].slice(0, MAX_PER_WALLET)
-      succeeded++
+      if (await shouldStoreNotification(wallet, type)) eligible.push(wallet)
+      else failed++
     } catch {
       failed++
     }
   }
 
-  // Batch write
-  if (succeeded > 0) {
-    await writeStore(store)
-  }
+  if (eligible.length === 0) return { succeeded: 0, failed }
 
-  return { succeeded, failed }
+  return updateStore<NotificationStore, { succeeded: number; failed: number }>(
+    "notifications",
+    (store) => {
+      for (const wallet of eligible) {
+        const notif: Notification = {
+          id: notificationId,
+          wallet,
+          type,
+          read: false,
+          created_at: now,
+          data,
+        }
+        const list = store[wallet] ?? []
+        store[wallet] = [notif, ...list].slice(0, MAX_PER_WALLET)
+      }
+      return { succeeded: eligible.length, failed }
+    },
+  )
 }
 
 export async function getNotifications(wallet: string, limit = 30): Promise<Notification[]> {
@@ -290,19 +274,19 @@ export async function getNotifications(wallet: string, limit = 30): Promise<Noti
 }
 
 export async function markRead(wallet: string, notificationId: string): Promise<void> {
-  const store = await readStore()
-  const list = store[wallet]
-  if (!list) return
-  store[wallet] = list.map((n) => (n.id === notificationId ? { ...n, read: true } : n))
-  await writeStore(store)
+  await updateStore<NotificationStore>("notifications", (store) => {
+    const list = store[wallet]
+    if (!list) return
+    store[wallet] = list.map((n) => (n.id === notificationId ? { ...n, read: true } : n))
+  })
 }
 
 export async function markAllRead(wallet: string): Promise<void> {
-  const store = await readStore()
-  const list = store[wallet]
-  if (!list) return
-  store[wallet] = list.map((n) => ({ ...n, read: true }))
-  await writeStore(store)
+  await updateStore<NotificationStore>("notifications", (store) => {
+    const list = store[wallet]
+    if (!list) return
+    store[wallet] = list.map((n) => ({ ...n, read: true }))
+  })
 }
 
 export async function getUnreadCount(wallet: string): Promise<number> {
@@ -387,20 +371,11 @@ export class FaucetFunnelError extends Error {
 }
 
 async function readFunnelStore(): Promise<FaucetFunnelStore> {
-  try {
-    const raw = await readFile(serverDataJsonPath("faucetFunnelEvents"), "utf8")
-    const parsed = JSON.parse(raw) as FaucetFunnelStore
-    return parsed && Array.isArray(parsed.events) ? parsed : { events: [] }
-  } catch {
-    return { events: [] }
-  }
+  return readJsonFile<FaucetFunnelStore>(serverDataJsonPath("faucetFunnelEvents"), {
+    events: [],
+  })
 }
 
-async function writeFunnelStore(data: FaucetFunnelStore): Promise<void> {
-  const filePath = serverDataJsonPath("faucetFunnelEvents")
-  await mkdir(path.dirname(filePath), { recursive: true })
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8")
-}
 
 export async function recordFaucetFunnelEvent(
   input: unknown,
@@ -422,10 +397,17 @@ export async function recordFaucetFunnelEvent(
     ts: parsed.data.ts ?? opts.now ?? Date.now(),
     reason: parsed.data.reason ?? null,
   }
-  const store = await readFunnelStore()
-  store.events = [...store.events, event].slice(-MAX_FUNNEL_EVENTS)
-  await writeFunnelStore(store)
-  return event
+  return updateStoreWithReader<FaucetFunnelStore, FaucetFunnelEvent>(
+    "faucetFunnelEvents",
+    (raw) => {
+      const parsed = raw as FaucetFunnelStore | undefined
+      return parsed && Array.isArray(parsed.events) ? parsed : { events: [] }
+    },
+    (store) => {
+      store.events = [...store.events, event].slice(-MAX_FUNNEL_EVENTS)
+      return event
+    },
+  )
 }
 
 export type ClaimFunnelStageMetric = {
