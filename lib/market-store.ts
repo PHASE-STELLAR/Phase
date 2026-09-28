@@ -1,10 +1,9 @@
 ﻿// @ts-nocheck
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { StrKey } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import { isFeatureEnabled, flagRollbackNote } from "@/lib/feature-flags";
+import { readJsonFile, updateJsonFile } from "@/lib/json-store";
 import { serverDataJsonPath } from "@/lib/server-data-paths";
 import { getDb } from "@/lib/sqlite-db";
 import { incSecurityCounter } from "@/lib/security-counters";
@@ -100,19 +99,7 @@ export function phase100RollbackNote(): string {
 }
 
 async function readJson<T extends object>(filePath: string): Promise<T> {
-  try {
-    return JSON.parse(await readFile(filePath, "utf8")) as T;
-  } catch {
-    return {} as T;
-  }
-}
-
-async function writeJson<T extends object>(
-  filePath: string,
-  data: T,
-): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
+  return readJsonFile<T>(filePath, {} as T);
 }
 
 function viewerAnalyticsKey(viewerWallet?: string): string | null {
@@ -147,39 +134,45 @@ export async function recordCreatorProfileView(
 
   const event = parsed.data;
   const now = opts.now ?? Date.now();
-  const store = await readJson<ProfileViewAnalyticsStore>(
+
+  // The counters are derived from the snapshot read here, so this has to be one
+  // locked mutation: an unguarded read-then-write dropped concurrent views.
+  return updateJsonFile<ProfileViewAnalyticsStore, CreatorProfileViewAnalytics>(
     serverDataJsonPath("marketProfileViews"),
-  );
-  const current = store[event.creator_wallet] ?? {
-    creator_wallet: event.creator_wallet,
-    total_views: 0,
-    unique_viewers: 0,
-    last_viewed_at: 0,
-    sources: {},
-    viewer_hashes: [],
-  };
+    {
+      mutate: (store) => {
+        const current = store[event.creator_wallet] ?? {
+          creator_wallet: event.creator_wallet,
+          total_views: 0,
+          unique_viewers: 0,
+          last_viewed_at: 0,
+          sources: {},
+          viewer_hashes: [],
+        };
 
-  const viewerKey = viewerAnalyticsKey(event.viewer_wallet);
-  const viewerHashes =
-    viewerKey && !current.viewer_hashes.includes(viewerKey)
-      ? [...current.viewer_hashes, viewerKey]
-      : current.viewer_hashes;
+        const viewerKey = viewerAnalyticsKey(event.viewer_wallet);
+        const viewerHashes =
+          viewerKey && !current.viewer_hashes.includes(viewerKey)
+            ? [...current.viewer_hashes, viewerKey]
+            : current.viewer_hashes;
 
-  const next: CreatorProfileViewAnalytics = {
-    ...current,
-    total_views: current.total_views + 1,
-    unique_viewers: viewerHashes.length,
-    last_viewed_at: now,
-    sources: {
-      ...current.sources,
-      [event.source]: (current.sources[event.source] ?? 0) + 1,
+        const next: CreatorProfileViewAnalytics = {
+          ...current,
+          total_views: current.total_views + 1,
+          unique_viewers: viewerHashes.length,
+          last_viewed_at: now,
+          sources: {
+            ...current.sources,
+            [event.source]: (current.sources[event.source] ?? 0) + 1,
+          },
+          viewer_hashes: viewerHashes,
+        };
+
+        store[event.creator_wallet] = next;
+        return next;
+      },
     },
-    viewer_hashes: viewerHashes,
-  };
-
-  store[event.creator_wallet] = next;
-  await writeJson(serverDataJsonPath("marketProfileViews"), store);
-  return next;
+  );
 }
 
 export async function getCreatorProfileViewAnalytics(
@@ -795,13 +788,15 @@ export async function blockWallet(
   reason?: string,
 ): Promise<void> {
   if (!isPhase85Enabled()) throw new Error("phase-85 disabled");
-  const store = await readJson<BlockListStore>(serverDataJsonPath("blockList"));
-  const list = store[blocker] ?? { blocked: [], muted: [] };
-  if (!list.blocked.some((b) => b.wallet === target)) {
-    list.blocked.push({ wallet: target, blocked_at: Date.now(), reason });
-  }
-  store[blocker] = list;
-  await writeJson(serverDataJsonPath("blockList"), store);
+  await updateJsonFile<BlockListStore>(serverDataJsonPath("blockList"), {
+    mutate: (store) => {
+      const list = store[blocker] ?? { blocked: [], muted: [] };
+      if (!list.blocked.some((b) => b.wallet === target)) {
+        list.blocked.push({ wallet: target, blocked_at: Date.now(), reason });
+      }
+      store[blocker] = list;
+    },
+  });
 }
 
 export async function unblockWallet(
@@ -809,11 +804,13 @@ export async function unblockWallet(
   target: string,
 ): Promise<void> {
   if (!isPhase85Enabled()) throw new Error("phase-85 disabled");
-  const store = await readJson<BlockListStore>(serverDataJsonPath("blockList"));
-  const list = store[blocker] ?? { blocked: [], muted: [] };
-  list.blocked = list.blocked.filter((b) => b.wallet !== target);
-  store[blocker] = list;
-  await writeJson(serverDataJsonPath("blockList"), store);
+  await updateJsonFile<BlockListStore>(serverDataJsonPath("blockList"), {
+    mutate: (store) => {
+      const list = store[blocker] ?? { blocked: [], muted: [] };
+      list.blocked = list.blocked.filter((b) => b.wallet !== target);
+      store[blocker] = list;
+    },
+  });
 }
 
 export async function muteWallet(
@@ -822,16 +819,18 @@ export async function muteWallet(
   durationMs?: number,
 ): Promise<void> {
   if (!isPhase85Enabled()) throw new Error("phase-85 disabled");
-  const store = await readJson<BlockListStore>(serverDataJsonPath("blockList"));
-  const list = store[muter] ?? { blocked: [], muted: [] };
-  list.muted = list.muted.filter((m) => m.wallet !== target);
-  list.muted.push({
-    wallet: target,
-    muted_at: Date.now(),
-    expires_at: durationMs ? Date.now() + durationMs : undefined,
+  await updateJsonFile<BlockListStore>(serverDataJsonPath("blockList"), {
+    mutate: (store) => {
+      const list = store[muter] ?? { blocked: [], muted: [] };
+      list.muted = list.muted.filter((m) => m.wallet !== target);
+      list.muted.push({
+        wallet: target,
+        muted_at: Date.now(),
+        expires_at: durationMs ? Date.now() + durationMs : undefined,
+      });
+      store[muter] = list;
+    },
   });
-  store[muter] = list;
-  await writeJson(serverDataJsonPath("blockList"), store);
 }
 
 export async function unmuteWallet(
@@ -839,11 +838,13 @@ export async function unmuteWallet(
   target: string,
 ): Promise<void> {
   if (!isPhase85Enabled()) throw new Error("phase-85 disabled");
-  const store = await readJson<BlockListStore>(serverDataJsonPath("blockList"));
-  const list = store[muter] ?? { blocked: [], muted: [] };
-  list.muted = list.muted.filter((m) => m.wallet !== target);
-  store[muter] = list;
-  await writeJson(serverDataJsonPath("blockList"), store);
+  await updateJsonFile<BlockListStore>(serverDataJsonPath("blockList"), {
+    mutate: (store) => {
+      const list = store[muter] ?? { blocked: [], muted: [] };
+      list.muted = list.muted.filter((m) => m.wallet !== target);
+      store[muter] = list;
+    },
+  });
 }
 
 export async function isWalletBlocked(

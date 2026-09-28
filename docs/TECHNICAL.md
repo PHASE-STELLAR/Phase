@@ -71,6 +71,7 @@ flowchart TB
 | `lib/classic-liq.ts` | Classic asset trustline utilities (`changeTrust` XDR, Horizon checks) + CID integrity helpers via `cid-cache` (phase-119) + rate-limit-aware batch submission to Horizon (phase-134) |
 | `lib/phase-copy.ts` | Centralized i18n dictionary (EN/ES) |
 | `lib/server-data-paths.ts` | Writable data location abstraction |
+| `lib/json-store.ts` | Serialized read-modify-write + atomic write for the JSON sidecar stores (§5.4) |
 | `lib/feature-flags.ts` | Flag registry (phase-107,111,113,114 + 116,117,119,120 + 121..124, env resolution, rollback notes) |
 | `lib/world-conflict.ts` | World save conflict detection (phase-105): version check + per-author vector clock normalization (object / `Map` / entries array) and ordering |
 | `lib/story-arc-continuity.ts` | AI story-arc continuity check against recent world narratives (phase-107) |
@@ -214,6 +215,39 @@ cross-process transactions (Postgres `UPDATE ... WHERE version = $expected`).
 This is deliberate: it is a bounded, documented limit rather than a CRDT layer
 that would not have fixed the underlying file race.
 
+### 5.4 Shared JSON sidecar store layer
+
+`lib/json-store.ts` provides the same three guarantees described in §5.3 —
+serialized mutation, atomic replacement, and fatal corruption — as a reusable
+module, and the remaining JSON sidecar stores route their mutations through it
+rather than hand-rolling a `readFile`/`writeFile` pair per module.
+
+| Export | Purpose |
+|---|---|
+| `updateStore(key, mutate)` | Locked read-modify-write for a registered sidecar file. The normal way to mutate one. |
+| `updateStoreWithReader(key, read, mutate)` | As above, with an on-disk shape adapter applied before mutation. |
+| `updateJsonFile(path, { read?, mutate })` | As above, for a path outside the `serverDataJsonPath` registry. |
+| `readStore(key, fallback)` / `readJsonFile(path, fallback)` | Unlocked reads. Missing file → `fallback`; corrupt file → throws. |
+| `writeJsonFileAtomic(path, data)` | Unlocked atomic write. Torn-write safety only, not lost-update safety. |
+| `withFileLock(path, task)` | Escape hatch. Almost always prefer `updateStore`, which keeps the read and write in one critical section. |
+
+Stores migrated: `follow-store`, `profile-store`, `notification-store`,
+`achievement-store`, `narrative-world-store`, and the JSON-backed paths in
+`market-store` (`marketProfileViews`, `blockList`; listings and offers are
+already SQLite).
+
+`updateStore` accepts an async `mutate`, but **the lock is not reentrant**: a
+`mutate` callback must not call a locking store function for the same file, or it
+deadlocks waiting on its own queue. Two places depend on this contract —
+`createNotificationBatch` resolves notification preferences (a different store)
+*before* taking the notifications lock, and `checkAndUnlock` applies its unlocks
+to the in-flight store object rather than re-entering through
+`unlockAchievement`.
+
+**The same per-process limit in §5.3 applies here.** Serialization and atomic
+replacement remove the lost update within one process; they do not reconcile
+state across serverless instances.
+
 ---
 
 ## 6. On-chain Integration
@@ -317,6 +351,10 @@ Rollback: unset the var or set `0` and restart. No ledger migration to revert; o
 - Use writable server storage abstraction (`server-data-paths`) for platform-safe behavior.
 - Any store mutated by more than one writer needs serialized read-modify-write,
   atomic file replacement, and a version/compare-and-swap field. See §5.3.
+- Mutate the JSON sidecar stores only through `lib/json-store.ts`
+  (`updateStore` / `updateStoreWithReader` / `updateJsonFile`). Never pair a raw
+  `readFile` with a `writeFile`; that is the lost-update race §5.4 exists to
+  prevent. Locks are not reentrant — see §5.4.
 - Watch for the `signals.version_conflict` log event to detect clients that are
   writing against stale reads.
 - On contract redeploys, update:

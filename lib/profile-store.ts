@@ -1,6 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { z } from "zod";
+import { readJsonFile, updateJsonFile, updateStore } from "@/lib/json-store";
 import { serverDataJsonPath } from "@/lib/server-data-paths";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 
@@ -18,18 +17,7 @@ export type ProfileData = {
 type ProfileStore = Record<string, ProfileData>;
 
 async function readStore(): Promise<ProfileStore> {
-  try {
-    const raw = await readFile(serverDataJsonPath("profileSocials"), "utf8");
-    return JSON.parse(raw) as ProfileStore;
-  } catch {
-    return {};
-  }
-}
-
-async function writeStore(data: ProfileStore): Promise<void> {
-  const filePath = serverDataJsonPath("profileSocials");
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
+  return readJsonFile<ProfileStore>(serverDataJsonPath("profileSocials"), {});
 }
 
 export async function getProfile(wallet: string): Promise<ProfileData | null> {
@@ -41,13 +29,13 @@ export async function saveProfile(
   wallet: string,
   data: Omit<ProfileData, "updated_at">,
 ): Promise<ProfileData> {
-  const store = await readStore();
   const entry: ProfileData = {
     ...data,
     updated_at: Date.now(),
   };
-  store[wallet] = entry;
-  await writeStore(store);
+  await updateStore<ProfileStore>("profileSocials", (store) => {
+    store[wallet] = entry;
+  });
   return entry;
 }
 
@@ -217,19 +205,10 @@ function validateProfileHandle(handle: string): string | null {
 }
 
 async function readArtistAliasStore(): Promise<ArtistAliasStore> {
-  try {
-    const raw = await readFile(serverDataJsonPath("artistProfiles"), "utf8");
-    const parsed = JSON.parse(raw) as ArtistAliasStore;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-async function writeArtistAliasStore(data: ArtistAliasStore): Promise<void> {
-  const filePath = serverDataJsonPath("artistProfiles");
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
+  return readJsonFile<ArtistAliasStore>(
+    serverDataJsonPath("artistProfiles"),
+    {},
+  );
 }
 
 export async function resolveProfileHandle(
@@ -308,13 +287,23 @@ export async function saveProfileHandle(
     };
   }
 
-  const store = await readArtistAliasStore();
-  const taken = Object.entries(store).find(
-    ([wallet, profile]) =>
-      wallet !== walletAddress &&
-      normalizeProfileHandle(profile.alias) === normalized,
+  // Uniqueness is checked inside the store lock. Reading first and writing
+  // after let two wallets concurrently claim the same handle.
+  const claim = await updateStore<ArtistAliasStore, "ok" | "taken">(
+    "artistProfiles",
+    (store) => {
+      const taken = Object.entries(store).find(
+        ([wallet, profile]) =>
+          wallet !== walletAddress &&
+          normalizeProfileHandle(profile.alias) === normalized,
+      );
+      if (taken) return "taken";
+      store[walletAddress] = { alias: normalized, updatedAt: Date.now() };
+      return "ok";
+    },
   );
-  if (taken) {
+
+  if (claim === "taken") {
     return {
       ok: false,
       error: "Handle is already linked to another wallet",
@@ -324,8 +313,6 @@ export async function saveProfileHandle(
   }
 
   const updatedAt = Date.now();
-  store[walletAddress] = { alias: normalized, updatedAt };
-  await writeArtistAliasStore(store);
   return {
     ok: true,
     walletAddress,
@@ -809,29 +796,26 @@ export async function recordTrendingSignal(
   bucketSizeMs: number = 3600000,
 ): Promise<void> {
   if (!isPhase87Enabled()) return;
-  const store = await readJson<TrendingStore>(
-    serverDataJsonPath("trendingSignals"),
-  );
   const now = Date.now();
   const bucketStart = Math.floor(now / bucketSizeMs) * bucketSizeMs;
   const bucketEnd = bucketStart + bucketSizeMs;
 
-  const signal = store[wallet] ?? { wallet, score: 0, buckets: [] };
-  let bucket = signal.buckets.find((b) => b.start === bucketStart);
+  await updateStore<TrendingStore>("trendingSignals", (store) => {
+    const signal = store[wallet] ?? { wallet, score: 0, buckets: [] };
+    let bucket = signal.buckets.find((b) => b.start === bucketStart);
 
-  if (!bucket) {
-    bucket = { start: bucketStart, end: bucketEnd, views: 0, engagement: 0 };
-    signal.buckets.push(bucket);
-  }
+    if (!bucket) {
+      bucket = { start: bucketStart, end: bucketEnd, views: 0, engagement: 0 };
+      signal.buckets.push(bucket);
+    }
 
-  bucket.views++;
-  signal.score = signal.buckets.reduce(
-    (sum, b) => sum + b.views + b.engagement,
-    0,
-  );
-  store[wallet] = signal;
-
-  await writeJson(serverDataJsonPath("trendingSignals"), store);
+    bucket.views++;
+    signal.score = signal.buckets.reduce(
+      (sum, b) => sum + b.views + b.engagement,
+      0,
+    );
+    store[wallet] = signal;
+  });
 }
 
 export async function getTrendingSignals(
@@ -1089,19 +1073,7 @@ export function auditFaucetRateLimitWiring(): { ok: boolean; note: string } {
 }
 
 async function readJson<T extends object>(filePath: string): Promise<T> {
-  try {
-    return JSON.parse(await readFile(filePath, "utf8")) as T;
-  } catch {
-    return {} as T;
-  }
-}
-
-async function writeJson<T extends object>(
-  filePath: string,
-  data: T,
-): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
+  return readJsonFile<T>(filePath, {} as T);
 }
 
 // ── Issues #65 / #66 (phase-137): structured error taxonomy ───────────────────
