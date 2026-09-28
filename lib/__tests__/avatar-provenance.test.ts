@@ -12,7 +12,7 @@
  * Run with: npm test
  */
 import assert from "node:assert/strict"
-import { describe, it } from "node:test"
+import { describe, it } from "vitest"
 import { Keypair } from "@stellar/stellar-sdk"
 import { CidIntegrityError, sha256Hex, verifyCID, verifyBytesIntegrity } from "@/lib/cid-cache"
 

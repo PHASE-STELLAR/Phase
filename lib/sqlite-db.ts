@@ -63,7 +63,9 @@ CREATE INDEX IF NOT EXISTS idx_offers_status_wash_created
 
 CREATE TABLE IF NOT EXISTS signals (
   id                TEXT PRIMARY KEY,
-  version           INTEGER NOT NULL DEFAULT 0,
+  -- Optimistic-concurrency token. Starts at 1 so that a fresh signal's version
+  -- is a valid ETag / If-Match / parent_version value (those all require >= 1).
+  version           INTEGER NOT NULL DEFAULT 1,
   author_wallet     TEXT NOT NULL,
   author_display    TEXT NOT NULL,
   channel           TEXT NOT NULL,
@@ -236,11 +238,16 @@ export function getDb(): DatabaseSync {
   }
   try {
     db.exec(
-      "ALTER TABLE signals ADD COLUMN version INTEGER NOT NULL DEFAULT 0;",
+      "ALTER TABLE signals ADD COLUMN version INTEGER NOT NULL DEFAULT 1;",
     );
   } catch {
     // Column already present — no-op.
   }
+  // The version column originally defaulted to 0, but every consumer of it
+  // (ETag, If-Match, parent_version) treats 0 as invalid, so a signal that had
+  // never been edited or upvoted could not be replied to. Normalize the
+  // sentinel to the same 1-based origin new rows get.
+  db.exec("UPDATE signals SET version = 1 WHERE version <= 0;");
 
   return db;
 }

@@ -3,7 +3,7 @@
  * Regression guard for app/explore/page.tsx previously hardcoding
  * chainVerified={false}, which permanently disabled the HD/verified state.
  */
-import { describe, it } from "node:test"
+import { describe, it } from "vitest"
 import * as assert from "node:assert/strict"
 import { resolvePhaseProtectedPreviewVerified } from "@/components/phase-protected-preview"
 import { truncateAddress } from "@/lib/explore-domain"

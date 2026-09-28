@@ -1,4 +1,4 @@
-import { describe, it } from "node:test"
+import { describe, it } from "vitest"
 import * as assert from "node:assert/strict"
 import { migrateMetadataPayload, batchMigrateMetadataPayloads, CURRENT_METADATA_VERSION } from "@/lib/metadata-migration"
 

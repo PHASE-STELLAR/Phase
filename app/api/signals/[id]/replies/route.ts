@@ -1,6 +1,16 @@
-import { NextRequest } from "next/server"
+import { NextRequest, NextResponse } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
-import { getSignal, createReply, VersionConflictError } from "@/lib/signal-store"
+import {
+  getSignal,
+  createReply,
+  VersionConflictError,
+  isPhase136Enabled,
+  extractIpfsCidPath,
+  resolveCidGateway,
+  recordReplyAttribution,
+} from "@/lib/signal-store"
+import { computeCreditLedger, getSignalContributors } from "@/lib/contributor-ledger"
+import { isFaucetDenyListEnabled, isWalletDenied, getWalletDenyEntry } from "@/lib/faucet-deny-list"
 import { createNotification } from "@/lib/notification-store"
 import { dispatchPushNotification, extractMentionedWallets, isPhase92Enabled } from "@/lib/push-notifications"
 import { createApiRequestContext } from "@/lib/api-observability"
@@ -33,6 +43,12 @@ type ReplyBody = {
   wallet?: unknown
   signature?: unknown
   parent_version?: unknown
+  /** Covered by the signed payload; rejected when absent or non-finite. */
+  timestamp?: unknown
+  /** phase-116 contributor attribution. Accepts the array directly or wrapped. */
+  attribution?: unknown
+  /** Legacy alias for `attribution`; either is honoured. */
+  contributors?: unknown
 }
 
 const ContributorsArraySchema = z.array(
@@ -200,7 +216,7 @@ export async function POST(
           {
             error: "Signal changed since this reply was composed",
             code: "VERSION_CONFLICT",
-            currentVersion: signal.version,
+            current_version: signal.version,
           },
           { status: 409, event: "signals.reply.version_conflict" },
         )

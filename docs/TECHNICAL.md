@@ -181,39 +181,53 @@ settlement verifier and must not accept unsigned base64 payloads.
 
 ### 5.3 Signal concurrency contract
 
-`lib/signal-store.ts` guards the JSON sidecar three ways:
+Signals and replies are stored in SQLite (`signals`, `signal_replies`,
+`signal_versions`, `signal_reactions` in `lib/sqlite-db.ts`), not in a JSON
+sidecar. The connection runs in WAL mode with `foreign_keys = ON`.
 
-1. **Serialized mutation.** Read-modify-write cycles run through a per-file
-   promise queue, so two concurrent mutations cannot both read the same snapshot.
-2. **Atomic replacement.** Writes land in a sibling `*.tmp` file and are moved
-   into place with `rename(2)`. A reader never observes a half-flushed file, and
-   a crash mid-write cannot corrupt the live store.
-3. **Corruption is fatal, not silent.** A JSON parse failure throws instead of
-   degrading to `{}`. Returning `{}` on a parse error meant the next write would
-   overwrite every existing record.
+Each `Signal` carries an integer `version` in the `signals` table, starting at
+`1` and bumped on every mutation. `1` matters: the version is published as an
+ETag and echoed back as `If-Match` / `parent_version`, and all three reject `0`.
 
-Each `Signal` carries an integer `version`, bumped on every mutation.
+The lost-update hazard is `upvoteSignal`, the only read-modify-write over a
+JSON blob (`upvotes_json`). It is guarded three ways:
+
+1. **Version-guarded write.** The `UPDATE` names the version it read:
+   `... WHERE id = ? AND version = ?`. A writer whose row was superseded
+   matches zero rows instead of clobbering.
+2. **Bounded retry.** `upvoteSignal` re-reads and recomputes on a lost CAS,
+   up to `MAX_CAS_ATTEMPTS` (8). Because the guard is version-based rather
+   than wall-clock, retries converge.
+3. **Transactional parent check.** `createReply` and `editSignal` verify the
+   parent version inside the same `BEGIN IMMEDIATE` as their write, so the
+   check cannot be invalidated between the test and the write.
+
+A stale value throws `VersionConflictError`, which the API maps to `409`.
 
 | Surface | Contract |
 |---|---|
 | `GET /api/signals/[id]` | Returns `ETag: "<version>"`. |
 | `POST /api/signals/[id]` | Optional `If-Match: "<version>"`. Stale value → `409` with `current_version` and the fresh `ETag`. |
-| `POST /api/signals/[id]/replies` | Optional `parent_version: <int>`. Stale value → `409`. |
+| `POST /api/signals/[id]/replies` | Optional `parent_version: <int>`. Stale value → `409` with `current_version`. |
+| `PATCH /api/signals/[id]` | `If-Match` required (phase-82). Stale value → `409`. |
 
-`If-Match` and `parent_version` are both optional, so clients that omit them keep
-the previous last-writer-wins behaviour. Conflicts emit the
+`If-Match` and `parent_version` are optional on the upvote and reply paths, so
+clients that omit them keep last-writer-wins behaviour. Conflicts emit the
 `signals.version_conflict` log event.
 
-Records written before this change have no `version`; they are normalized to `1`
-on read, so no migration step is required.
+Rows written before the column existed are normalized to `1` by an idempotent
+migration in `getDb()`.
 
-**Known limitation.** The mutation queue is per-process. Two Vercel instances
-mutating the same file can still interleave, because each holds its own queue and
-the deployment shares no writable volume by default. Closing that requires either
-pinning writes to a single instance or moving signals to a store with real
-cross-process transactions (Postgres `UPDATE ... WHERE version = $expected`).
-This is deliberate: it is a bounded, documented limit rather than a CRDT layer
-that would not have fixed the underlying file race.
+**Cross-instance behaviour.** Unlike a per-process lock, the version guard and
+WAL transactions hold across processes, so two Vercel instances sharing the
+database file no longer interleave destructively. `lib/__tests__/signal-store-concurrency.test.ts`
+drives this directly with a second `DatabaseSync` handle committing between one
+connection's read and its write.
+
+**Not a CRDT.** Signals are versioned, not collaboratively edited: an author's
+edit takes a pre-edit snapshot into `signal_versions` and must stay
+revertible. A merge-based CRDT would fold concurrent edits together and destroy
+that history, so the contract is compare-and-swap rather than automatic merge.
 
 ### 5.4 Shared JSON sidecar store layer
 

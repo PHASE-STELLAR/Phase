@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server"
-import { DEFAULT_PROFILE_LOCALE, getProfile, isProfilePinningRedundancyEnabled, isPhase137Enabled, localizeAvatarName, normalizeProfileLocale, ProfileError, resolveAvatarWithFallback, toProfileErrorResponse } from "@/lib/profile-store"
+import { DEFAULT_PROFILE_LOCALE, getProfile, isProfilePinningRedundancyEnabled, isPhase137Enabled, localizeAvatarName, normalizeProfileLocale, ProfileError, resolveAvatarWithFallback, toProfileErrorResponse, BatchAvatarQuerySchema, getAvatarsForWallets } from "@/lib/profile-store"
+import { isNftGridVirtualizationEnabled } from "@/lib/nft-grid-virtualization"
 import { StrKey } from "@stellar/stellar-sdk"
 import { createApiRequestContext } from "@/lib/api-observability"
 import { z } from "zod"

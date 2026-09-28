@@ -140,7 +140,7 @@ async function readClaims(): Promise<FaucetClaims> {
       const fp = value.faucetPending
       let faucetPending: WalletClaims["faucetPending"]
       if (fp && typeof fp === "object" && typeof fp.hash === "string" && typeof fp.at === "number") {
-        const r = parseRewardType(fp.reward)
+        const r = await parseRewardType(fp.reward)
         faucetPending = { hash: fp.hash, reward: r, at: fp.at }
       }
       normalized[wallet] = {
@@ -193,17 +193,6 @@ async function fetchNativeXlmBalance(gAddress: string): Promise<number | null> {
 /** Mismo contrato token que el resto de la app (`lib/phase-protocol.ts`), ya validado como C…. */
 function serverTokenContractId(): string {
   return PHASE_LIQ_TOKEN_CONTRACT
-}
-
-function rewardAmountStroops(reward: RewardType): string {
-  if (reward === "genesis") return PHASER_FAUCET_MINT_STROOPS
-  if (reward === "daily") return DAILY_REWARD_STROOPS
-  if (reward === "quest_first_world" || reward === "quest_three_collections") return NEW_QUEST_REWARD_STROOPS
-  return QUEST_REWARD_STROOPS
-}
-
-function isQuestReward(reward: RewardType): reward is QuestId {
-  return QUEST_IDS.includes(reward as QuestId)
 }
 
 async function rewardAmountStroops(reward: RewardType): Promise<string> {
@@ -265,7 +254,6 @@ async function buildWalletStatus(wallet: string | null, claims: FaucetClaims) {
     claimStatusForReward(claim, "genesis", now),
     claimStatusForReward(claim, "daily", now),
   ])
-  
   const rewards: Record<string, RewardStatus> = {
     genesis: rawGenesis,
     daily: rawDaily,
@@ -570,7 +558,7 @@ export async function POST(req: NextRequest) {
   /** Cada intento de claim debe ver el ledger al día (p. ej. acabas de hacer settle). */
   questProgressCache.delete(userAddress)
 
-  const reward = parseRewardType(body.reward)
+  const reward = await parseRewardType(body.reward)
   const claims = await readClaims()
   const walletClaim = claims[userAddress] ?? {}
 
@@ -601,7 +589,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const status = claimStatusForReward(walletClaim, reward, Date.now())
+  const status = await claimStatusForReward(walletClaim, reward, Date.now())
   if (!status.claimable) {
     const already = status.nextAt
       ? "Reward on cooldown. Claim it again after reset."
@@ -776,7 +764,7 @@ export async function POST(req: NextRequest) {
           ok: true,
           hash: pendingHash,
           reward,
-          amountStroops: rewardAmountStroops(reward),
+          amountStroops: await rewardAmountStroops(reward),
           ...(streakInfo ? { streak: streakInfo } : {}),
           ...(referralBonus ? { referralBonus } : {}),
         })
@@ -791,7 +779,7 @@ export async function POST(req: NextRequest) {
           hash: pendingHash,
           pending: true,
           reward,
-          amountStroops: rewardAmountStroops(reward),
+          amountStroops: await rewardAmountStroops(reward),
           note: "Transaction still pending on ledger. Retry the same reward in a few seconds.",
         },
         { status: 202 },
@@ -834,7 +822,7 @@ export async function POST(req: NextRequest) {
     }
     const c = new Contract(tokenId)
     // phase-131: apply streak multiplier to daily reward amount
-    let effectiveAmountStroops = rewardAmountStroops(reward)
+    let effectiveAmountStroops = await rewardAmountStroops(reward)
     if (reward === "daily" && isStreakMultiplierEnabled()) {
       const streak = await getStreakInfo(userAddress)
       if (streak.multiplier > 1) {
@@ -911,7 +899,7 @@ export async function POST(req: NextRequest) {
         hash,
         pending: true,
         reward,
-        amountStroops: rewardAmountStroops(reward),
+        amountStroops: await rewardAmountStroops(reward),
         note: "Transaction still pending on ledger. Retry the same reward in a few seconds.",
       },
       { status: 202 },

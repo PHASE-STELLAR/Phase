@@ -2,6 +2,7 @@ import { notFound } from "next/navigation"
 import Link from "next/link"
 import { WalletAvatar } from "@/components/wallet-avatar"
 import { getSignal, getReplies, getSignalContributors, computeCreditLedger, isPhase116Enabled, isPhase136Enabled, resolveCidGateway, extractIpfsCidPath } from "@/lib/signal-store"
+import { isFaucetDenyListEnabled, isWalletDenied } from "@/lib/faucet-deny-list"
 import { SignalDetailClient } from "./signal-detail-client"
 
 export const dynamic = "force-dynamic"

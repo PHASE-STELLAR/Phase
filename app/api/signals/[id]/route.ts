@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server"
+import { NextRequest, NextResponse } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
 import {
   getSignal,
@@ -7,6 +7,8 @@ import {
   signalETag,
   parseVersionHeader,
   VersionConflictError,
+  editSignal,
+  SignalEditError,
 } from "@/lib/signal-store"
 import { createNotification } from "@/lib/notification-store"
 import { checkAndUnlock } from "@/lib/achievement-store"
