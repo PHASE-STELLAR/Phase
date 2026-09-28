@@ -10,7 +10,7 @@
  * Run with: npm test
  */
 import assert from "node:assert/strict"
-import { describe, it } from "node:test"
+import { describe, it } from "vitest"
 import { validateWebhookUrl, verifyWebhookChallenge } from "@/app/api/nft-index/subscribe/route"
 
 describe("nft-index subscribe webhook URL validation (Issue #228)", () => {
