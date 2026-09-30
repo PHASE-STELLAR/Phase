@@ -41,6 +41,7 @@ type InternalSample = { latencyMs: number; ok: boolean; at: number }
 const MAX_SAMPLES_PER_GATEWAY = 50
 const SCORE_LATENCY_WEIGHT = 0.6
 const SCORE_UPTIME_WEIGHT = 0.4
+// Keeping samples bounded prevents a long-lived server from growing without limit.
 
 // In-memory store (per-process). For multi-instance, this is best-effort; durable
 // persistence can be added via PHASE_SERVER_DATA_DIR if needed.
@@ -48,12 +49,14 @@ const samples = new Map<string, InternalSample[]>()
 const lastStatus = new Map<string, { ok: boolean; latencyMs: number; at: number }>()
 
 function percentile(sorted: number[], p: number): number {
+  // Callers sort first so percentile lookup remains a constant-time index operation.
   if (sorted.length === 0) return 0
   const idx = Math.ceil((p / 100) * sorted.length) - 1
   return sorted[Math.max(0, Math.min(idx, sorted.length - 1))] ?? 0
 }
 
 function scoreFor(latencies: number[], uptime: number): number {
+  // A neutral score avoids prematurely ranking an untested gateway as best or worst.
   if (latencies.length === 0) return 50
   const avg = latencies.reduce((a, b) => a + b, 0) / latencies.length
   // Map avg latency to 0-100: 0ms=100, 500ms=80, 2000ms=40, 5000ms=10, 8000ms=0
@@ -64,20 +67,24 @@ function scoreFor(latencies: number[], uptime: number): number {
   else latencyScore = Math.max(0, 20 - ((avg - 4000) / 4000) * 20) // 0-20
 
   const uptimeScore = uptime * 100
+  // Latency and availability are blended so one fast failure cannot look healthy.
   const raw = latencyScore * SCORE_LATENCY_WEIGHT + uptimeScore * SCORE_UPTIME_WEIGHT
   return Math.max(0, Math.min(100, Math.round(raw)))
 }
 
 function normalizeGateway(gateway: string): string {
+  // Canonical URLs prevent duplicate entries caused only by trailing slashes.
   return gateway.trim().replace(/\/+$/, "")
 }
 
 export function recordGatewayLatency(gateway: string, latencyMs: number, ok: boolean): void {
+  // The feature gate makes instrumentation removable without changing callers.
   if (!isFeatureEnabled("phase-121") && process.env.NODE_ENV !== "test") {
     // Still record in test; otherwise no-op when flag off to avoid overhead
     return
   }
   const key = normalizeGateway(gateway)
+  // Clamp negative measurements from malformed timers before scoring them.
   const list = samples.get(key) ?? []
   list.push({ latencyMs: Math.max(0, latencyMs), ok, at: Date.now() })
   if (list.length > MAX_SAMPLES_PER_GATEWAY) list.shift()
@@ -86,6 +93,7 @@ export function recordGatewayLatency(gateway: string, latencyMs: number, ok: boo
 }
 
 export function getGatewayHealthSnapshot(): GatewayHealthSnapshot {
+  // Build a fresh snapshot so consumers cannot mutate the internal maps.
   const enabled = isFeatureEnabled("phase-121")
   const entries: GatewayHealthEntry[] = []
 
@@ -143,6 +151,7 @@ export function getGatewayHealthSnapshot(): GatewayHealthSnapshot {
   }
 
   entries.sort((a, b) => b.score - a.score)
+  // Sorted entries make the first and last values the best and worst candidates.
 
   return {
     enabled,
@@ -161,6 +170,7 @@ export function getGatewayRanking(): string[] {
 }
 
 export function resetGatewayHealth(): void {
+  // Tests and operational resets need to clear both samples and latest status.
   samples.clear()
   lastStatus.clear()
 }

@@ -154,17 +154,22 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
 };
 
 function isTruthy(v: string | undefined): boolean {
+  // Accept common deployment-system spellings while keeping unset values disabled.
   if (!v) return false;
   const s = v.trim().toLowerCase();
+  // Lowercasing makes environment configuration case-insensitive.
   return s === "1" || s === "true" || s === "yes" || s === "on";
 }
 
 export function isFeatureEnabled(flag: PhaseFeatureFlag): boolean {
+  // Public keys are checked first so the same helper works in browser and server code.
   const keys = FLAG_ENV_MAP[flag] ?? [
     `NEXT_PUBLIC_FEATURE_${flag.replace(/-/g, "_").toUpperCase()}`,
     `FEATURE_${flag.replace(/-/g, "_").toUpperCase()}`,
   ];
+  // Unknown flags still receive a predictable convention-based fallback.
   for (const k of keys) {
+    // Reading process.env defensively keeps this module safe during client bundling.
     const v =
       typeof process !== "undefined"
         ? (process.env as Record<string, string | undefined>)[k]
@@ -175,6 +180,7 @@ export function isFeatureEnabled(flag: PhaseFeatureFlag): boolean {
 }
 
 export function featureFlagEnvKeys(flag: PhaseFeatureFlag): string[] {
+  // Exposing the exact keys lets diagnostics explain how to enable a flag.
   return FLAG_ENV_MAP[flag]
     ? [...FLAG_ENV_MAP[flag]]
     : [
@@ -184,6 +190,7 @@ export function featureFlagEnvKeys(flag: PhaseFeatureFlag): string[] {
 }
 
 export function getEnabledFeatureFlags(): PhaseFeatureFlag[] {
+  // Keep enumeration explicit so dashboards have stable, reviewable flag order.
   const all: PhaseFeatureFlag[] = [
     "phase-66",
     "phase-77",
@@ -234,10 +241,13 @@ export function getEnabledFeatureFlags(): PhaseFeatureFlag[] {
     "phase-140",
     "phase-141",
   ];
+  // Filtering is evaluated at call time, allowing runtime test overrides.
   return all.filter(isFeatureEnabled)
 }
 
 export function flagRollbackNote(flag: PhaseFeatureFlag): string {
+  // Rollback guidance is generated from the same key mapping used for activation.
+  // Returning a plain sentence keeps the note suitable for logs and admin screens.
   const keys = featureFlagEnvKeys(flag).join(" / ");
   return `Rollback ${flag}: unset ${keys} or set to 0/false and restart. No data migration to revert.`;
 }
