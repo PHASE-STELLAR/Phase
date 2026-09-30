@@ -11,10 +11,12 @@ import { z } from "zod"
 export const ESCROW_TIMEOUT_SECONDS = 86400 * 7 // 7 days
 export const DISPUTE_WINDOW_SECONDS = 86400 * 3 // 3 days
 export const MAX_ESCROW_AMOUNT = "100000000000" // 10000 PHASELQ in stroops
+// Amounts stay as strings so large stroop values never lose integer precision.
 
 // ── Type definitions ───────────────────────────────────────────────────────
 
 export const EscrowSchema = z.object({
+  // Schema validation is the boundary between untrusted API input and settlement logic.
   escrowId: z.string().min(1).max(128),
   buyer: z.string().length(56).regex(/^G[A-Z2-7]{55}$/),
   seller: z.string().length(56).regex(/^G[A-Z2-7]{55}$/),
@@ -109,6 +111,7 @@ export class EscrowSettlementError extends Error {
 export function validateEscrowCreation(
   escrow: CreateEscrow
 ): { valid: true } | { valid: false; error: string; code: string } {
+  // Validate the complete payload before applying cross-field business rules.
   const parsed = CreateEscrowSchema.safeParse(escrow)
   if (!parsed.success) {
     return {
@@ -120,6 +123,7 @@ export function validateEscrowCreation(
 
   // Validate parties are unique
   const parties = [escrow.buyer, escrow.seller, escrow.arbiter]
+  // A distinct arbiter prevents one participant from controlling every signature.
   const uniqueParties = new Set(parties)
   if (uniqueParties.size !== 3) {
     return {
@@ -132,6 +136,7 @@ export function validateEscrowCreation(
   // Validate amount
   try {
     const amountBI = BigInt(escrow.amount)
+    // BigInt comparisons keep the maximum check exact for on-chain-sized amounts.
     const maxBI = BigInt(MAX_ESCROW_AMOUNT)
     
     if (amountBI <= BigInt(0)) {
@@ -167,6 +172,7 @@ export function validateEscrowSignature(
   signature: SignEscrow,
   escrow: Escrow
 ): { valid: true } | { valid: false; error: string; code: string } {
+  // Signature validation is intentionally separate from transaction submission.
   const parsed = SignEscrowSchema.safeParse(signature)
   if (!parsed.success) {
     return {
@@ -187,6 +193,7 @@ export function validateEscrowSignature(
 
   // Check signer authorization
   const authorizedSigners = [escrow.buyer, escrow.seller, escrow.arbiter]
+  // Only the three parties recorded at creation may participate in consensus.
   if (!authorizedSigners.includes(signature.signer)) {
     return {
       valid: false,
@@ -197,6 +204,7 @@ export function validateEscrowSignature(
 
   // Check if already signed
   const existingSignature = escrow.signatures.find((s) => s.signer === signature.signer)
+  // A signer cannot change their decision by submitting a second record.
   if (existingSignature) {
     return {
       valid: false,
@@ -228,6 +236,7 @@ export function hasReachedConsensus(escrow: Escrow): {
   approvals: number
   rejections: number
 } {
+  // Approval and rejection thresholds are evaluated independently for 2-of-3 voting.
   const approvals = escrow.signatures.filter((s) => s.decision === "approve").length
   const rejections = escrow.signatures.filter((s) => s.decision === "reject").length
 
@@ -308,6 +317,7 @@ export function determineSettlement(escrow: Escrow): {
   outcome: "complete" | "refund" | "expire" | "pending"
   reason: string
 } {
+  // Settlement checks expiration first so an unfunded consensus cannot revive a timeout.
   // Check expiration
   if (isEscrowExpired(escrow) && escrow.status === "funded") {
     return {

@@ -39,6 +39,7 @@ import { serverDataJsonPath, type ServerDataFile } from "@/lib/server-data-paths
  */
 
 const fileQueues = new Map<string, Promise<unknown>>();
+// The queue key is the normalized absolute path supplied by each store.
 
 /**
  * Runs `task` with exclusive access to `filePath` within this process. Pairing
@@ -50,6 +51,7 @@ export function withFileLock<T>(
   filePath: string,
   task: () => Promise<T>,
 ): Promise<T> {
+  // Reusing the previous promise preserves mutation order for this file.
   const previous = fileQueues.get(filePath) ?? Promise.resolve();
   const next = previous.then(task, task);
   fileQueues.set(
@@ -63,6 +65,7 @@ export function withFileLock<T>(
 }
 
 function isErrnoCode(error: unknown, code: string): boolean {
+  // Error-shape checking stays local so callers can remain platform-neutral.
   return (
     typeof error === "object" &&
     error !== null &&
@@ -78,6 +81,7 @@ export async function readJsonFile<T>(
   filePath: string,
   fallback: T,
 ): Promise<T> {
+  // Reads remain unlocked because they never mutate shared state.
   let raw: string;
   try {
     raw = await readFile(filePath, "utf8");
@@ -101,10 +105,13 @@ export async function writeJsonFileAtomic(
   filePath: string,
   data: unknown,
 ): Promise<void> {
+  // The temporary sibling keeps rename atomic on the same filesystem.
   await mkdir(path.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${Date.now().toString(36)}.tmp`;
+  // A process-and-time suffix avoids collisions between simultaneous writers.
   try {
     await writeFile(tmpPath, JSON.stringify(data, null, 2), "utf8");
+    // Rename is the commit point: readers see either the old file or the new one.
     await rename(tmpPath, filePath);
   } catch (error) {
     await rm(tmpPath, { force: true }).catch(() => undefined);
@@ -127,12 +134,14 @@ export async function updateJsonFile<T, R>(
     mutate: (store: T) => R | Promise<R>;
   },
 ): Promise<R> {
+  // Both read and write must stay inside one lock to prevent lost updates.
   return withFileLock(filePath, async () => {
     const raw = await readJsonFile<unknown>(filePath, undefined);
     // A missing file starts from an empty store, matching the
     // `catch { return {} }` readers this replaces.
     const store = opts.read ? opts.read(raw) : ((raw ?? {}) as T);
     const result = await opts.mutate(store);
+    // Persist only after the callback succeeds, so failed mutations are not saved.
     await writeJsonFileAtomic(filePath, store);
     return result;
   });
@@ -163,5 +172,6 @@ export function readStore<T extends object>(
   key: ServerDataFile,
   fallback: () => T,
 ): Promise<T> {
+  // Registered stores resolve their path through one shared server-data policy.
   return readJsonFile<T>(serverDataJsonPath(key), fallback());
 }

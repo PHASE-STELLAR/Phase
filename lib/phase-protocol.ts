@@ -34,11 +34,13 @@ export { recordGatewayLatency, getGatewayHealthSnapshot, getGatewayRanking, rese
 export type { GatewayHealthEntry, GatewayHealthSnapshot } from "@/lib/gateway-health"
 
 function isPhase121Enabled(): boolean {
+  // This local check keeps the dashboard gate usable before feature-flag initialization.
   const v = (typeof process !== "undefined" ? (process.env.NEXT_PUBLIC_FEATURE_PHASE_121 ?? process.env.FEATURE_PHASE_121 ?? "") : "")?.trim().toLowerCase()
   return v === "1" || v === "true" || v === "yes" || v === "on"
 }
 // Light wrapper for dashboard consumers (adds flag context, structured error)
 export function getGatewayHealthDashboardSafe(): { enabled: boolean; snapshot: import("@/lib/gateway-health").GatewayHealthSnapshot | null; error: string | null } {
+  // UI callers receive structured state instead of handling a thrown dashboard error.
   if (!isPhase121Enabled()) return { enabled: false, snapshot: null, error: "phase-121 flag disabled (set NEXT_PUBLIC_FEATURE_PHASE_121=1)" }
   try {
     return { enabled: true, snapshot: _getGatewayHealthSnapshot(), error: null }
@@ -68,6 +70,7 @@ function sorobanContractIdFromEnv(
   fallback: string,
   settingName: string,
 ): string {
+  // Prefer the first configured key, then validate the resolved value uniformly.
   const raw = envKeys.map((k) => k?.trim()).find((v) => v && v.length > 0)
   const id = raw ?? fallback
   if (StrKey.isValidContract(id)) return id
@@ -83,6 +86,7 @@ function sorobanContractIdFromEnv(
 }
 
 export const CONTRACT_ID = (() => {
+  // Client bundles must use public environment variables to avoid hydration drift.
   const e = (typeof process !== "undefined" ? process.env : {}) as NodeJS.ProcessEnv
   // Solo NEXT_PUBLIC_*: PHASE_PROTOCOL_ID (sin prefijo) no existe en el bundle del cliente → hydration mismatch.
   return sorobanContractIdFromEnv(
@@ -97,6 +101,7 @@ export const CONTRACT_ID = (() => {
  * No uses esto en componentes cliente.
  */
 export function phaseProtocolContractIdForServer(): string {
+  // Server routes may additionally read the non-public protocol ID override.
   const e = process.env
   return sorobanContractIdFromEnv(
     [e.NEXT_PUBLIC_PHASE_PROTOCOL_ID, e.PHASE_PROTOCOL_ID],
@@ -107,6 +112,7 @@ export function phaseProtocolContractIdForServer(): string {
 
 /** Contrato PHASE (NFT de utilidad) en Stellar Expert — testnet */
 export function stellarExpertTestnetContractUrl(contractId: string = CONTRACT_ID) {
+  // Centralizing explorer links keeps network selection consistent across the UI.
   return `https://stellar.expert/explorer/testnet/contract/${contractId}`
 }
 
@@ -179,6 +185,7 @@ export const RPC_URL = "https://soroban-testnet.stellar.org"
  * o deja que se infiera desde `<script src="…/_next/…">` (reverse proxy sin `basePath` en next.config).
  */
 function inferClientBasePathFromNextScripts(): string {
+  // Script URLs reveal a reverse-proxy subpath when Next.js has no explicit basePath.
   if (typeof document === "undefined") return ""
   const scripts = document.getElementsByTagName("script")
   for (let i = 0; i < scripts.length; i++) {
@@ -197,6 +204,7 @@ function inferClientBasePathFromNextScripts(): string {
 }
 
 function effectiveSorobanRpcUrl(): string {
+  // Browser requests prefer the same-origin proxy because public Soroban RPC lacks CORS.
   if (typeof window !== "undefined") {
     const pub = process.env.NEXT_PUBLIC_SOROBAN_RPC_PROXY_URL?.trim()
     if (pub && /^https?:\/\//i.test(pub)) return pub
@@ -322,6 +330,7 @@ export const READONLY_SIM_SOURCE_G =
 
 /** El SDK rechaza URLs `http://` (p. ej. `http://localhost:3000/api/soroban-rpc`) sin este flag. */
 function newRpcServerForUrl(url: string): rpc.Server {
+  // The SDK requires an explicit opt-in for local HTTP endpoints.
   const allowHttp = url.toLowerCase().startsWith("http://")
   return new rpc.Server(url, allowHttp ? { allowHttp: true } : undefined)
 }
@@ -329,6 +338,7 @@ function newRpcServerForUrl(url: string): rpc.Server {
 let _rpcServer: rpc.Server | null = null
 let _cachedRpcUrl: string | null = null
 function getRpc(): rpc.Server {
+  // Reuse the RPC client until configuration changes, avoiding needless connections.
   const url = effectiveSorobanRpcUrl()
   if (_rpcServer && _cachedRpcUrl === url) return _rpcServer
   _cachedRpcUrl = url
