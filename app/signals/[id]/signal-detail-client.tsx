@@ -1,11 +1,13 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { useWallet } from "@/components/wallet-provider"
 import { useLang } from "@/components/lang-context"
 import { WalletAvatar } from "@/components/wallet-avatar"
 import { signSignalPayload } from "@/lib/viewer-signature"
 import type { SignalReply } from "@/lib/signal-store"
+import { useSignalCRDT } from "./use-signal-crdt"
 
 const copy = {
   en: {
@@ -18,6 +20,21 @@ const copy = {
     walletBadge: "✓ WALLET",
     verifiedBadge: "✓ VERIFIED",
     conflict: "[ SIGNAL_CHANGED_REFRESH_AND_RETRY ]",
+    draft: "COLLABORATIVE LORE DRAFT",
+    draftTitlePlaceholder: "Draft title…",
+    draftBodyPlaceholder: "Draft body…",
+    draftNoWallet: "[ CONNECT_WALLET_TO_EDIT_DRAFT ]",
+    draftCommit: "[ COMMIT_REVISION ]",
+    draftCommitting: "[ COMMITTING… ]",
+    draftCommitted: "[ REVISION_COMMITTED ]",
+    draftConflict: "[ SIGNAL_CHANGED_DRAFT_MERGED_RETRY_COMMIT ]",
+    draftSyncing: "SYNCING",
+    draftSynced: "SYNCED",
+    draftOffline: "OFFLINE",
+    draftPending: "pending",
+    draftContributors: "contributors",
+    draftNote:
+      "Concurrent edits merge. Committing publishes a new revision with full edit history.",
   },
   es: {
     replies: "RESPUESTAS",
@@ -29,6 +46,21 @@ const copy = {
     walletBadge: "✓ WALLET",
     verifiedBadge: "✓ VERIFICADO",
     conflict: "[ SEÑAL_ACTUALIZADA_REFRESCA_Y_REINTENTA ]",
+    draft: "BORRADOR DE LORE COLABORATIVO",
+    draftTitlePlaceholder: "Título del borrador…",
+    draftBodyPlaceholder: "Cuerpo del borrador…",
+    draftNoWallet: "[ CONECTAR_WALLET_PARA_EDITAR_BORRADOR ]",
+    draftCommit: "[ PUBLICAR_REVISIÓN ]",
+    draftCommitting: "[ PUBLICANDO… ]",
+    draftCommitted: "[ REVISIÓN_PUBLICADA ]",
+    draftConflict: "[ SEÑAL_ACTUALIZADA_BORRADOR_FUSIONADO_REINTENTA ]",
+    draftSyncing: "SINCRONIZANDO",
+    draftSynced: "SINCRONIZADO",
+    draftOffline: "SIN CONEXIÓN",
+    draftPending: "pendientes",
+    draftContributors: "colaboradores",
+    draftNote:
+      "Las ediciones concurrentes se fusionan. Publicar crea una nueva revisión con historial completo.",
   },
 }
 
@@ -61,6 +93,7 @@ export function SignalDetailClient({
 }: Props) {
   const { address } = useWallet()
   const { lang } = useLang()
+  const router = useRouter()
   const t = copy[lang] ?? copy.en
 
   const [replies, setReplies] = useState<SignalReply[]>(initialReplies)
@@ -69,6 +102,13 @@ export function SignalDetailClient({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [conflict, setConflict] = useState(false)
+
+  // phase-141: collaborative lore draft. The hook is inert while the flag is off,
+  // so the panel below and the Yjs dependency are both absent by default.
+  const draft = useSignalCRDT(signalId, { initialVersion: initialSignalVersion, wallet: address })
+  const [committing, setCommitting] = useState(false)
+  const [committed, setCommitted] = useState<number | null>(null)
+  const [commitError, setCommitError] = useState<string | null>(null)
 
   const baseInput =
     "w-full bg-transparent border border-[var(--color-border-tertiary)] font-mono text-[12px] text-foreground px-3 py-2 focus:outline-none focus:border-[#7F77DD] transition-colors placeholder:text-muted-foreground/40 resize-none"
@@ -117,8 +157,110 @@ export function SignalDetailClient({
     }
   }
 
+  async function handleCommitDraft() {
+    setCommitting(true)
+    setCommitError(null)
+    try {
+      const result = await draft.commit()
+      if (result.ok) {
+        setCommitted(result.version)
+        setSignalVersion(result.version)
+        // The title and body are rendered server-side, so the committed revision
+        // only appears once the server component re-runs.
+        router.refresh()
+        return
+      }
+      if (typeof result.currentVersion === "number") {
+        setSignalVersion(result.currentVersion)
+      }
+      setCommitError(result.error)
+    } finally {
+      setCommitting(false)
+    }
+  }
+
   return (
     <div className="mt-6 flex flex-col gap-4">
+      {draft.enabled && (
+        <div className="border border-[#534AB7]/50 p-4 flex flex-col gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-[#7F77DD]">
+              {t.draft}
+            </span>
+            <span className="ml-auto font-mono text-[8px] uppercase tracking-widest text-muted-foreground/50">
+              {draft.status === "synced"
+                ? t.draftSynced
+                : draft.status === "offline"
+                  ? t.draftOffline
+                  : t.draftSyncing}
+              {draft.pending > 0 ? ` · ${draft.pending} ${t.draftPending}` : ""}
+              {draft.contributors.length > 0
+                ? ` · ${draft.contributors.length} ${t.draftContributors}`
+                : ""}
+            </span>
+          </div>
+
+          {draft.canEdit ? (
+            <div className="flex flex-col gap-2">
+              <input
+                value={draft.title}
+                maxLength={200}
+                onChange={(e) => draft.setTitle(e.target.value)}
+                placeholder={t.draftTitlePlaceholder}
+                className={baseInput}
+              />
+              <textarea
+                rows={6}
+                value={draft.body}
+                onChange={(e) => draft.setBody(e.target.value)}
+                placeholder={t.draftBodyPlaceholder}
+                className={baseInput}
+              />
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <p className="font-mono text-[11px] text-muted-foreground whitespace-pre-wrap">
+                {draft.body}
+              </p>
+              <p className="font-mono text-[10px] tracking-widest text-muted-foreground/60">
+                {t.draftNoWallet}
+              </p>
+            </div>
+          )}
+
+          {draft.contributors.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {draft.contributors.map((c) => (
+                <span key={c.wallet} className="flex items-center gap-1 font-mono text-[9px] text-muted-foreground/60">
+                  <WalletAvatar wallet={c.wallet} displayName="" size={16} />
+                  {c.wallet.slice(0, 4)}…{c.wallet.slice(-4)} · {c.updates}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <p className="font-mono text-[9px] leading-relaxed text-muted-foreground/50">{t.draftNote}</p>
+
+          {(draft.error || commitError) && (
+            <p className="font-mono text-[10px] text-destructive">{commitError ?? draft.error}</p>
+          )}
+          {committed !== null && !commitError && (
+            <p className="font-mono text-[10px] text-[#0F6E56]">
+              {t.draftCommitted} · v{committed}
+            </p>
+          )}
+
+          <button
+            type="button"
+            disabled={!draft.canEdit || committing}
+            onClick={handleCommitDraft}
+            className="self-end border border-[#534AB7] bg-[#534AB7]/10 px-5 py-1.5 font-mono text-[10px] uppercase tracking-widest text-[#7F77DD] hover:bg-[#534AB7]/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {committing ? t.draftCommitting : t.draftCommit}
+          </button>
+        </div>
+      )}
+
       <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground/60">
         {t.replies} ({replies.length})
       </div>

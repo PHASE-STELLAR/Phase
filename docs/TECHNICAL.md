@@ -178,6 +178,7 @@ settlement verifier and must not accept unsigned base64 payloads.
 | `phase-83` | `GET/POST /api/signals/[id]/reactions` | Toggle a curated emoji reaction per (signal, wallet); `GET` returns per-emoji counts + the viewer's own reacted flags; `POST` rate-limited to 20/60s per wallet (`429` + `Retry-After` over the limit) | `404` disabled |
 | `phase-139` | `GET/POST /api/market/collections/[collection_id]/offer-book` | `GET` aggregates every pending offer across a collection's active listings into price levels (best price first); `POST` fans a single buyer intent into up to 20 per-listing offers, reporting `created`/`skipped` | `404` disabled; per-listing `/api/market/[id]/offers` unaffected |
 | `phase-140` | `POST /api/market/route.ts` (listing create) & `POST /api/market/[id]/offers/[offer_id]` (accept) | Listing create accepts `creator_wallet`/`royalty_bps`; accepting an offer on a secondary sale (`creator_wallet !== seller_wallet`) computes and ledgers a creator/seller split, returned as `royalty` on the accept response | Listing create ignores the fields; accept pays 100% to seller as before |
+| `phase-141` | `GET/POST /api/signals/[id]/crdt` & `PUT /api/signals/[id]` | Yjs CRDT collaborative draft for signal lore: automatic merge of concurrent edits, exposed as an `enabled` draft panel on the signal page. `PUT` with `from_draft: true` promotes a merged draft through the normal CAS commit and snapshots the pre-edit text | `404` disabled, no draft panel; `PUT` still works on its own as an `If-Match`-guarded full replacement |
 
 ### 5.3 Signal concurrency contract
 
@@ -209,7 +210,10 @@ A stale value throws `VersionConflictError`, which the API maps to `409`.
 | `GET /api/signals/[id]` | Returns `ETag: "<version>"`. |
 | `POST /api/signals/[id]` | Optional `If-Match: "<version>"`. Stale value → `409` with `current_version` and the fresh `ETag`. |
 | `POST /api/signals/[id]/replies` | Optional `parent_version: <int>`. Stale value → `409` with `current_version`. |
-| `PATCH /api/signals/[id]` | `If-Match` required (phase-82). Stale value → `409`. |
+| `PATCH /api/signals/[id]` | `If-Match` required (phase-82). Stale value → `409` with `current_version` and the fresh `ETag`. |
+| `PUT /api/signals/[id]` | `If-Match` required. Full replacement of `title` **and** `body`, so a revision is never half-applied. Stale value → `409` with `current_version` and the fresh `ETag`. |
+| `GET /api/signals/[id]/crdt` | Collaborative draft (phase-141). Optional `?state_vector=` returns only the operations that client lacks. |
+| `POST /api/signals/[id]/crdt` | Collaborative draft (phase-141). Merges a base64 Yjs update. Never touches `signals`. |
 
 `If-Match` and `parent_version` are optional on the upvote and reply paths, so
 clients that omit them keep last-writer-wins behaviour. Conflicts emit the
@@ -224,10 +228,56 @@ database file no longer interleave destructively. `lib/__tests__/signal-store-co
 drives this directly with a second `DatabaseSync` handle committing between one
 connection's read and its write.
 
-**Not a CRDT.** Signals are versioned, not collaboratively edited: an author's
-edit takes a pre-edit snapshot into `signal_versions` and must stay
-revertible. A merge-based CRDT would fold concurrent edits together and destroy
-that history, so the contract is compare-and-swap rather than automatic merge.
+**Committed lore is not a CRDT.** Signals are versioned, not collaboratively
+edited: an author's edit takes a pre-edit snapshot into `signal_versions` and
+must stay revertible. A merge-based CRDT applied to the committed row would fold
+concurrent edits together and destroy that history, so the commit contract is
+compare-and-swap rather than automatic merge.
+
+**The draft *is* a CRDT (phase-141).** Issue #207 measured what CAS alone does
+when 50 people type into the same signal at once, and it keeps one of the fifty
+texts (`lib/__tests__/signal-crdt-benchmark.test.ts`):
+
+| Strategy | Preserved | Outcome |
+|---|---|---|
+| `version` + CAS | 1/50 | 1 committed, 49 rejected `409`, text clobbered |
+| Yjs CRDT draft | 50/50 | 50 updates folded into one snapshot, 0 rejected |
+
+The two therefore compose instead of competing. CRDTs merge *concurrent
+proposals*; they cannot decide which text is authoritative, and they cannot write
+revertible history. So:
+
+- `signal_crdt_docs` / `signal_crdt_updates` hold a **scratch draft** that merges
+  automatically and never writes the `signals` row.
+- `PUT /api/signals/[id]` with `from_draft: true` promotes a merged draft into the
+  committed row through the same `editSignal` CAS path, snapshotting the pre-edit
+  text into `signal_versions` exactly as a manual edit does.
+- Conflicts remain possible and remain visible at the commit boundary: if a
+  colleague committed while the draft was open, `PUT` still answers `409`. The
+  CRDT removes *lost* updates, it does not remove the need for a guard.
+
+`lib/signal-crdt.ts` holds the document model (a `lore` Y.Map of `title` and
+`body` Y.Text), and edits are applied as a minimal span diff — common prefix and
+suffix are left alone — so two appends become two independent inserts instead of
+one overwriting the other. `lib/signal-crdt-store.ts` merges inside
+`BEGIN IMMEDIATE` and folds the update tail into the snapshot every
+`COMPACT_AFTER_UPDATES` (64) merges, so the tail cannot grow without bound.
+
+**Transport is HTTP, not WebSocket.** Yjs is transport-agnostic and speaks
+state-vector diffs, so a `GET` with the client's state vector returns precisely
+the operations it lacks — the same wire format a socket would carry, without
+holding a connection open. That matters here because the app deploys to Vercel
+serverless, where a long-lived socket per reader is not available. The client
+hook in `app/signals/[id]/use-signal-crdt.ts` posts on a short debounce and
+polls while the panel is open.
+
+**Metrics.** `lib/signal-version-metrics.ts` keeps process-local counters for
+`signal_version_conflicts` (split by `edit` / `put` / `upvote` / `reply`, and
+flagged separately when a CAS retry was attempted) plus `signal_crdt_merges`,
+`signal_crdt_concurrent_merges` and commit outcomes. The store is the only place
+that increments them, so a rejected CAS is counted once no matter how many layers
+observe it. The counters are aggregate only — no signal id, wallet, or text ever
+reaches a metric label.
 
 ### 5.4 Shared JSON sidecar store layer
 
@@ -319,7 +369,7 @@ Critical groups:
 - Gemini runtime (`GEMINI_API_KEY`)
 - Writable server data directory (`PHASE_SERVER_DATA_DIR`)
 
-### 9.1 Feature flags (phase-88..91, 107,109,110,111,112,113,114 + 115,116..124, 134, 135)
+### 9.1 Feature flags (phase-82..141)
 
 All flags default to **off** (safe rollback). Set to `1`/`true` to enable.
 
@@ -351,6 +401,7 @@ NEXT_PUBLIC_FEATURE_PHASE_82=1
 NEXT_PUBLIC_FEATURE_PHASE_83=1
 NEXT_PUBLIC_FEATURE_PHASE_139=1
 NEXT_PUBLIC_FEATURE_PHASE_140=1
+NEXT_PUBLIC_FEATURE_PHASE_141=1
 # Server-only aliases also accepted: FEATURE_PHASE_104, etc.
 ```
 

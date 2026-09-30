@@ -2,6 +2,7 @@
 import { nanoid } from "nanoid";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { getDb } from "@/lib/sqlite-db";
+import { recordSignalVersionConflict } from "@/lib/signal-version-metrics";
 
 export type MediaAttachment = {
   ipfs_cid: string;
@@ -385,6 +386,7 @@ export async function upvoteSignal(
     const row = getSignalRow(id);
     if (!row) throw new Error("Signal not found");
     if (expectedVersion !== undefined && row.version !== expectedVersion) {
+      recordSignalVersionConflict("upvote");
       throw new VersionConflictError(row.version);
     }
 
@@ -408,6 +410,9 @@ export async function upvoteSignal(
     if (result.changes === 1) {
       return rowToSignal({ ...row, upvotes_json: upvotesJson, version: nextVersion });
     }
+    // Lost the CAS: a peer committed between our read and our write, so the
+    // next iteration recomputes against their result.
+    recordSignalVersionConflict("upvote", { retried: true });
   }
 
   // Every attempt lost the race. Surface the current state so the caller can
@@ -472,6 +477,7 @@ export async function createReply(
     const parent = getSignalRow(reply.signal_id);
     if (!parent) throw new Error("Signal not found");
     if (parent.version !== expectedParentVersion) {
+      recordSignalVersionConflict("reply");
       throw new VersionConflictError(parent.version);
     }
     db.prepare(
@@ -1193,6 +1199,7 @@ export async function editSignal(
     if (row.author_wallet !== wallet) throw new SignalEditError("FORBIDDEN", "Only the author can edit this signal");
     const currentVersion = expectedVersion ?? row.version;
     if (row.version !== currentVersion) {
+      recordSignalVersionConflict("edit");
       throw new SignalEditError("CONFLICT", "Signal changed; reload before editing again");
     }
 
@@ -1216,7 +1223,10 @@ export async function editSignal(
        SET title = COALESCE(?, title), body = COALESCE(?, body), version = ?
        WHERE id = ? AND version = ?`,
     ).run(title ?? null, body ?? null, nextVersion, signal_id, currentVersion);
-    if (updated.changes !== 1) throw new SignalEditError("CONFLICT", "Signal changed; reload before editing again");
+    if (updated.changes !== 1) {
+      recordSignalVersionConflict("edit", { retried: true });
+      throw new SignalEditError("CONFLICT", "Signal changed; reload before editing again");
+    }
 
     db.exec("COMMIT");
     const next = await getSignal(signal_id);
