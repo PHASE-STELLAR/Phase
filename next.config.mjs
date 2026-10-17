@@ -73,6 +73,36 @@ const nextConfig = {
           { key: "Access-Control-Allow-Headers", value: "Content-Type" },
         ],
       },
+      // Static assets: long-lived cache with immutable hash
+      {
+        source: "/_next/static/(.*)",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+        ],
+      },
+      // Image optimization: edge cache with revalidation
+      {
+        source: "/_next/image(.*)",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+        ],
+      },
+      // Font files: long cache with CDN edge strategy
+      {
+        source: "/fonts/(.*)",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
+      // HTML pages: short-lived, stale-while-revalidate for edge freshness
+      {
+        source: "/:path*",
+        has: [{ type: "header", key: "accept", value: "(?=.*html)" }],
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=3600, stale-while-revalidate=86400" },
+        ],
+      },
       {
         source: "/phaser-liq-token.png",
         headers: [

@@ -92,12 +92,16 @@
     /* Apply scrollbar styles to html element */
     scrollbar-width: thin;
     scrollbar-color: hsl(0, 0%, 24%) oklch(0.09 0.014 220);
+    font-display: swap;
   }
   body {
     @apply bg-background text-foreground;
     overflow-x: hidden;
     max-width: 100vw;
     scrollbar-width: thin;
+    /* CLS containment: size constraint prevents layout shifts when fonts load */
+    contain: layout style paint;
+    min-height: 100vh;
     scrollbar-color: hsl(0, 0%, 24%) oklch(0.09 0.014 220);
   }
   /* Webkit scrollbar styling for html and body */
