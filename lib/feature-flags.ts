@@ -43,6 +43,15 @@
  * - phase-145: gauge voting for emissions with ve-weight directing quest budgets
  * - phase-154: outbound webhook subscriptions — signed event delivery to
  *   third-party endpoints (partial slice of spike 664 / issue #527)
+ * - phase-158: Soroban read coalescing — in-flight dedupe + TTL cache for
+ *   repeated simulations (partial slice of spike 655 / issue #517)
+ * - phase-159: batched owner-key loader — DataLoader-style per-tick coalescing
+ *   to remove N+1 owner reads (partial slice of spike 656 / issue #518)
+ * - phase-160: Web Vitals budgets — per-route LCP/INP/CLS budgets with
+ *   pass/fail evaluation (partial slice of spike 657 / issue #520)
+ * - phase-161: typed contract-error taxonomy — code-stable PhaseError
+ *   descriptors with retryable hints and message keys (partial slice of spike
+ *   660 / issue #523)
  */
 
 export type PhaseFeatureFlag =
@@ -105,7 +114,11 @@ export type PhaseFeatureFlag =
   | "phase-143"
   | "phase-144"
   | "phase-145"
-  | "phase-154";
+  | "phase-154"
+  | "phase-158"
+  | "phase-159"
+  | "phase-160"
+  | "phase-161";
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-66": ["NEXT_PUBLIC_FEATURE_PHASE_66", "FEATURE_PHASE_66"],
@@ -167,6 +180,10 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-144": ["NEXT_PUBLIC_FEATURE_PHASE_144", "FEATURE_PHASE_144"],
   "phase-145": ["NEXT_PUBLIC_FEATURE_PHASE_145", "FEATURE_PHASE_145"],
   "phase-154": ["NEXT_PUBLIC_FEATURE_PHASE_154", "FEATURE_PHASE_154"],
+  "phase-158": ["NEXT_PUBLIC_FEATURE_PHASE_158", "FEATURE_PHASE_158"],
+  "phase-159": ["NEXT_PUBLIC_FEATURE_PHASE_159", "FEATURE_PHASE_159"],
+  "phase-160": ["NEXT_PUBLIC_FEATURE_PHASE_160", "FEATURE_PHASE_160"],
+  "phase-161": ["NEXT_PUBLIC_FEATURE_PHASE_161", "FEATURE_PHASE_161"],
 };
 
 function isTruthy(v: string | undefined): boolean {
@@ -261,6 +278,10 @@ export function getEnabledFeatureFlags(): PhaseFeatureFlag[] {
     "phase-144",
     "phase-145",
     "phase-154",
+    "phase-158",
+    "phase-159",
+    "phase-160",
+    "phase-161",
   ];
   // Filtering is evaluated at call time, allowing runtime test overrides.
   return all.filter(isFeatureEnabled)
