@@ -1,6 +1,8 @@
 "use client"
 
+import Image from "next/image"
 import { ipfsHttpsGatewayUrls } from "@/lib/phase-protocol"
+import { isFeatureEnabled } from "@/lib/feature-flags"
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 
 type Props = {
@@ -18,9 +20,13 @@ type Props = {
    * in an ordered hang (phase-142) and shifts every later work.
    */
   fallback?: ReactNode
+  priority?: boolean
+  sizes?: string
+  width?: number
+  height?: number
 }
 
-export function IpfsDisplayImg({ uri, alt = "", className, loading = "lazy", variant, focalPoint, onExhausted }: Props) {
+export function IpfsDisplayImg({ uri, alt = "", className, loading = "lazy", variant, focalPoint, onExhausted, priority, sizes, width = 640, height = 640 }: Props) {
   const candidates = useMemo(() => {
     const urls = ipfsHttpsGatewayUrls(uri)
     if (!variant) return urls
@@ -43,8 +49,33 @@ export function IpfsDisplayImg({ uri, alt = "", className, loading = "lazy", var
 
   if (!uri.trim() || !src || exhausted) return fallback ? <>{fallback}</> : null
 
-  return (
-    // eslint-disable-next-line @next/next/no-img-element -- remote IPFS / HTTPS previews
+  const optimized = isFeatureEnabled("phase-171")
+
+  return optimized ? (
+    <Image
+      key={`${uri}:${idx}`}
+      src={src}
+      alt={alt}
+      className={className}
+      width={width}
+      height={height}
+      sizes={sizes ?? "(max-width: 768px) 100vw, 33vw"}
+      priority={priority}
+      loading={priority ? "eager" : loading}
+      decoding="async"
+      unoptimized={false}
+      style={{ objectFit: "cover", aspectRatio: `${width} / ${height}` }}
+      referrerPolicy="no-referrer"
+      onError={() => {
+        if (idx + 1 < candidates.length) setIdx((i) => i + 1)
+        else {
+          if (fallback) setExhausted(true)
+          onExhausted?.()
+        }
+      }}
+    />
+  ) : (
+    // eslint-disable-next-line @next/next/no-img-element -- legacy flag-off path
     <img
       key={`${uri}:${idx}`}
       src={src}

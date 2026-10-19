@@ -15,6 +15,10 @@ import {
   buildPhaseTokenMetadataJson,
   publicPhaseSiteBaseUrl,
 } from "@/lib/phase-nft-metadata-build"
+import { preparePhaseStreaming } from "@/lib/phase-streaming"
+import { IpfsDisplayImg } from "@/components/ipfs-display-img"
+
+export const dynamic = "force-dynamic"
 
 const navLink =
   "inline-flex min-h-[36px] items-center border border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-zinc-400 transition-colors hover:border-violet-500/50 hover:text-violet-300"
@@ -119,6 +123,7 @@ function StoryTimelineVisualizer({
 }
 
 export default async function WorldGalleryPage({ params }: Props) {
+  preparePhaseStreaming()
   const { collection_id } = await params
   const collectionId = parseInt(collection_id, 10)
 
@@ -244,13 +249,14 @@ export default async function WorldGalleryPage({ params }: Props) {
                   >
                     <div className="relative border-b border-violet-500/20">
                       {nft.image ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={nft.image}
+                        <IpfsDisplayImg
+                          uri={nft.image}
                           alt={nft.name}
                           loading="lazy"
-                          decoding="async"
                           className="aspect-square w-full object-cover opacity-80 transition-opacity group-hover:opacity-95"
+                          width={640}
+                          height={640}
+                          sizes="(max-width: 768px) 50vw, 25vw"
                         />
                       ) : (
                         <div className="flex aspect-square w-full items-center justify-center bg-violet-950/20">

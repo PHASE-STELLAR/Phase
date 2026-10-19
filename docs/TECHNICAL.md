@@ -435,6 +435,20 @@ Agent tuning (all optional, server-only):
 
 Rollback: unset the var or set `0` and restart. No ledger migration to revert; off-chain stores remain but are ignored when flag off. See `PROJECT_ARCHITECTURE.md` §10.
 
+### 9.2 Integration architecture spike (phases 170–173)
+
+The integration slice is intentionally default-off. `phase-170` enables request-scoped RSC preparation and loading boundaries on latency-heavy server pages; `phase-171` enables `IpfsDisplayImg`'s proxy-first `next/image` path and responsive optimizer settings; `phase-172` enables the package import optimization build configuration; and `phase-173` governs the issuer ceremony's DNS/TOML/image preflight and Horizon re-read. Roll back by unsetting the corresponding environment variable and restarting. Existing JSON sidecars, contract state, and raw image URLs remain inert when disabled.
+
+Issuer ceremony commands:
+
+```sh
+cd scripts
+npm run verify:issuer-home-domain   # preflight + signed XDR, no submit
+npm run set:issuer-home-domain      # preflight, submit, then re-read Horizon
+```
+
+Set `FEATURE_PHASE_173=1` for the verified ceremony path. `ISSUER_HOME_DOMAIN_SKIP_PREFLIGHT=1` is an explicit emergency escape hatch for a controlled testnet ceremony; `ISSUER_HOME_DOMAIN_DRY_RUN=1` never submits. The script does not change wallet signing boundaries: only the issuer secret signs `set_options`, and user trustline/payment signing remains client-side.
+
 ---
 
 ## 10. Security and Operations
