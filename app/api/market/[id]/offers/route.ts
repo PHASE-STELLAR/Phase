@@ -3,6 +3,15 @@ import { StrKey } from "@stellar/stellar-sdk"
 import { createOffer, getListing, getOffers, isPhase100Enabled, recordCreatorProfileView, dropStatusForListing, currentDutchPrice, isPhaseTimedDropsEnabled, isPhaseDutchAuctionEnabled } from "@/lib/market-store"
 import { createNotification } from "@/lib/notification-store"
 import { createApiRequestContext } from "@/lib/api-observability"
+import {
+  classicPoolIdForAssets,
+  decimalToStroops,
+  getClassicPoolSnapshot,
+  isPhase182Enabled,
+  quoteClassicPool,
+  type PoolAsset,
+} from "@/lib/liquidity-pool"
+import { resolvePhaserLiqClassicAsset } from "@/lib/stellar"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -115,6 +124,43 @@ export async function POST(
     const message = typeof body.message === "string" ? body.message.trim().slice(0, 200) : undefined
     const offer = await createOffer({ listing_id: id, buyer_wallet, amount_phaselq, message })
 
+    // Spike 574 (phase-182): the offer is denominated in PHASELQ; the pool can
+    // say what that amount would actually fetch in XLM. Advisory only — a pool
+    // outage must never stop a legitimate offer. The thin-pool warning is what
+    // prevents a "spot price" from being read as an executable price.
+    let poolPrice: {
+      amount_phaselq: number
+      spot_price_xlm: number
+      execution_price_xlm: number
+      price_impact_bps: number
+      quote_hash: string
+      stale: boolean
+      warning: string | null
+    } | null = null
+    if (isPhase182Enabled()) {
+      try {
+        const resolved = resolvePhaserLiqClassicAsset()
+        const base: PoolAsset = { kind: "credit", code: resolved.code, issuer: resolved.issuer }
+        const snapshot = await getClassicPoolSnapshot(classicPoolIdForAssets(base, { kind: "native" }))
+        const quote = quoteClassicPool(snapshot, {
+          assetIn: base,
+          amountInStroops: decimalToStroops(amount_phaselq.toFixed(7)),
+          maxPriceImpactBps: 10_000,
+        })
+        poolPrice = {
+          amount_phaselq,
+          spot_price_xlm: quote.spotPrice,
+          execution_price_xlm: quote.executionPrice,
+          price_impact_bps: quote.priceImpactBps,
+          quote_hash: quote.quoteHash,
+          stale: quote.stale,
+          warning: quote.priceImpactBps > 500 ? "thin_pool" : null,
+        }
+      } catch {
+        poolPrice = null
+      }
+    }
+
     void createNotification(listing.seller_wallet, "new_offer", {
       listing_id: id,
       token_id: listing.token_id,
@@ -126,7 +172,7 @@ export async function POST(
       // Issue #230: the wash screen is a flag, so the caller is told whether
       // their offer was excluded from volume rather than finding out from a
       // ranking that ignored them.
-      { offer, washScreened: true },
+      { offer, washScreened: true, ...(poolPrice ? { pool_price: poolPrice } : {}) },
       { status: 201, event: "market.offer.created", metadata: { listing_id: id, offer_id: offer.id } },
     )
   } catch (error) {

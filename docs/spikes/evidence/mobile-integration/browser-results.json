@@ -1,0 +1,60 @@
+[
+  {
+    "route": "/forge",
+    "width": 360,
+    "horizontalOverflow": false,
+    "pageErrors": 0
+  },
+  {
+    "route": "/chamber",
+    "width": 360,
+    "horizontalOverflow": false,
+    "pageErrors": 0
+  },
+  {
+    "route": "/forge",
+    "width": 390,
+    "horizontalOverflow": false,
+    "pageErrors": 0
+  },
+  {
+    "route": "/chamber",
+    "width": 390,
+    "horizontalOverflow": false,
+    "pageErrors": 0
+  },
+  {
+    "route": "/forge",
+    "width": 768,
+    "horizontalOverflow": false,
+    "pageErrors": 0
+  },
+  {
+    "route": "/chamber",
+    "width": 768,
+    "horizontalOverflow": false,
+    "pageErrors": 0
+  },
+  {
+    "route": "/forge",
+    "width": 1024,
+    "horizontalOverflow": false,
+    "pageErrors": 0
+  },
+  {
+    "route": "/chamber",
+    "width": 1024,
+    "horizontalOverflow": false,
+    "pageErrors": 0
+  },
+  {
+    "sheetFocus": true,
+    "escape": true,
+    "restoredOpener": true,
+    "persistedIntent": true,
+    "strippedQueryRecovery": true,
+    "promptPreserved": true,
+    "resizedViewport": true,
+    "pageErrors": 0
+  }
+]

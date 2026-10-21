@@ -16,6 +16,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
+import { isAnalyticsWarehouseEnabled, recordWarehouseEvent } from "@/lib/analytics-warehouse"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -200,6 +201,16 @@ export async function createGenerationJob(input: CreateJobInput): Promise<Genera
     }
     store[job.id] = job
     await writeJobStore(store)
+
+    if (isAnalyticsWarehouseEnabled(job.payerAddress)) {
+      void recordWarehouseEvent({
+        surface: "forge",
+        stage: "forge_started",
+        wallet: job.payerAddress ?? null,
+        metadata: { jobId: job.id, txHash: job.txHash, taskId: job.taskId },
+      }).catch(() => {})
+    }
+
     return job
   })
 }
@@ -255,6 +266,26 @@ export async function updateGenerationJob(
     const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() }
     store[id] = updated
     await writeJobStore(store)
+
+    if (patch.status && isAnalyticsWarehouseEnabled(updated.payerAddress)) {
+      const stageMap: Record<string, string> = {
+        completed: "forge_completed",
+        failed: "forge_failed",
+        webhook_received: "webhook_received",
+        processing: "forge_polling",
+      }
+      const stage = stageMap[patch.status]
+      if (stage) {
+        void recordWarehouseEvent({
+          surface: "forge",
+          stage,
+          wallet: updated.payerAddress ?? null,
+          reason: patch.error ?? null,
+          metadata: { jobId: updated.id, txHash: updated.txHash },
+        }).catch(() => {})
+      }
+    }
+
     return updated
   })
 }
@@ -274,6 +305,26 @@ export async function updateGenerationJobByTxHash(
     const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() }
     store[id] = updated
     await writeJobStore(store)
+
+    if (patch.status && isAnalyticsWarehouseEnabled(updated.payerAddress)) {
+      const stageMap: Record<string, string> = {
+        completed: "forge_completed",
+        failed: "forge_failed",
+        webhook_received: "webhook_received",
+        processing: "forge_polling",
+      }
+      const stage = stageMap[patch.status]
+      if (stage) {
+        void recordWarehouseEvent({
+          surface: "forge",
+          stage,
+          wallet: updated.payerAddress ?? null,
+          reason: patch.error ?? null,
+          metadata: { jobId: updated.id, txHash: updated.txHash },
+        }).catch(() => {})
+      }
+    }
+
     return updated
   })
 }
@@ -293,6 +344,26 @@ export async function updateGenerationJobByTaskId(
     const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() }
     store[id] = updated
     await writeJobStore(store)
+
+    if (patch.status && isAnalyticsWarehouseEnabled(updated.payerAddress)) {
+      const stageMap: Record<string, string> = {
+        completed: "forge_completed",
+        failed: "forge_failed",
+        webhook_received: "webhook_received",
+        processing: "forge_polling",
+      }
+      const stage = stageMap[patch.status]
+      if (stage) {
+        void recordWarehouseEvent({
+          surface: "forge",
+          stage,
+          wallet: updated.payerAddress ?? null,
+          reason: patch.error ?? null,
+          metadata: { jobId: updated.id, txHash: updated.txHash },
+        }).catch(() => {})
+      }
+    }
+
     return updated
   })
 }

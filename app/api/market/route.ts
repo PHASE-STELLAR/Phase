@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
-import { getListings, createListing, isPhase140Enabled } from "@/lib/market-store"
+import { getListings, createListing, isPhase140Enabled, denoteListingInPool } from "@/lib/market-store"
+import {
+  classicPoolIdForAssets,
+  decimalToStroops,
+  getClassicPoolSnapshot,
+  isPhase182Enabled,
+  quoteClassicPool,
+  type PoolAsset,
+} from "@/lib/liquidity-pool"
+import { resolvePhaserLiqClassicAsset } from "@/lib/stellar"
 import {
   getSuggestionBand,
   isPricingOracleEnabled,
@@ -26,7 +35,36 @@ export async function GET(request: NextRequest) {
     drop: drop ?? undefined,
     exclude_artist_proof: excludeAp || undefined,
   })
-  return NextResponse.json({ listings })
+
+  // Spike 574 (phase-182): PHASELQ-denominated prices can be read in XLM with
+  // BOTH spot and execution price. One quote serves the whole page — never one
+  // Horizon call per listing. A pool outage degrades to no conversion, never to
+  // a failed market response.
+  let poolPrice: ReturnType<typeof denoteListingInPool> | null = null
+  let poolStale = false
+  if (isPhase182Enabled() && searchParams.get("pool") === "1") {
+    try {
+      const resolved = resolvePhaserLiqClassicAsset()
+      const base: PoolAsset = { kind: "credit", code: resolved.code, issuer: resolved.issuer }
+      const counter: PoolAsset = { kind: "native" }
+      const size = Number(searchParams.get("pool_size") ?? "10")
+      const safeSize = Number.isFinite(size) && size > 0 && size <= 1_000_000 ? size : 10
+      const snapshot = await getClassicPoolSnapshot(classicPoolIdForAssets(base, counter))
+      const quote = quoteClassicPool(snapshot, {
+        assetIn: base,
+        amountInStroops: decimalToStroops(safeSize.toFixed(7)),
+      })
+      poolStale = quote.stale
+      poolPrice = denoteListingInPool(1, quote, safeSize)
+    } catch {
+      poolPrice = null
+    }
+  }
+
+  return NextResponse.json(
+    { listings, ...(poolPrice ? { pool_price: poolPrice } : {}) },
+    poolStale ? { headers: { "X-Phase-Pool-Stale": "1" } } : undefined,
+  )
 }
 
 type CreateBody = {

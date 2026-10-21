@@ -1,6 +1,7 @@
 import { readJsonFile, updateStore, updateStoreWithReader } from "@/lib/json-store";
 import { serverDataJsonPath } from "@/lib/server-data-paths";
 import { createNotification } from "@/lib/notification-store";
+import { isAnalyticsWarehouseEnabled, recordWarehouseEvent } from "@/lib/analytics-warehouse";
 
 export type AchievementId =
   | "first_mint"
@@ -148,6 +149,19 @@ export async function unlockAchievement(
     }).catch(() => {
       /* silent */
     });
+
+    if (isAnalyticsWarehouseEnabled(wallet)) {
+      void recordWarehouseEvent({
+        surface: "achievements",
+        stage: "achievement_unlocked",
+        wallet,
+        metadata: {
+          achievement_id: id,
+          achievement_name: ACHIEVEMENT_NAMES[id] ?? id,
+          tx_evidence: evidence,
+        },
+      }).catch(() => {});
+    }
   }
   return didUnlock;
 }
@@ -365,3 +379,14 @@ function getAchievementImportance(id: AchievementId): number {
   };
   return weights[id] ?? 0.5;
 }
+
+/** Spike 611: Expose achievement unlock history for retention cohort joins. */
+export async function getAchievementCohortData(): Promise<Record<string, Achievement[]>> {
+  const store = await readStore();
+  const out: Record<string, Achievement[]> = {};
+  for (const [w, data] of Object.entries(store)) {
+    out[w] = data.unlocked ?? [];
+  }
+  return out;
+}
+

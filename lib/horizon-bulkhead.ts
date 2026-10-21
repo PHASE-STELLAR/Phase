@@ -64,3 +64,57 @@ export async function withHorizonBulkhead<T>(operation: () => Promise<T>): Promi
 export function spikeBulkheadNote(): string {
   return "drop mint traffic must go through withHorizonBulkhead; never raise HORIZON_BULKHEAD_LIMIT for drops";
 }
+
+// ── Spike 611: wallet-age classification with in-memory bulkhead cache ──────
+export type WalletAgeBand = "<24h" | "1-7d" | "7-30d" | ">30d"
+
+export function classifyWalletAgeBand(ageDays: number): WalletAgeBand {
+  if (ageDays < 1) return "<24h"
+  if (ageDays <= 7) return "1-7d"
+  if (ageDays <= 30) return "7-30d"
+  return ">30d"
+}
+
+type WalletAgeCacheEntry = {
+  ageDays: number
+  band: WalletAgeBand
+  cachedAt: number
+}
+
+const WALLET_AGE_CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes
+const walletAgeCache = new Map<string, WalletAgeCacheEntry>()
+
+/**
+ * Returns wallet age in days and its age band, cached in-memory through the
+ * Horizon bulkhead to protect Horizon from rate-limits during cohort scans.
+ */
+export async function getWalletAgeBandCached(
+  wallet: string,
+  fetchAgeDays: (w: string) => Promise<number | null>,
+): Promise<{ ageDays: number; band: WalletAgeBand }> {
+  const normalized = wallet.trim().toUpperCase()
+  const now = Date.now()
+  const hit = walletAgeCache.get(normalized)
+  if (hit && now - hit.cachedAt < WALLET_AGE_CACHE_TTL_MS) {
+    return { ageDays: hit.ageDays, band: hit.band }
+  }
+
+  let ageDays = 0
+  try {
+    const fetched = await withHorizonBulkhead(() => fetchAgeDays(normalized))
+    if (fetched !== null && Number.isFinite(fetched)) {
+      ageDays = Math.max(0, fetched)
+    }
+  } catch {
+    // Fall back to 0 on failure
+    ageDays = 0
+  }
+
+  const band = classifyWalletAgeBand(ageDays)
+  walletAgeCache.set(normalized, { ageDays, band, cachedAt: now })
+  return { ageDays, band }
+}
+
+export function resetWalletAgeCacheForTests(): void {
+  walletAgeCache.clear()
+}

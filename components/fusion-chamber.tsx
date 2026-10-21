@@ -1,7 +1,9 @@
-﻿// @ts-nocheck
 "use client"
 
 import { albedoImplicitTxAllowed, isAlbedoSelectedInKit } from "@/lib/albedo-intent-client"
+import { albedoRetiredSignMessage, isAlbedoRetired } from "@/lib/albedo-sunset"
+import { useMobileViewport, useMobileDialogFocus } from "@/hooks/use-mobile"
+import { MobileControls } from "@/components/mobile-controls"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react"
@@ -20,6 +22,12 @@ import { humanizePhaseHostErrorMessage } from "@/lib/phase-host-error"
 import { pickCopy } from "@/lib/phase-copy"
 import { cn } from "@/lib/utils"
 import { GatewayHealthDashboard } from "@/components/gateway-health-dashboard"
+import { QrScannerModal } from "@/components/qr-scanner-modal"
+import type { ParsedQrPayload } from "@/lib/qr-code"
+import { recordMobileDeepLinkReturn } from "@/lib/walletconnect-resilience"
+import { isFeatureEnabled } from "@/lib/feature-flags"
+import { decodeSorobanTransaction } from "@/lib/ledger-soroban-decoder"
+
 import {
   buildClassicTrustlineTransactionXdr,
   classicLiqAssetConfigFromPublicEnv,
@@ -63,18 +71,12 @@ import {
   stroopsToLiqDisplay,
 } from "@/lib/phase-protocol"
 import { PhaseArtifactVisualizer, type ArtifactVerificationMode } from "@/components/phase-artifact-visualizer"
-import { TerminalHeader } from "@/components/chamber/terminal-header"
-import { ArtifactViewer } from "@/components/chamber/artifact-viewer"
-import { SettlementWizard } from "@/components/chamber/settlement-wizard"
-import { EnergyGaugeDisplay } from "@/components/chamber/energy-gauge-display"
-import { CertificateExporter } from "@/components/chamber/certificate-exporter"
-import { useChamberSettlement } from "@/components/chamber/use-chamber-settlement"
 import { ChamberLogStream } from "@/components/chamber/log-stream"
 import { ChamberCatalogThumb } from "@/components/chamber/catalog-thumb"
 import { PhaserLiqTokenLink } from "@/components/chamber/phaser-liq-token-link"
 import { chamberChromeNav, chamberChromeNavHere, chamberChromePrimaryBtn, chamberChromeRefreshBtn } from "@/components/chamber/chamber-chrome"
 
-/** Primer `Gâ€¦` vÃ¡lido en el texto del portapapeles (una lÃ­nea o varias). */
+/** Primer `G…` válido en el texto del portapapeles (una línea o varias). */
 function recipientGFromClipboardText(text: string, isValidG: (addr: string) => boolean): string {
   const u = text.trim()
   if (isValidG(u)) return u
@@ -92,7 +94,7 @@ type PaymentPhase = "idle" | "busy" | "error"
 
 function truncateAddress(addr: string) {
   if (!addr || addr.length < 14) return addr
-  return `${addr.slice(0, 6)}â€¦${addr.slice(-4)}`
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`
 }
 
 function formatPowerBp(bp: number) {
@@ -104,13 +106,14 @@ function formatPowerBp(bp: number) {
 
 
 
-/** Enlace al asset PHASELQ en Stellar Expert (icono + sÃ­mbolo). */
+/** Enlace al asset PHASELQ en Stellar Expert (icono + símbolo). */
 
 
 /** Same zinc / violet chrome as `/dashboard` (Phase Market). */
 
 
 export function FusionChamber() {
+  useMobileViewport()
   const router = useRouter()
   const { lang } = useLang()
   const ch = pickCopy(lang).chamber
@@ -133,7 +136,8 @@ export function FusionChamber() {
     return Number.isFinite(n) && n >= 0 ? n : 0
   }, [searchParams])
 
-  const { address, connect, disconnect, connecting, refresh, openWalletPicker, artistAlias } = useWallet()
+  const { address, connect, disconnect, connecting, refresh, openWalletPicker, artistAlias, isHardwareWallet, requestLedgerReview } = useWallet()
+
   const logEndModalRef = useRef<HTMLDivElement>(null)
   const logEndDockRef = useRef<HTMLDivElement>(null)
   const logId = useRef(0)
@@ -141,7 +145,7 @@ export function FusionChamber() {
 
   /** Stroops en el SAC que el contrato PHASE usa en `settle` (puede ser 0 con saldo en otro emisor). */
   const [tokenBalance, setTokenBalance] = useState("0")
-  /** MÃ¡ximo PHASELQ visto (Horizon + SACs) â€” solo informativo si difiere de `tokenBalance`. */
+  /** Máximo PHASELQ visto (Horizon + SACs) — solo informativo si difiere de `tokenBalance`. */
   const [walletLiqTotal, setWalletLiqTotal] = useState("0")
   const [hasPhased, setHasPhased] = useState<boolean | null>(null)
   const [phaseId, setPhaseId] = useState<number | null>(null)
@@ -151,17 +155,18 @@ export function FusionChamber() {
   const [genesisLoading, setGenesisLoading] = useState(false)
   const [faucetEnabled, setFaucetEnabled] = useState<boolean | null>(null)
   const [systemDesync, setSystemDesync] = useState(false)
-  /** Pedestal: acuÃ±aciÃ³n NFT de fase en curso */
+  /** Pedestal: acuñación NFT de fase en curso */
   const [mintingArtifact, setMintingArtifact] = useState(false)
   /** THE_REACTOR: POST /api/phase-nft/custodian-release (mismo flujo que el panel COLLECT). */
   const [claimToWalletBusy, setClaimToWalletBusy] = useState(false)
   const [logsOpen, setLogsOpen] = useState(false)
   const [operatorModalOpen, setOperatorModalOpen] = useState(false)
+  useMobileDialogFocus(operatorModalOpen, '[aria-labelledby="chamber-operator-heading"]')
   const [collectionInfo, setCollectionInfo] = useState<CollectionInfo | null>(null)
   const [collectionLoadState, setCollectionLoadState] = useState<"idle" | "loading" | "done">("idle")
-  /** `image` parseado de `token_uri` on-chain (colecciÃ³n 0 o refuerzo). */
+  /** `image` parseado de `token_uri` on-chain (colección 0 o refuerzo). */
   const [artifactImageFromUri, setArtifactImageFromUri] = useState<string | null>(null)
-  /** `owner_of(phaseId)` â€” verificaciÃ³n de originalidad vs wallet conectada. */
+  /** `owner_of(phaseId)` — verificación de originalidad vs wallet conectada. */
   const [onChainTokenOwner, setOnChainTokenOwner] = useState<string | null>(null)
   const [tokenOwnerLookupDone, setTokenOwnerLookupDone] = useState(false)
   /** `balance(wallet)` en contrato PHASE (recuento NFT utilidad). */
@@ -172,6 +177,7 @@ export function FusionChamber() {
   const [freighterIndexPingBusy, setFreighterIndexPingBusy] = useState(false)
   const [freighterTransferBusy, setFreighterTransferBusy] = useState(false)
   const [freighterTransferTo, setFreighterTransferTo] = useState("")
+  const [recipientScanOpen, setRecipientScanOpen] = useState(false)
   const [freighterSep50Busy, setFreighterSep50Busy] = useState(false)
   const [freighterSep50Report, setFreighterSep50Report] = useState<string | null>(null)
   const [collectionSupply, setCollectionSupply] = useState<{ minted: number; cap: number } | null>(null)
@@ -188,6 +194,30 @@ export function FusionChamber() {
   const [worldData, setWorldData] = useState<{ world_name: string; world_prompt: string } | null>(null)
   const [narrativeData, setNarrativeData] = useState<string | null>(null)
   const [narrativeLoading, setNarrativeLoading] = useState(false)
+
+  // Spike 612 (phase-174): experiment copy variant for the payment gate. The
+  // chamber's actual price is the on-chain collection price (authoritative);
+  // only the explainer copy varies here — price variants live in the
+  // forge-agent 402 flow where the server resolves and verifies one amount.
+  const [expGateCopy, setExpGateCopy] = useState<{ paymentGateExplainer: string } | null>(null)
+  useEffect(() => {
+    if (!isFeatureEnabled("phase-174")) return
+    let cancelled = false
+    const params = new URLSearchParams({ lang })
+    if (address) params.set("wallet", address)
+    void fetch(`/api/experiments/forge?${params.toString()}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        const explainer = data?.copy?.paymentGateExplainer
+        if (!cancelled && typeof explainer === "string" && data?.variantId !== "control") {
+          setExpGateCopy({ paymentGateExplainer: explainer })
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [address, lang])
 
   const effectivePriceStroops = useMemo(() => {
     if (collectionId > 0 && collectionInfo?.price) return collectionInfo.price
@@ -333,7 +363,7 @@ export function FusionChamber() {
           world = json.world
         }
       } catch {
-        /* no world â€” silent */
+        /* no world — silent */
       }
       if (cancelled) return
       setWorldData(world)
@@ -382,7 +412,7 @@ export function FusionChamber() {
           if (!cancelled && json.narrative) setNarrativeData(json.narrative)
         }
       } catch {
-        /* narrator offline â€” no narrative shown */
+        /* narrator offline — no narrative shown */
       } finally {
         if (!cancelled) setNarrativeLoading(false)
       }
@@ -671,7 +701,7 @@ export function FusionChamber() {
       const url = URL.createObjectURL(blob)
       window.open(url, "_blank", "noopener,noreferrer")
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
-      toast.success(lang === "es" ? "Metadata abierta en nueva pestaÃ±a." : "Metadata opened in new tab.")
+      toast.success(lang === "es" ? "Metadata abierta en nueva pestaña." : "Metadata opened in new tab.")
     } catch {
       toast.error(lang === "es" ? "No se pudo leer metadata on-chain." : "Could not read on-chain metadata.")
     }
@@ -696,13 +726,13 @@ export function FusionChamber() {
         const neededLiq = stroopsToLiqDisplay(effectivePriceStroops)
         const haveLiq = stroopsToLiqDisplay(tokenBalance)
         appendLog(`[ INSUFFICIENT_BALANCE ] ${friendly}`)
-        appendLog(`[ READOUT ] ${haveLiq} PHASELQ (UI) Â· need â‰¥ ${neededLiq} for this collection`)
+        appendLog(`[ READOUT ] ${haveLiq} PHASELQ (UI) · need ≥ ${neededLiq} for this collection`)
         appendLog(logs.lowEnergyWarning)
-        appendLog(`${logs.tracePrefix} HostError Contract #2 â€” PhaseError::InsufficientBalance`)
+        appendLog(`${logs.tracePrefix} HostError Contract #2 — PhaseError::InsufficientBalance`)
         if (faucetEnabled) {
           appendLog(
             lang === "es"
-              ? "[ SUGERENCIA ] UsÃ¡ el faucet (Genesis o Daily) para PHASELQ en el SAC."
+              ? "[ SUGERENCIA ] Usá el faucet (Genesis o Daily) para PHASELQ en el SAC."
               : "[ HINT ] Use the faucet (Genesis or Daily) for PHASELQ on the SAC.",
           )
         }
@@ -756,13 +786,13 @@ export function FusionChamber() {
       const balDisplay = stroopsToLiqDisplay(bal)
       const reqDisplay = stroopsToLiqDisplay(effectivePriceStroops)
       appendLog(
-        `[ BALANCE_CHECK ] ${signerAddress.slice(0, 6)}â€¦ Â· ${balDisplay} PHASELQ, Required: ${reqDisplay} PHASELQ`,
+        `[ BALANCE_CHECK ] ${signerAddress.slice(0, 6)}… · ${balDisplay} PHASELQ, Required: ${reqDisplay} PHASELQ`,
       )
       appendLog(logs.lowEnergyWarning)
       if (faucetEnabled && balBigInt === BigInt("0")) {
         appendLog(
           lang === "es"
-            ? "[ SUGERENCIA ] Esa cuenta tiene 0 PHASELQ en el SAC. UsÃ¡ el faucet u otra wallet desde el modal."
+            ? "[ SUGERENCIA ] Esa cuenta tiene 0 PHASELQ en el SAC. Usá el faucet u otra wallet desde el modal."
             : "[ HINT ] That account has 0 PHASELQ on the SAC. Use the faucet or pick another wallet from the modal.",
         )
       }
@@ -780,7 +810,17 @@ export function FusionChamber() {
         invoiceId,
         collectionId,
       )
+      if (isHardwareWallet && isFeatureEnabled("phase-169") && requestLedgerReview) {
+        const decoded = decodeSorobanTransaction(txEnvelope, NETWORK_PASSPHRASE)
+        if (decoded) {
+          const approved = await requestLedgerReview(decoded)
+          if (!approved) {
+            throw new Error("Ledger: clear-signing review rejected by user")
+          }
+        }
+      }
       const signResult = await signTransaction(txEnvelope, {
+
         networkPassphrase: NETWORK_PASSPHRASE,
         address: signerAddress,
       })
@@ -853,7 +893,7 @@ export function FusionChamber() {
         const msg =
           data.code === "NOT_ISSUER_CUSTODY"
             ? lang === "es"
-              ? "El NFT no estÃ¡ en custodia del emisor (quizÃ¡ ya estÃ¡ en tu wallet)."
+              ? "El NFT no está en custodia del emisor (quizá ya está en tu wallet)."
               : "This NFT is not held by the configured issuer (it may already be in your wallet)."
             : data.detail || data.error || `HTTP ${res.status}`
         appendLog(`[ NFT_COLLECT_FAIL ] ${msg}`)
@@ -971,7 +1011,7 @@ export function FusionChamber() {
       if (!res.ok) {
         const msg = typeof data.error === "string" ? data.error : `HTTP ${res.status}`
         const detail = typeof data.detail === "string" ? data.detail : undefined
-        appendLog(`${ch.logs.faucetFailPrefix} ${msg}${detail ? ` â€” ${detail}` : ""}`)
+        appendLog(`${ch.logs.faucetFailPrefix} ${msg}${detail ? ` — ${detail}` : ""}`)
         toast.error(normalizeToastError(msg), detail ? { description: detail } : undefined)
         return
       }
@@ -979,7 +1019,7 @@ export function FusionChamber() {
         const pendingMsg =
           data.note ||
           (lang === "es"
-            ? "TransacciÃ³n de faucet pendiente en ledger. Reintenta en unos segundos."
+            ? "Transacción de faucet pendiente en ledger. Reintenta en unos segundos."
             : "Faucet transaction pending on ledger. Retry in a few seconds.")
         appendLog(`${ch.logs.tracePrefix} ${pendingMsg}`)
         toast.message(pendingMsg)
@@ -1024,7 +1064,7 @@ export function FusionChamber() {
       )
       toast.success(
         lang === "es"
-          ? `Asset clÃ¡sico acreditado: +${data.amount ?? classicBootstrapAmount} ${classicAsset.code}`
+          ? `Asset clásico acreditado: +${data.amount ?? classicBootstrapAmount} ${classicAsset.code}`
           : `Classic asset credited: +${data.amount ?? classicBootstrapAmount} ${classicAsset.code}`,
       )
       await refreshClassicStatus()
@@ -1052,6 +1092,13 @@ export function FusionChamber() {
     setClassicBusy(true)
     try {
       const chCopy = pickCopy(lang).chamber
+      // Spike 626: retired Albedo never reaches the implicit-session probe.
+      if (isAlbedoSelectedInKit() && isAlbedoRetired()) {
+        const retiredMsg = albedoRetiredSignMessage()
+        toast.error(retiredMsg)
+        appendLog(retiredMsg)
+        return
+      }
       if (isAlbedoSelectedInKit() && !(await albedoImplicitTxAllowed(address))) {
         toast.error(chCopy.rewardsTrustlineAlbedoImplicitRequired)
         appendLog(chCopy.rewardsTrustlineAlbedoImplicitRequired)
@@ -1143,7 +1190,7 @@ export function FusionChamber() {
     async (label: string, value: string) => {
       try {
         await navigator.clipboard.writeText(value)
-        const preview = value.length > 48 ? `${value.slice(0, 22)}â€¦${value.slice(-10)}` : value
+        const preview = value.length > 48 ? `${value.slice(0, 22)}…${value.slice(-10)}` : value
         toast.success(
           lang === "es"
             ? `${label} copiado: ${preview}`
@@ -1225,7 +1272,7 @@ export function FusionChamber() {
   const expertUrl = stellarExpertPhaserLiqUrl()
   const isOwnerOnChain =
     phased && phaseId != null && tokenOwnerLookupDone && isAuthentic(address, onChainTokenOwner)
-  /** `owner_of` = emisor clÃ¡sico PHASELQ: el usuario puede usar COLLECT en el panel lateral (servidor firma transfer). */
+  /** `owner_of` = emisor clásico PHASELQ: el usuario puede usar COLLECT en el panel lateral (servidor firma transfer). */
   const issuerCustodyForCollect = useMemo(() => {
     if (!phased || phaseId == null || phaseId <= 0 || !tokenOwnerLookupDone || !onChainTokenOwner?.trim()) {
       return false
@@ -1252,7 +1299,7 @@ export function FusionChamber() {
     Boolean(onChainTokenOwner) &&
     tokenUriExists
   const manualAddEnabled = phased && phaseId != null && phaseId > 0
-  /** Freighter â€œToken IDâ€ = entero, sin `#`; evita confundir con asset `CODE:issuer`. */
+  /** Freighter “Token ID” = entero, sin `#`; evita confundir con asset `CODE:issuer`. */
   const nftNumericTokenIdStr = useMemo(() => {
     if (phaseId == null || !Number.isFinite(Number(phaseId))) return ""
     return String(Math.max(0, Math.floor(Number(phaseId))))
@@ -1317,7 +1364,19 @@ export function FusionChamber() {
       setFreighterTransferBusy(true)
       try {
         const txEnvelope = await buildTransferPhaseNftTransaction(g, toRaw, tid)
+        recordMobileDeepLinkReturn()
+        if (isHardwareWallet && isFeatureEnabled("phase-169") && requestLedgerReview) {
+          const decoded = decodeSorobanTransaction(txEnvelope, NETWORK_PASSPHRASE)
+          if (decoded) {
+            const approved = await requestLedgerReview(decoded)
+            if (!approved) {
+              toast.error("Ledger: clear-signing review rejected")
+              return
+            }
+          }
+        }
         const signResult = await signTransaction(txEnvelope, {
+
           networkPassphrase: NETWORK_PASSPHRASE,
           address: g,
         })
@@ -1378,7 +1437,7 @@ export function FusionChamber() {
         const msg =
           data.code === "NOT_ISSUER_CUSTODY"
             ? lang === "es"
-              ? "El NFT no estÃ¡ en custodia del emisor (quizÃ¡ ya estÃ¡ en tu wallet)."
+              ? "El NFT no está en custodia del emisor (quizá ya está en tu wallet)."
               : "This NFT is not held by the configured issuer (it may already be in your wallet)."
             : data.detail || data.error || `HTTP ${res.status}`
         appendLog(`[ NFT_COLLECT_FAIL ] ${msg}`)
@@ -1420,7 +1479,7 @@ export function FusionChamber() {
       if (data.ok === true && data.sep50Ready === true) {
         toast.success(lang === "es" ? "SEP-50: todas las comprobaciones OK." : "SEP-50: all checks passed.")
       } else if (data.ok === true) {
-        toast.message(lang === "es" ? "SEP-50: revisÃ¡ el informe (algunos Ã­tems fallan)." : "SEP-50: see report (some checks failed).")
+        toast.message(lang === "es" ? "SEP-50: revisá el informe (algunos ítems fallan)." : "SEP-50: see report (some checks failed).")
       } else {
         toast.error(chCopy.freighterSep50CheckFailToast)
       }
@@ -1440,6 +1499,7 @@ export function FusionChamber() {
 
   return (
     <div
+      data-mobile-layout={isFeatureEnabled("phase-174") || undefined}
       className="tactical-command-root tactical-command-root--chamber tactical-command-root--cockpit tactical-command-root--stable fixed inset-0 z-[100] flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden bg-black font-mono text-foreground"
       suppressHydrationWarning
     >
@@ -1482,7 +1542,7 @@ export function FusionChamber() {
             }}
             className={chamberChromeRefreshBtn}
           >
-            âŸ³ {ch.sync}
+            ⟳ {ch.sync}
           </button>
           {!address ? (
             <button
@@ -1521,7 +1581,7 @@ export function FusionChamber() {
 
       <div className="relative z-[102] shrink-0 border-b border-zinc-800/90 bg-zinc-950/85 px-4 py-2 md:px-6 md:py-2.5">
         <p className="text-[11px] font-bold uppercase tracking-[0.28em] text-zinc-500">
-          PHASE Â· {nav.chamber.toUpperCase()}
+          PHASE · {nav.chamber.toUpperCase()}
         </p>
         <p className="mt-1 max-w-3xl text-[10px] leading-relaxed text-zinc-600">{ch.pageHeroSubtitle}</p>
         <p className="mt-2 font-mono text-[10px] uppercase tracking-widest text-violet-400/95">{chamberTitle}</p>
@@ -1537,7 +1597,7 @@ export function FusionChamber() {
         suppressHydrationWarning
       >
         {/* STATUS_MONITOR */}
-        <aside
+        <MobileControls><aside
           className={cn(
             "tactical-cockpit-aside tactical-chamber-aside relative z-[102] flex h-full min-h-0 flex-col overflow-hidden border-zinc-800/90 bg-zinc-950/25 p-3 sm:p-4",
             "max-md:max-h-[min(36dvh,300px)] max-md:overflow-y-auto max-md:overscroll-contain max-md:border-b max-md:border-zinc-800 md:border-r",
@@ -1551,7 +1611,7 @@ export function FusionChamber() {
           {invalidCollection && (
             <div className="tactical-alert-critical relative z-0 mb-4 px-3 py-3">
               <p className="relative z-[1] text-center text-[10px] font-bold uppercase tracking-wider text-red-200">
-                âš  {ch.invalidCollectionTitle}
+                ⚠ {ch.invalidCollectionTitle}
               </p>
               <p className="relative z-[1] mt-2 text-center text-[9px] text-red-100/85">
                 {ch.invalidCollectionBody.replace("{id}", String(collectionId))}
@@ -1562,7 +1622,7 @@ export function FusionChamber() {
           {systemDesync && (
             <div className="tactical-frame mb-3 border-violet-500/50 bg-violet-950/30 p-2.5 shadow-[0_0_16px_rgba(139,92,246,0.12)]">
               <p className="text-center text-[9px] uppercase tracking-wide text-violet-300 tactical-phosphor">
-                âš  {ch.nodeDesyncTitle}
+                ⚠ {ch.nodeDesyncTitle}
               </p>
               <button
                 type="button"
@@ -1572,7 +1632,7 @@ export function FusionChamber() {
                 }}
                 className="tactical-interactive-glitch tactical-btn mt-2 w-full py-1.5 text-[9px] uppercase tracking-widest text-violet-200"
               >
-                <span>âŸ² {ch.rebootProcess}</span>
+                <span>⟲ {ch.rebootProcess}</span>
               </button>
             </div>
           )}
@@ -1580,7 +1640,7 @@ export function FusionChamber() {
           {lowEnergy && address && !phased && !invalidCollection && (
             <div className="tactical-frame mb-2 border-violet-500/40 bg-violet-950/20 px-2.5 py-1.5 shadow-[0_0_16px_rgba(139,92,246,0.12)]">
               <p className="text-center text-[10px] font-bold uppercase tracking-wider text-violet-300 tactical-phosphor">
-                âš¡ {ch.lowEnergyTitle}
+                ⚡ {ch.lowEnergyTitle}
               </p>
               <p className="mt-1.5 flex flex-wrap items-center justify-center gap-x-1 text-center text-[10px] text-violet-200/80">
                 <span>{ch.reqLiqPrefix}</span>{" "}
@@ -1650,7 +1710,7 @@ export function FusionChamber() {
                       <div>
                         <dt className="text-[9px] uppercase tracking-wider text-zinc-500">{ch.classicAssetLabel}</dt>
                         <dd className="mt-1 text-[12px] text-zinc-300">
-                          {displayPhaserLiqSymbol(classicAsset.code)} Â· {truncateAddress(classicAsset.issuer)}
+                          {displayPhaserLiqSymbol(classicAsset.code)} · {truncateAddress(classicAsset.issuer)}
                         </dd>
                       </div>
                       <div>
@@ -1668,7 +1728,7 @@ export function FusionChamber() {
 
               <section className="space-y-3">
                 <h3 className="text-[9px] font-semibold uppercase tracking-[0.22em] text-zinc-600">
-                  {lang === "es" ? "ColecciÃ³n / red" : "Collection / network"}
+                  {lang === "es" ? "Colección / red" : "Collection / network"}
                 </h3>
                 <dl className="space-y-2.5">
                   <div>
@@ -1702,7 +1762,7 @@ export function FusionChamber() {
                     <dd className="text-[13px] leading-snug">
                       {phased ? (
                         <span className="font-medium text-emerald-400">
-                          {ch.nftMinted} Â· #{phaseId}
+                          {ch.nftMinted} · #{phaseId}
                         </span>
                       ) : (
                         <span className="text-zinc-500">{ch.liquid}</span>
@@ -1733,7 +1793,7 @@ export function FusionChamber() {
               className="tactical-interactive-glitch tactical-btn tactical-phosphor mt-2.5 w-full py-2.5 text-[9px] uppercase tracking-widest text-cyan-200 disabled:opacity-50"
             >
               <span>
-                {connecting ? `â—Œ ${ch.uplinking}` : `â–£ ${ch.linkWallet}`}
+                {connecting ? `◌ ${ch.uplinking}` : `▣ ${ch.linkWallet}`}
               </span>
             </button>
           ) : (
@@ -1748,7 +1808,7 @@ export function FusionChamber() {
               }}
               className="tactical-interactive-glitch tactical-btn mt-2.5 w-full border-red-500/30 py-2 text-[9px] uppercase tracking-widest text-red-400/80 hover:border-red-500/60"
             >
-              <span>â—‡ {ch.disconnect}</span>
+              <span>◇ {ch.disconnect}</span>
             </button>
           )}
 
@@ -1813,7 +1873,7 @@ export function FusionChamber() {
               </p>
             </div>
           ) : null}
-        </aside>
+        </aside></MobileControls>
 
         {/* THE_REACTOR */}
         <main className="tactical-cockpit-stage relative z-[102] flex min-h-0 flex-1 flex-col overflow-hidden max-lg:border-b max-lg:border-zinc-800/80">
@@ -1826,7 +1886,7 @@ export function FusionChamber() {
           <div className="relative z-10 flex min-h-0 w-full max-w-[min(76rem,100%)] flex-1 flex-col gap-3 overflow-hidden lg:mx-auto lg:max-w-none">
           <div className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden overscroll-contain lg:min-h-0">
             <div className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          {/* Exhibition pedestal â€” NFT de utilidad PHASE (Soroban) */}
+          {/* Exhibition pedestal — NFT de utilidad PHASE (Soroban) */}
           <div className="relative z-10 mx-auto mb-0 flex min-h-0 w-full max-w-[min(76rem,100%)] flex-1 flex-col lg:mx-0 lg:max-w-none">
             <p className="mb-1 shrink-0 text-center text-[12px] font-medium tracking-wide text-zinc-300 lg:text-left">
               {ch.pedestalVisualShort}
@@ -2013,16 +2073,16 @@ export function FusionChamber() {
                             onClick={() => playTacticalUiClick()}
                             className="shrink-0 font-mono text-[9px] uppercase tracking-widest text-violet-400/80 transition hover:text-violet-200"
                           >
-                            Stellar Expert â†—
+                            Stellar Expert ↗
                           </a>
                         </div>
                         <p className="mt-2 font-mono text-[9px] uppercase tracking-wider text-violet-200/60">
-                          owner_of(#{Math.max(0, Math.floor(phaseId))}) â‰¡ wallet Â·{" "}
+                          owner_of(#{Math.max(0, Math.floor(phaseId))}) ≡ wallet ·{" "}
                           {phaseLedgerNftCountDone
                             ? ch.artifactLedgerBalanceContract.replace("{count}", phaseLedgerNftCount ?? "0")
                             : lang === "es"
-                              ? "SINCRONIZANDO balance()â€¦"
-                              : "SYNCING balance()â€¦"}
+                              ? "SINCRONIZANDO balance()…"
+                              : "SYNCING balance()…"}
                         </p>
                       </div>
                     ) : issuerCustodyForCollect ? (
@@ -2043,18 +2103,18 @@ export function FusionChamber() {
                       </div>
                     ) : null}
 
-                    {/* â”€â”€ Narrative World connection â”€â”€ */}
+                    {/* ── Narrative World connection ── */}
                     {worldData && (
                       <div className="shrink-0 border border-cyan-400/20 bg-cyan-950/15 p-3">
                         <Link
                           href={`/world/${collectionId}`}
                           className="mb-1.5 block font-mono text-[9px] uppercase tracking-widest text-cyan-500 transition-colors hover:text-cyan-300"
                         >
-                          {`[ MUNDO: ${worldData.world_name} ]`} â†—
+                          {`[ MUNDO: ${worldData.world_name} ]`} ↗
                         </Link>
                         {narrativeLoading ? (
                           <p className="animate-pulse font-mono text-[10px] italic text-cyan-400/50">
-                            [ NARRADOR: generando conexiÃ³n... ]
+                            [ NARRADOR: generando conexión... ]
                           </p>
                         ) : narrativeData ? (
                           <p className="text-[11px] leading-relaxed text-cyan-200/80 italic">
@@ -2068,7 +2128,7 @@ export function FusionChamber() {
                       <summary className="cursor-pointer list-none border-b border-violet-500/20 bg-violet-950/10 px-3 py-2.5 text-center font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-100 transition hover:bg-violet-950/25 hover:text-white sm:px-4 sm:py-3 lg:text-left">
                         {ch.chamberTechnicalDetails}
                         <span className="ml-1.5 text-violet-400/90" aria-hidden>
-                          â–¾
+                          ▾
                         </span>
                       </summary>
                       <div className="max-h-[min(50dvh,22rem)] overflow-y-auto overscroll-y-contain border-t border-violet-500/20 px-3 pb-3 pt-3 [scrollbar-gutter:stable] sm:max-h-[min(52dvh,26rem)] sm:px-4 sm:pb-4 sm:pt-3.5 custom-scrollbar">
@@ -2085,9 +2145,9 @@ export function FusionChamber() {
                           </dd>
                         </div>
                         <div className="flex flex-wrap items-center justify-between gap-2 py-2.5">
-                          <dt className="text-[9px] uppercase tracking-wider text-zinc-500">{lang === "es" ? "EmisiÃ³n" : "Supply"}</dt>
+                          <dt className="text-[9px] uppercase tracking-wider text-zinc-500">{lang === "es" ? "Emisión" : "Supply"}</dt>
                           <dd className="shrink-0 font-mono text-[12px] tabular-nums text-zinc-100">
-                            {collectionSupply?.minted ?? "â€”"} / {collectionSupply?.cap ?? "â€”"}
+                            {collectionSupply?.minted ?? "—"} / {collectionSupply?.cap ?? "—"}
                           </dd>
                         </div>
                       </dl>
@@ -2104,7 +2164,7 @@ export function FusionChamber() {
                           <div className="flex flex-wrap items-baseline justify-between gap-3">
                             <dt className="text-[9px] uppercase tracking-wider text-zinc-500">{ch.artifact.powerLevel}</dt>
                             <dd className="text-right font-mono text-[12px] text-zinc-200">
-                              {ch.artifact.stateSolid} Â· {formatPowerBp(energyLevelBp ?? 10_000)}
+                              {ch.artifact.stateSolid} · {formatPowerBp(energyLevelBp ?? 10_000)}
                             </dd>
                           </div>
                           <div className="flex flex-wrap items-baseline justify-between gap-3">
@@ -2130,7 +2190,7 @@ export function FusionChamber() {
                               onClick={() => playTacticalUiClick()}
                               className="inline-flex rounded-sm border border-violet-500/40 bg-violet-950/50 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-violet-100 transition-colors hover:border-violet-400 hover:bg-violet-900/40"
                             >
-                              {lang === "es" ? "BÃ³veda PHASE (Dashboard) â†—" : "PHASE vault (Dashboard) â†—"}
+                              {lang === "es" ? "Bóveda PHASE (Dashboard) ↗" : "PHASE vault (Dashboard) ↗"}
                             </Link>
                             <a
                               href={stellarExpertTestnetContractUrl(CONTRACT_ID)}
@@ -2139,7 +2199,7 @@ export function FusionChamber() {
                               onClick={() => playTacticalUiClick()}
                               className="inline-flex rounded-sm border border-violet-500/40 bg-violet-950/50 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-violet-100 transition-colors hover:border-violet-400 hover:bg-violet-900/40"
                             >
-                              Stellar Expert â†—
+                              Stellar Expert ↗
                             </a>
                           </div>
                         </div>
@@ -2158,7 +2218,7 @@ export function FusionChamber() {
                                 ? "Aun si Freighter da error, ya puedes intentar Add manually con estos datos. Si falla, pulsa SYNC y reintenta en 30-90s."
                                 : "Even if Freighter errors, you can already try Add manually using these values. If it fails, press SYNC and retry in 30-90s."
                               : lang === "es"
-                                ? "Freighter puede usar su propio backend al aÃ±adir coleccionables. Si falla, usÃ¡ el botÃ³n naranja Ping Ã­ndice (self-transfer); para enviar el NFT a otra persona copiÃ¡ su Gâ€¦ al portapapeles y usÃ¡ el botÃ³n magenta. Tu lista oficial en PHASE estÃ¡ en el dashboard (bÃ³veda RPC)."
+                                ? "Freighter puede usar su propio backend al añadir coleccionables. Si falla, usá el botón naranja Ping índice (self-transfer); para enviar el NFT a otra persona copiá su G… al portapapeles y usá el botón magenta. Tu lista oficial en PHASE está en el dashboard (bóveda RPC)."
                                 : "Freighter may use its own backend when adding collectibles. If it fails, use the amber Ping index button (self-transfer); to send the NFT to someone else copy their G-address to the clipboard, then use the magenta button. Your authoritative PHASE list is the dashboard vault (RPC scan)."}
                           </p>
                         ) : (
@@ -2177,7 +2237,7 @@ export function FusionChamber() {
                           }}
                           className="w-full rounded-sm border border-zinc-600 bg-zinc-900/80 py-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-200 transition-colors hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-45"
                         >
-                          {freighterSep50Busy ? "â€¦" : ch.freighterSep50CheckButton}
+                          {freighterSep50Busy ? "…" : ch.freighterSep50CheckButton}
                         </button>
                         {freighterSep50Report ? (
                           <pre className="max-h-48 overflow-auto rounded-md bg-black/60 p-3 font-mono text-[9px] leading-snug text-zinc-400">
@@ -2222,7 +2282,7 @@ export function FusionChamber() {
                 </p>
               ) : (
                 <div className="flex w-full max-h-full min-h-0 flex-col items-center gap-2 overflow-hidden sm:gap-3">
-                  {/* Collection image preview â€” shown pre-mint when imageUri is available */}
+                  {/* Collection image preview — shown pre-mint when imageUri is available */}
                   {effectiveArtifactImage && (
                     <div className="relative w-full max-w-[14rem] overflow-hidden rounded-sm border border-zinc-700/60 bg-black/60 sm:max-w-[16rem]">
                       <IpfsDisplayImg
@@ -2259,7 +2319,7 @@ export function FusionChamber() {
                       <p className="mt-2 text-[9px] uppercase tracking-widest text-muted-foreground/80">
                         {ch.collectionLine
                           .replace("{id}", String(collectionId))
-                          .replace("{name}", collectionInfo.name || "â€”")}
+                          .replace("{name}", collectionInfo.name || "—")}
                       </p>
                     )}
                     {collectionId === 0 && (
@@ -2297,7 +2357,7 @@ export function FusionChamber() {
             >
               {!canInitializeGenesisSupply && !processing && (
                 <p className="mb-1.5 text-center text-[9px] leading-relaxed text-zinc-500 sm:text-left">
-                  {ch.paymentGateExplainer.replace("{amount}", stroopsToLiqDisplay(effectivePriceStroops))}
+                  {(expGateCopy?.paymentGateExplainer ?? ch.paymentGateExplainer).replace("{amount}", stroopsToLiqDisplay(effectivePriceStroops))}
                 </p>
               )}
               <button
@@ -2326,12 +2386,12 @@ export function FusionChamber() {
               >
                 <span className="px-2 text-base font-bold tracking-widest sm:text-lg md:text-xl">
                   {genesisLoading
-                    ? `â–¶â–¶ ${ch.genesisSupplyLoading}`
+                    ? `▶▶ ${ch.genesisSupplyLoading}`
                     : processing && x402Tx === "busy"
-                      ? `â–¶â–¶ ${ch.x402StreamActive}`
+                      ? `▶▶ ${ch.x402StreamActive}`
                       : canInitializeGenesisSupply
                         ? ch.initializeGenesisSupply
-                        : `â–£ ${ch.executeSettlement}`}
+                        : `▣ ${ch.executeSettlement}`}
                 </span>
               </button>
             </div>
@@ -2339,7 +2399,7 @@ export function FusionChamber() {
             <div className="relative z-10 mx-auto flex w-full max-w-[min(52rem,100%)] shrink-0 flex-col items-stretch gap-2 px-1 sm:px-2 lg:mx-0 lg:max-w-none">
               {authenticityPending ? (
                 <p className="tactical-phosphor text-center text-[10px] uppercase tracking-[0.2em] text-cyan-500/85">
-                  â—Œ {ch.verifyingOwner}
+                  ◌ {ch.verifyingOwner}
                 </p>
               ) : !address ? (
                 <p className="tactical-phosphor text-center text-[10px] uppercase tracking-[0.2em] text-cyan-500/85">
@@ -2358,13 +2418,13 @@ export function FusionChamber() {
                 >
                   <span className="px-2 text-base font-bold tracking-widest sm:text-lg md:text-xl">
                     {claimToWalletBusy
-                      ? `â–¶â–¶ ${ch.rewardsNftCollectSending}`
+                      ? `▶▶ ${ch.rewardsNftCollectSending}`
                       : ch.reactorClaimNftCta}
                   </span>
                 </button>
               ) : isOwnerOnChain ? (
                 <p className="tactical-phosphor-green text-center text-[10px] uppercase tracking-widest text-[#39ff14]/90">
-                  â— {ch.solidStateStandby}
+                  ● {ch.solidStateStandby}
                 </p>
               ) : tokenOwnerLookupDone && phaseId != null ? (
                 <p className="text-center text-[9px] leading-relaxed uppercase tracking-[0.18em] text-violet-300/80">
@@ -2372,7 +2432,7 @@ export function FusionChamber() {
                 </p>
               ) : (
                 <p className="tactical-phosphor-green text-center text-[10px] uppercase tracking-widest text-[#39ff14]/90">
-                  â— {ch.solidStateStandby}
+                  ● {ch.solidStateStandby}
                 </p>
               )}
             </div>
@@ -2511,7 +2571,7 @@ export function FusionChamber() {
               <h2 className="text-[10px] font-bold uppercase tracking-[0.22em] text-emerald-400/90 sm:text-[11px]">
                 {ch.systemLogs}
               </h2>
-              <span className="text-[9px] text-emerald-500/90 sm:text-[10px]">â— {ch.live}</span>
+              <span className="text-[9px] text-emerald-500/90 sm:text-[10px]">● {ch.live}</span>
             </div>
             <div className="custom-scrollbar tactical-log-viewport tactical-log-viewport--analog min-h-0 flex-1 overflow-y-scroll overscroll-y-contain px-3 py-2 pr-2 [scrollbar-gutter:stable]">
               <ChamberLogStream lines={lines} endRef={logEndDockRef} />
@@ -2554,7 +2614,7 @@ export function FusionChamber() {
                     className="rounded-sm border border-zinc-600 px-2 py-1 font-mono text-sm leading-none text-zinc-300 transition-colors hover:bg-zinc-900"
                     aria-label={ch.operatorPanelBackdropClose}
                   >
-                    Ã—
+                    ×
                   </button>
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4 sm:pb-5">
@@ -2612,17 +2672,17 @@ export function FusionChamber() {
             >
               <div className="flex shrink-0 items-center justify-between gap-2 border-b border-green-500/25 px-3 py-2">
                 <h2 className="tactical-phosphor-green text-[10px] uppercase tracking-[0.28em] text-[#39ff14]/85 sm:text-[11px]">
-                  â”ƒ {ch.systemLogs}
+                  ┃ {ch.systemLogs}
                 </h2>
                 <div className="flex items-center gap-2">
-                  <span className="tactical-phosphor-green text-[9px] text-[#39ff14]/85 sm:text-[10px]">â— {ch.live}</span>
+                  <span className="tactical-phosphor-green text-[9px] text-[#39ff14]/85 sm:text-[10px]">● {ch.live}</span>
                   <button
                     type="button"
                     onClick={() => setLogsOpen(false)}
                     className="rounded border border-cyan-500/45 px-2 py-0.5 font-mono text-[11px] leading-none text-cyan-300 hover:bg-cyan-950/60"
                     aria-label={ch.logsClose}
                   >
-                    Ã—
+                    ×
                   </button>
                 </div>
               </div>
@@ -2633,7 +2693,20 @@ export function FusionChamber() {
           </div>
         </>
       ) : null}
+
+      <QrScannerModal
+        open={recipientScanOpen}
+        onOpenChange={setRecipientScanOpen}
+        title="◈ SCAN RECIPIENT STELLAR ADDRESS"
+        onScan={(result: ParsedQrPayload) => {
+          if (result.type === "stellar_address" || result.type === "stellar_pay_uri") {
+            setFreighterTransferTo(result.address)
+            void runNftTransferToRecipient(result.address)
+          } else if (result.type === "raw" && result.text) {
+            setFreighterTransferTo(result.text)
+          }
+        }}
+      />
     </div>
   )
 }
-

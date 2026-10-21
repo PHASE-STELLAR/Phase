@@ -2,6 +2,12 @@
 
 import { useEffect } from "react"
 
+declare global {
+  interface Window {
+    dataLayer?: Record<string, unknown>[]
+  }
+}
+
 export interface WebVitalsMetric {
   name: "LCP" | "FID" | "CLS" | "TTFB" | "INP"
   value: number
@@ -33,6 +39,7 @@ export function WebVitalsReporter() {
     const metrics: Partial<Record<string, WebVitalsMetric>> = {}
 
     const observeMetric = (name: string, value: number, delta: number, id: string) => {
+      if (!Number.isFinite(value)) return
       const rating = getRating(name, value)
       const metric: WebVitalsMetric = { name: name as any, value, rating, delta, id }
 
@@ -60,7 +67,8 @@ export function WebVitalsReporter() {
             observeMetric("LCP", (entry as any).renderTime || (entry as any).loadTime, 0, entry.startTime as unknown as string)
           }
           if (entry.entryType === "first-input") {
-            observeMetric("FID", (entry as any).processingDuration, (entry as any).processingDuration, entry.startTime as unknown as string)
+            const delay = (entry as PerformanceEventTiming).processingStart - entry.startTime
+            observeMetric("FID", delay, delay, String(entry.startTime))
           }
           if (entry.entryType === "layout-shift") {
             if (!(entry as any).hadRecentInput) {

@@ -16,6 +16,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { z } from "zod"
 import { isFeatureEnabled } from "@/lib/feature-flags"
+import { isAnalyticsWarehouseEnabled, recordWarehouseEvent } from "@/lib/analytics-warehouse"
 
 export function isPhase92Enabled(): boolean {
   return isFeatureEnabled("phase-92")
@@ -163,8 +164,29 @@ export async function dispatchPushNotification(
         body: JSON.stringify({ event, ...payload }),
       })
       results.push({ endpoint: sub.endpoint, ok: res.ok, error: res.ok ? undefined : `HTTP ${res.status}` })
+
+      if (isAnalyticsWarehouseEnabled(wallet)) {
+        void recordWarehouseEvent({
+          surface: "push",
+          stage: res.ok ? "push_dispatched" : "push_failed",
+          wallet,
+          reason: res.ok ? null : `HTTP ${res.status}`,
+          metadata: { endpoint: sub.endpoint, event },
+        }).catch(() => {})
+      }
     } catch (e) {
-      results.push({ endpoint: sub.endpoint, ok: false, error: e instanceof Error ? e.message : String(e) })
+      const err = e instanceof Error ? e.message : String(e)
+      results.push({ endpoint: sub.endpoint, ok: false, error: err })
+
+      if (isAnalyticsWarehouseEnabled(wallet)) {
+        void recordWarehouseEvent({
+          surface: "push",
+          stage: "push_failed",
+          wallet,
+          reason: err,
+          metadata: { endpoint: sub.endpoint, event },
+        }).catch(() => {})
+      }
     }
   }
   return results

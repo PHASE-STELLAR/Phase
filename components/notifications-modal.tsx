@@ -25,6 +25,7 @@ type NotificationType =
   | "moderation_appeal_resolved"
   | "quest_arc_generated"
   | "quest_arc_completed"
+  | "winback_reactivation"
 
 type Notification = {
   id: string
@@ -220,6 +221,7 @@ const NOTIF_LABELS: Record<NotificationType, { en: string; es: string }> = {
   moderation_appeal_resolved: { en: phaseCopy.en.moderationQueue.notifyLabel, es: phaseCopy.es.moderationQueue.notifyLabel },
   quest_arc_generated: { en: phaseCopy.en.questArcs.notifyLabel, es: phaseCopy.es.questArcs.notifyLabel },
   quest_arc_completed: { en: phaseCopy.en.questArcs.notifyLabel, es: phaseCopy.es.questArcs.notifyLabel },
+  winback_reactivation: { en: "Welcome back", es: "Bienvenida de vuelta" },
 }
 
 const NOTIF_ICONS: Record<NotificationType, string> = {
@@ -240,6 +242,7 @@ const NOTIF_ICONS: Record<NotificationType, string> = {
   moderation_appeal_resolved: "⚖",
   quest_arc_generated: "➶",
   quest_arc_completed: "✓",
+  winback_reactivation: "↺",
 }
 
 function timeAgo(ts: number): string {

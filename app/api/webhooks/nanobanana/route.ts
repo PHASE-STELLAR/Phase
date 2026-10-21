@@ -31,6 +31,7 @@ import { generateLoreStep } from "@/lib/forge/ai-pipeline"
 import { publishIpfsStep } from "@/lib/forge/ipfs-publisher"
 import { mintNftStep } from "@/lib/forge/pipeline"
 import { normalizeForgeImageStyleMode, normalizeForgeOutputLang } from "@/lib/forge/prompt-builder"
+import { isAnalyticsWarehouseEnabled, recordWarehouseEvent } from "@/lib/analytics-warehouse"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -198,6 +199,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }).catch(() => {})
     // Return 401 only when secret IS configured (otherwise log and proceed)
     if (getWebhookSecret()) {
+      if (isAnalyticsWarehouseEnabled()) {
+        void recordWarehouseEvent({
+          surface: "forge",
+          stage: "webhook_rejected",
+          reason: "invalid_signature",
+        }).catch(() => {})
+      }
       return NextResponse.json({ error: "Invalid signature" }, { status: 401 })
     }
   }
@@ -244,6 +252,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     lastWebhookAt: now,
     webhookDeliveries: (job.webhookDeliveries ?? 0) + 1,
   }).catch(() => {})
+
+  if (isAnalyticsWarehouseEnabled(job.payerAddress)) {
+    void recordWarehouseEvent({
+      surface: "forge",
+      stage: "webhook_received",
+      wallet: job.payerAddress ?? null,
+      metadata: { jobId: job.id, taskId, txHash: job.txHash, successFlag },
+    }).catch(() => {})
+  }
 
   // Handle failure from NanoBanana
   if (successFlag === 2 || successFlag === 3) {

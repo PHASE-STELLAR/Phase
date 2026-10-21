@@ -24,17 +24,11 @@
  */
 
 import { z } from "zod"
+import { isFeatureEnabled } from "@/lib/feature-flags"
 import { HORIZON_URL } from "@/lib/phase-protocol"
 
-export function isSybilResistanceEnabled(): boolean {
-  const v = (
-    process.env.NEXT_PUBLIC_FEATURE_PHASE_145 ??
-    process.env.FEATURE_PHASE_145 ??
-    ""
-  )
-    .trim()
-    .toLowerCase()
-  return v === "1" || v === "true" || v === "yes" || v === "on"
+export function isSybilResistanceEnabled(wallet?: string): boolean {
+  return isFeatureEnabled("phase-145", wallet ? { wallet, runtimeOnly: true } : { runtimeOnly: true })
 }
 
 export function flag145RollbackNote(): string {
@@ -341,7 +335,7 @@ export async function assessWalletSybilRisk(
   address: string,
   opts: { horizonUrl?: string; timeoutMs?: number; suspectThreshold?: number } = {},
 ): Promise<SybilScore | null> {
-  if (!isSybilResistanceEnabled()) return null
+  if (!isSybilResistanceEnabled(address)) return null
   const features = await fetchAccountHistoryFeatures(address, opts)
   if (!features) return null
   try {
@@ -359,4 +353,20 @@ export function lobbyAdmissionForBand(band: "trusted" | "caution" | "suspect"): 
   if (band === "trusted") return "admit";
   if (band === "caution") return "challenge";
   return "deny";
+}
+
+/**
+ * Spike 611: Expose sybil band and account age for cohort analytics.
+ */
+export async function classifyWalletForCohorts(
+  address: string,
+): Promise<{ band: SybilBand; accountAgeDays: number; score: number } | null> {
+  const features = await fetchAccountHistoryFeatures(address).catch(() => null)
+  if (!features) return null
+  const scoreResult = scoreWalletHistory(features)
+  return {
+    band: scoreResult.band,
+    accountAgeDays: features.accountAgeDays,
+    score: scoreResult.score,
+  }
 }

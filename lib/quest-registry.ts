@@ -11,6 +11,7 @@ import {
 import { getAllWorldCollections } from "./narrative-world-store"
 import { getAchievements } from "./achievement-store"
 import { getStreakInfo } from "./quest-streak"
+import { isAnalyticsWarehouseEnabled, recordWarehouseEvent } from "./analytics-warehouse"
 
 // ============================================================================
 // Quest Registry Types
@@ -472,6 +473,20 @@ export async function evaluateAllQuests(
     results[quest.id] = await evaluateQuestConditions(quest, wallet, ctx)
   }
 
+  if (isAnalyticsWarehouseEnabled(wallet)) {
+    const completedQuests = Object.keys(results).filter((id) => results[id]?.completed)
+    void recordWarehouseEvent({
+      surface: "quests",
+      stage: "quest_evaluated",
+      wallet,
+      metadata: {
+        completedCount: completedQuests.length,
+        totalQuests: enabledQuests.length,
+        completedQuests,
+      },
+    }).catch(() => {})
+  }
+
   return results
 }
 
@@ -555,3 +570,9 @@ export function getQuestRewardAmount(registry: QuestRegistry, questId: string): 
 export function isValidQuestId(registry: QuestRegistry, questId: string): boolean {
   return registry.quests.some((q) => q.id === questId && q.enabled)
 }
+
+/** Spike 611: Export quest definitions for retention cohort grouping. */
+export function getQuestCohortKeys(registry: QuestRegistry): string[] {
+  return registry.quests.map((q) => q.id)
+}
+

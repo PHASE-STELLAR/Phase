@@ -1,10 +1,14 @@
 "use client"
 
+import { useMobileViewport, useMobileDialogFocus, useIsMobile } from "@/hooks/use-mobile"
+import { FreighterConnect } from "@/components/freighter-connect"
+import { IntentTarget } from "@/components/intent-target"
 import Link from "next/link"
 import dynamic from "next/dynamic"
 import { createPortal } from "react-dom"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { signTransaction } from "@/lib/stellar-wallet-kit"
+import { recordMobileDeepLinkReturn } from "@/lib/walletconnect-resilience"
 import { FeeBumpTransaction, Transaction, TransactionBuilder, Networks } from "@stellar/stellar-sdk"
 import { LangToggle } from "@/components/lang-toggle"
 import { useLang } from "@/components/lang-context"
@@ -26,7 +30,10 @@ const TrustlineButton = dynamic(
   },
 )
 import { useWallet } from "@/components/wallet-provider"
+import { isFeatureEnabled } from "@/lib/feature-flags"
+import { decodeSorobanTransaction } from "@/lib/ledger-soroban-decoder"
 import { pickCopy } from "@/lib/phase-copy"
+
 import { humanizePhaseHostErrorMessage } from "@/lib/phase-host-error"
 import { composeImageWithPhaseForgeSeal } from "@/lib/forge-seal-image"
 import { isIpfsUploadConfigured, uploadToIPFS } from "@/lib/ipfs-upload"
@@ -213,13 +220,38 @@ type FaucetQuestBrief = {
 }
 
 export default function ForgePage() {
+  useMobileViewport()
+  const mobile = useIsMobile()
   const { lang } = useLang()
   const copy = pickCopy(lang)
   const f = copy.forge
   const n = copy.nav
   const ch = copy.chamber
 
-  const { address, connect, disconnect, connecting, refresh } = useWallet()
+  const { address, connect, disconnect, connecting, refresh, isHardwareWallet, requestLedgerReview } = useWallet()
+
+  // Spike 612 (phase-174): variant hint shown while the 402 gate is open. The
+  // challenge amount itself is resolved server-side; this is display copy only.
+  const [expGateHint, setExpGateHint] = useState<string | null>(null)
+  useEffect(() => {
+    if (!isFeatureEnabled("phase-174")) return
+    let cancelled = false
+    const params = new URLSearchParams({ lang })
+    if (address) params.set("wallet", address)
+    void fetch(`/api/experiments/forge?${params.toString()}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        const hint = data?.copy?.paymentGateHint
+        if (!cancelled && typeof hint === "string" && data?.variantId !== "control") {
+          setExpGateHint(hint)
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [address, lang])
+
 
   const [name, setName] = useState("")
   const [priceLiq, setPriceLiq] = useState("1")
@@ -252,6 +284,7 @@ export default function ForgePage() {
 
   type ForgeOverlay = null | "rewards" | "protocol" | "lore" | "collection"
   const [forgeOverlay, setForgeOverlay] = useState<ForgeOverlay>(null)
+  useMobileDialogFocus(!!forgeOverlay, '[aria-labelledby="forge-overlay-title"]')
   const [faucetBrief, setFaucetBrief] = useState<FaucetQuestBrief | null>(null)
   const prevForgeOverlay = useRef<ForgeOverlay>(null)
 
@@ -518,6 +551,16 @@ export default function ForgePage() {
 
       try {
         const txEnvelopeCreate = await buildCreateCollectionTransaction(addr, trimmedName, stroops, finalUri)
+        recordMobileDeepLinkReturn()
+        if (isHardwareWallet && isFeatureEnabled("phase-169") && requestLedgerReview) {
+          const decoded = decodeSorobanTransaction(txEnvelopeCreate, NETWORK_PASSPHRASE)
+          if (decoded) {
+            const approved = await requestLedgerReview(decoded)
+            if (!approved) {
+              throw new Error("Ledger: clear-signing review rejected by user")
+            }
+          }
+        }
         const signCreate = await signTransaction(txEnvelopeCreate, {
           networkPassphrase: NETWORK_PASSPHRASE,
           address: addr,
@@ -542,7 +585,17 @@ export default function ForgePage() {
         try {
           const invoiceId = Math.floor(Math.random() * 1_000_000)
           const txEnvelopeMint = await buildSettleTransaction(addr, stroops, invoiceId, id)
+          if (isHardwareWallet && isFeatureEnabled("phase-169") && requestLedgerReview) {
+            const decoded = decodeSorobanTransaction(txEnvelopeMint, NETWORK_PASSPHRASE)
+            if (decoded) {
+              const approved = await requestLedgerReview(decoded)
+              if (!approved) {
+                throw new Error("Ledger: clear-signing review rejected by user")
+              }
+            }
+          }
           const signMint = await signTransaction(txEnvelopeMint, {
+
             networkPassphrase: NETWORK_PASSPHRASE,
             address: addr,
           })
@@ -1046,7 +1099,7 @@ export default function ForgePage() {
         : agentState === "FORGING_MATTER"
           ? forgingTerminalLines[agentTickerIdx % forgingTerminalLines.length]
           : agentState === "AWAITING_PAYMENT"
-            ? f.forgeCtaGenerateContacting
+            ? expGateHint ?? f.forgeCtaGenerateContacting
             : ""
 
   const initiatePrimaryLabel =
@@ -1148,7 +1201,8 @@ export default function ForgePage() {
   ])
 
   return (
-    <div className="tactical-command-root tactical-command-root--chamber tactical-command-root--cockpit tactical-command-root--stable relative flex h-screen max-h-[100dvh] flex-col overflow-x-hidden overflow-y-hidden font-mono text-foreground antialiased">
+    <div data-mobile-layout={isFeatureEnabled("phase-174") || undefined}
+      className="tactical-command-root tactical-command-root--chamber tactical-command-root--cockpit tactical-command-root--stable relative flex h-screen max-h-[100dvh] flex-col overflow-x-hidden overflow-y-hidden font-mono text-foreground antialiased">
       <div className="tactical-film-grain" aria-hidden />
       <div className="tactical-crt-veil" aria-hidden />
       <div className="tactical-crt-fine opacity-50" aria-hidden />
@@ -1162,6 +1216,7 @@ export default function ForgePage() {
           {f.title}
         </span>
         <div className="flex flex-wrap items-center justify-end gap-2">
+          {mobile && isFeatureEnabled("phase-174") && <FreighterConnect />}
           <LangToggle variant="phosphor" />
           <Link href="/world" className={forgeNavBtn} onClick={() => playTacticalUiClick()}>
             {lang === "es" ? "Mundos" : "World"}
@@ -1175,6 +1230,7 @@ export default function ForgePage() {
         </div>
       </header>
 
+      <IntentTarget />
       <main
         className={cn(
           "custom-scrollbar relative z-10 flex min-h-0 flex-1 flex-col overflow-x-hidden px-3 py-2 md:px-5 md:py-3",

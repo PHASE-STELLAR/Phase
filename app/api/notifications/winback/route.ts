@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { evaluateWinbackCampaign, recordWinbackDispatch, getWinbackStore } from "@/lib/churn-winback";
-import { addNotification } from "@/lib/notification-store";
+import { createNotification } from "@/lib/notification-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -88,16 +88,12 @@ export async function POST(request: NextRequest) {
   if (body.dispatch && evaluation.eligible && evaluation.cohort !== "control") {
     await recordWinbackDispatch(wallet, evaluation.cohort, evaluation.hook, experimentId);
     try {
-      await addNotification({
-        recipientWallet: wallet,
-        type: "system",
+      await createNotification(wallet, "winback_reactivation", {
         title: evaluation.title,
         body: evaluation.body,
-        data: {
-          cohort: evaluation.cohort,
-          hook: evaluation.hook,
-          experimentId,
-        },
+        cohort: evaluation.cohort,
+        hook: evaluation.hook,
+        experimentId,
       });
       dispatched = true;
     } catch {

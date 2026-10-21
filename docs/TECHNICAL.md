@@ -280,7 +280,7 @@ hook in `app/signals/[id]/use-signal-crdt.ts` posts on a short debounce and
 polls while the panel is open.
 
 **Metrics.** `lib/signal-version-metrics.ts` keeps process-local counters for
-`signal_version_conflicts` (split by `edit` / `put` / `upvote` / `reply`, and
+`signal_version_conflicts` (split by `edit` / `put` / `upvote` / `reply` / `vote`, and
 flagged separately when a CAS retry was attempted) plus `signal_crdt_merges`,
 `signal_crdt_concurrent_merges` and commit outcomes. The store is the only place
 that increments them, so a rejected CAS is counted once no matter how many layers
@@ -419,6 +419,11 @@ NEXT_PUBLIC_FEATURE_PHASE_158=1
 NEXT_PUBLIC_FEATURE_PHASE_159=1
 NEXT_PUBLIC_FEATURE_PHASE_160=1
 NEXT_PUBLIC_FEATURE_PHASE_161=1
+# Spikes 603/604/605/606 (issues #467/#468/#469/#470)
+NEXT_PUBLIC_FEATURE_PHASE_170=1
+NEXT_PUBLIC_FEATURE_PHASE_171=1
+NEXT_PUBLIC_FEATURE_PHASE_172=1
+NEXT_PUBLIC_FEATURE_PHASE_173=1
 # Server-only aliases also accepted: FEATURE_PHASE_104, etc.
 ```
 
@@ -435,19 +440,12 @@ Agent tuning (all optional, server-only):
 
 Rollback: unset the var or set `0` and restart. No ledger migration to revert; off-chain stores remain but are ignored when flag off. See `PROJECT_ARCHITECTURE.md` §10.
 
-### 9.2 Integration architecture spike (phases 170–173)
-
-The integration slice is intentionally default-off. `phase-170` enables request-scoped RSC preparation and loading boundaries on latency-heavy server pages; `phase-171` enables `IpfsDisplayImg`'s proxy-first `next/image` path and responsive optimizer settings; `phase-172` enables the package import optimization build configuration; and `phase-173` governs the issuer ceremony's DNS/TOML/image preflight and Horizon re-read. Roll back by unsetting the corresponding environment variable and restarting. Existing JSON sidecars, contract state, and raw image URLs remain inert when disabled.
-
-Issuer ceremony commands:
-
-```sh
-cd scripts
-npm run verify:issuer-home-domain   # preflight + signed XDR, no submit
-npm run set:issuer-home-domain      # preflight, submit, then re-read Horizon
-```
-
-Set `FEATURE_PHASE_173=1` for the verified ceremony path. `ISSUER_HOME_DOMAIN_SKIP_PREFLIGHT=1` is an explicit emergency escape hatch for a controlled testnet ceremony; `ISSUER_HOME_DOMAIN_DRY_RUN=1` never submits. The script does not change wallet signing boundaries: only the issuer secret signs `set_options`, and user trustline/payment signing remains client-side.
+**Proposed, not registered:** spike batch 550–599 (refundable settlement, live
+updates, collaborative canvas, WebGL viewer) is documented in
+[`docs/spikes/SPIKE_INDEX_550_599.md`](./spikes/SPIKE_INDEX_550_599.md). The
+proposed names `phase-550`–`phase-553` are intentionally absent from
+`lib/feature-flags.ts` until a route or behavior exists to gate; each spike doc
+carries its own rollback and acceptance plan.
 
 ---
 
@@ -493,7 +491,7 @@ Contract commands are documented in [`contracts/README.md`](../contracts/README.
 `.github/workflows/ci.yml` runs on every PR and push to `main`:
 
 - `contracts` — compiles and tests both Soroban crates (`mock-token`, `phase-protocol`) against `wasm32-unknown-unknown`.
-- `web` — `npm run lint`, `npm run typecheck` (both currently non-blocking pending a cleanup of pre-existing errors — see the job for the tracked count), and `npm run build`.
+- `web` — `npm run lint` (non-blocking: 286 pre-existing errors), `npm run typecheck` and `npm test` (both blocking), and `npm run build`.
 - `deploy-staging` — on push to `main` only, behind a `staging` GitHub environment: builds + optimizes `phase-protocol` and runs `scripts/deploy-phase-sep50.ts` against testnet using repo secrets/vars.
 
 ---
@@ -668,60 +666,192 @@ Sidecars (`.data/`, or `PHASE_SERVER_DATA_DIR`): `auth-sessions.json` (SHA-256 o
 
 Known gaps: header-based routes (`acting_wallet`, `X-Wallet-Address`) are not yet migrated to sessions; sidecar writes are unlocked (single-instance only, same as other sidecars); viewer/claim-side age gating and mainnet seeding are not implemented.
 
-## 16. Legal Consent and Versioning (Spike 632 / Issue #495)
+## 16. QR code flows and camera transport (spike 622)
 
-Flag: `phase-166` (`NEXT_PUBLIC_FEATURE_PHASE_166` / `FEATURE_PHASE_166`), default off. Rollback: unset var, restart.
+Flag: `phase-166` (`NEXT_PUBLIC_FEATURE_PHASE_166` / `FEATURE_PHASE_166`). Default off. See `PROJECT_ARCHITECTURE.md` §10.
 
-| Endpoint | Method | Scope | Contract |
-|---|---|---|---|
-| `/api/legal/documents` | GET | public | Returns canonical legal documents (Terms of Service, Privacy Policy), current active versions (`2026-10-01`), and SHA-256 content hashes with localized strings (`lang=en\|es`). |
-| `/api/legal/consent` | GET | wallet query | Returns consent status (`accepted`, `pending_documents`, `current_versions`) for a wallet. |
-| `/api/legal/consent` | POST | JSON | Validates document version and SHA-256 hash match, atomically records acceptance in `terms-consents.json`. |
-| `/api/profile` | GET | wallet query | When `phase-166` is enabled, enriches profile response with `consent` status. |
-| `/api/profile` | POST | JSON | When `phase-166` is enabled, enforces that the wallet has accepted the current legal agreements before modifying profile, returning `451 CONSENT_REQUIRED` otherwise. |
+- `lib/qr-code.ts`: Model 2 Version 2 pure SVG QR code generator, data URL formatter, SEP-0007 / referral parser, camera diagnostics with `diagnoseCameraError`.
+- `next.config.mjs`: `Permissions-Policy: camera=(self), microphone=(), geolocation=()` to allow video frame capture on the same origin.
+- Components: `components/qr-code-dialog.tsx` for generating and displaying styled QR codes with optional amount requests, `components/qr-scanner-modal.tsx` with camera viewfinder reticle and manual input fallback.
+- Routes: `GET /api/qr/encode` for server-side SVG generation.
+- Audit counters: `qr_generated_receive`, `qr_generated_referral`, `qr_scanned_success`, `qr_scanned_invalid`, `qr_camera_denied` in `lib/security-counters.ts`.
 
-Sidecars (`.data/`, or `PHASE_SERVER_DATA_DIR`): `terms-consents.json` (keyed by wallet, stores pinned versions and content digests), `legal-documents.json` (optional overrides).
+## 17. WalletConnect v2 mobile session resilience (spike 623)
 
-## 17. GDPR Article 20 Data Portability Export (Spike 634 / Issue #496)
+Flag: `phase-167` (`NEXT_PUBLIC_FEATURE_PHASE_167` / `FEATURE_PHASE_167`). Default off. See `PROJECT_ARCHITECTURE.md` §10.
 
-Flag: `phase-167` (`NEXT_PUBLIC_FEATURE_PHASE_167` / `FEATURE_PHASE_167`), default off. Rollback: unset var, restart.
+- `lib/walletconnect-resilience.ts`: Configurable relay URL resolution, multi-chain target resolution (`stellar:testnet` and `stellar:pubnet`), session metadata persistence in localStorage (`@PHASE/wc_session_metadata`), chain-switch guard, and mobile deep-link return helpers.
+- `lib/stellar-wallet-kit.ts`: `WalletConnectModule` initialized with dynamic `relayUrl` and multi-chain array.
+- Components: `components/walletconnect-banner.tsx` displaying peer wallet connection status, relay state, and one-click session reconnect.
+- Routes: `POST /api/wallet/session` recording session lifecycle telemetry.
+- Audit counters: `wc_session_restored`, `wc_session_expired`, `wc_reconnect_success`, `wc_reconnect_failed`, `wc_chain_mismatch_blocked` in `lib/security-counters.ts`.
 
-| Endpoint | Method | Scope | Contract |
-|---|---|---|---|
-| `/api/user/export` | GET | wallet query | Generates and downloads a unified GDPR Article 20 data portability bundle containing profile, follows, notifications, market activity, authored signals, badges, and consents. Includes cryptographic manifest with per-domain and aggregate SHA-256 checksums, redacts third-party PII, and sets `Content-Disposition: attachment`. |
-| `/api/profile/export` | GET | wallet query | Alias route forwarding to `/api/user/export`. |
+## 18. xBull wallet full support and parity (spike 624)
 
-Bundle manifest format: `phase-gdpr-article-20-bundle` with strict schema version `1.0.0`.
+Flag: `phase-168` (`NEXT_PUBLIC_FEATURE_PHASE_168` / `FEATURE_PHASE_168`). Default off. See `PROJECT_ARCHITECTURE.md` §10.
 
-## 18. Moderation & Regulatory Audit Export (Spike 635 / Issue #497)
+- `lib/xbull-adapter.ts`: xBull detection (`XBULL_ID`, `isXBullSelected()`), Freighter vs. xBull difference matrix, sign result normalization (`normalizeXBullSignResult()`), and error translation (`mapXBullError()`).
+- `components/wallet-badge.tsx`: Active wallet badge component displaying provider type (xBull, Freighter, Ledger, Albedo, WalletConnect) with contextual styling.
+- `lib/classic-liq.ts`: Updated `parseSignedTxXdr` with multi-format support accommodating xBull's return shape variations (`xdr`, `result`, `signedTxXdr`, raw string).
+- `lib/stellar-wallet-kit.ts`: Normalized signing pipeline routing xBull transactions through error mapping and result unpackers.
+- Audit counters: `xbull_sign_requested`, `xbull_sign_success`, `xbull_sign_rejected`, `xbull_trustline_signed`, `xbull_error_mapped` in `lib/security-counters.ts`.
 
-Flag: `phase-168` (`NEXT_PUBLIC_FEATURE_PHASE_168` / `FEATURE_PHASE_168`), default off. Rollback: unset var, restart.
+## 19. Ledger blind-signing to clear-signing review for Soroban (spike 625)
 
-| Endpoint | Method | Scope | Contract |
-|---|---|---|---|
-| `/api/moderation/export` | GET | role-gated | Exports moderation audit trail with date range (`from`, `to`), action, and cursor pagination. Role-gated by `x-admin-key` / `x-moderator-key` for `"moderator"` (unredacted internal view) and `x-regulator-token` for `"regulator"` (cryptographically pseudonymized wallets, stripped signatures, sanitized reasons). Supports formats `json`, `ndjson`, and `csv` with `Content-Disposition: attachment`. |
+Flag: `phase-169` (`NEXT_PUBLIC_FEATURE_PHASE_169` / `FEATURE_PHASE_169`). Default off. See `PROJECT_ARCHITECTURE.md` §10.
 
-Role credentials: `PHASE_ADMIN_KEY`, `PHASE_MODERATOR_KEY`, and `PHASE_REGULATOR_TOKEN`.
+- `lib/ledger-soroban-decoder.ts`: Decodes `invokeHostFunction` operations, extracts contract address, host function name (`settle`, `create_collection`, `transfer`, `initiate_phase`), and native arguments. Computes canonical verification hash and 8-character verification code (`VREF-XXXX-XXXX`) matching on-device pre-image. Performs preflight validation to catch Gate #13 errors (`SelfTransfer` and invalid caller/balance) before prompting hardware.
+- `components/ledger-clear-signing-modal.tsx`: Preflight review modal showing contract target, function, decoded arguments, fee, and verification code with confirmation before transmitting to device.
+- `lib/phase-host-error.ts`: Added `humanizeLedgerHardwareErrorMessage` recognizing `0x6b0c` / `0x6a15` (blind-signing disabled in Ledger Stellar app settings), `0x6985` (user rejected), and `0x6e00` (device locked or disconnected).
+- `lib/stellar-wallet-kit.ts`: Intercepts hardware wallet signing with preflight validation when `phase-169` is enabled.
+- Audit counters: `ledger_clear_signing_reviewed`, `ledger_clear_signing_approved`, `ledger_clear_signing_rejected`, `ledger_blind_signing_blocked`, `ledger_gate13_preempted` in `lib/security-counters.ts`.
+- Routes: `POST /api/wallet/ledger` for clear-signing lifecycle telemetry.
 
-## 19. Legal-Hold Preservation with Deny-Delete (Spike 636 / Issue #498)
+## 20. Log pipeline: redaction, sampling and external sink (spike 606)
 
-Flag: `phase-169` (`NEXT_PUBLIC_FEATURE_PHASE_169` / `FEATURE_PHASE_169`), default off. Rollback: unset var, restart.
-
-| Endpoint | Method | Scope | Contract |
-|---|---|---|---|
-| `/api/legal-hold` | GET | admin query | Queries active legal holds matching `target_type` (`wallet`, `signal`, `collection`, `listing`, `profile`) and `target_id`. |
-| `/api/legal-hold` | POST | admin key | Creates and places a legal hold with custodian credentials, matter identifier, reason, optional retention clock (`retention_days`), and optional `immutable_worm` flag. Returns `201 Created`. |
-| `/api/legal-hold/[id]/release` | POST | admin key | Releases an active legal hold. If `immutable_worm` is enabled, releases prior to retention clock expiration return `423 Locked`. |
-
-Enforcement surfaces:
-- `takedownSignal` & `restoreSignal` (`lib/signal-store.ts`)
-- `POST /api/signals/[id]/moderate`
-- `saveProfile` (`lib/profile-store.ts`)
-- `cancelListing` (`lib/market-store.ts`)
-- `markRead` & `markAllRead` (`lib/notification-store.ts`)
-
-Sidecar: `legal-holds.json` in `.data/` or `PHASE_SERVER_DATA_DIR`.
+Flag: `phase-170` (`NEXT_PUBLIC_FEATURE_PHASE_170` / `FEATURE_PHASE_170`). Default off. See `PROJECT_ARCHITECTURE.md` §10 and `docs/spikes/606-log-pipeline-findings.md`.
 
 
+## 20. A/B experimentation framework (spike 612)
 
+Flag: `phase-174` (`NEXT_PUBLIC_FEATURE_PHASE_174` / `FEATURE_PHASE_174`). Default off. See `PROJECT_ARCHITECTURE.md` §10.
 
+- `lib/experiments.ts`: Deterministic FNV-1a bucket over `(salt, experimentId, subject)` with weighted variants, holdout slice, and sticky assignment persistence in `experiment-assignments.json` (subjects stored as sha256 hex only). Config comes from `PHASE_EXPERIMENT_CONFIG` (JSON, experiment id `forge_price_v1`); salt override `PHASE_EXPERIMENT_SALT`. Every resolver fails safe to control (`REQUIRED_AMOUNT` + control copy).
+- `lib/forge/payment-verifier.ts`: `resolveForgePaymentAmount(payer)` is the single source of truth for challenge amount, `paymentRequirements`, `X-Required-Amount` header and the on-chain verifier floor. `app/api/agent/forge` no longer clobbers the challenge with `REQUIRED_AMOUNT` — it settles the payer's resolved variant amount.
+- Routes: `GET /api/experiments/forge?wallet=&lang=` (404 when flag off) serves variant copy + price for client display; forge page overrides the AWAITING_PAYMENT hint, the chamber overrides `paymentGateExplainer` (chamber price stays on-chain authoritative).
+- Copy: `forgeExperiment.variants` in `lib/phase-copy.ts` (EN/ES) via `pickForgeExperimentCopy(lang, copyKey)`.
+- Findings: `docs/spikes/612-ab-experimentation-findings.md`.
+
+## 21. Search analytics (spike 613)
+
+Flag: `phase-175` (`NEXT_PUBLIC_FEATURE_PHASE_175` / `FEATURE_PHASE_175`). Default off. See `PROJECT_ARCHITECTURE.md` §10.
+
+- `lib/search-query-log.ts`: Bounded (5,000) append-only event log in `search-query-log.json`; closed `surface` (`world`/`profile`/`explore`) and `kind` (`query`/`click`) enums; queries, result refs and wallets stored only as sha256 hex. 60s duplicate window per `(surface, kind, query_hash, session_id)`.
+- Aggregation: pure `computeSearchReport` — per-surface zero-result rate, clickthrough rate, and typo success rate (a `corrected_from_hash` query counts as recovered only when a later same-session query hit results). `getSearchAnalyticsReport` wraps the sidecar read.
+- Hooks: `app/api/world/search` logs free-text queries (`q`, optional `q0`/`sid`); `app/api/profile/search` logs `q>=2`; `POST /api/search/click` is the clickthrough beacon (404 when flag off). All writes are non-blocking.
+- Counters (closed labels): `search_query_total`, `search_zero_result`, `search_click`, `search_typo_corrected`.
+- Findings: `docs/spikes/613-search-analytics-findings.md`.
+
+## 22. Cost accounting per surface with budgets and kill-switches (spike 614)
+
+Flag: `phase-176` (`NEXT_PUBLIC_FEATURE_PHASE_176` / `FEATURE_PHASE_176`). Default off. See `PROJECT_ARCHITECTURE.md` §10.
+
+- `lib/cost-budgets.ts`: Closed `COST_SURFACES` taxonomy; per-surface budgets from `PHASE_COST_BUDGET_<SURFACE>` (units; unset = unlimited); persisted daily burn windows in `cost-budgets.json` (window length `PHASE_COST_BUDGET_WINDOW_MS`, default 24h). Warning at 80% (`PHASE_COST_BUDGET_WARNING_RATIO`), halt at ≥100%.
+- Kill-switch: `isSurfaceHalted(surface)` (process-local cache refreshed under the store lock); `forge-agent` and `agent/forge` refuse with `503 FORGE_SURFACE_HALTED` + `Retry-After: 300` before spend; refused charges increment `budget_halt_refusal`.
+- Alerts: `evaluateSurfaceBudgets` fires `sendWebhookAlert` only on alert-level transitions (warning / critical / recovery info). Hourly cron `GET /api/cron/cost-budgets` (`CRON_SECRET` / `x-vercel-cron` auth, registered in `vercel.json`); operator view `GET /api/cost-budgets/health` evaluates without alerts.
+- Findings: `docs/spikes/614-cost-accounting-budgets-findings.md`.
+
+## 23. Billing and metering for paid forge tiers (spike 615)
+
+Flag: `phase-177` (`NEXT_PUBLIC_FEATURE_PHASE_177` / `FEATURE_PHASE_177`). Default off. See `PROJECT_ARCHITECTURE.md` §10.
+
+- `lib/forge/billing.ts`: Per-wallet UTC-day metering in `forge-billing.json` (wallets hashed; bounded 5,000 wallet-days / 200 jobs per day). Idempotent by `jobId` so serverless retries cannot double-count. Tier limits from `PHASE_FORGE_BILLING_TIERS` JSON (defaults standard 5 … obsidian 100); invalid config fails safe to defaults.
+- Enforcement: `agent/forge` checks quota before settle (no wasted payment); `forge-agent` checks after settlement verification (replay fence first) and refuses with `429 FORGE_QUOTA_EXCEEDED` + `Retry-After` (seconds to UTC-day reset, floor 60). Accepted jobs are metered and book `chargeSurfaceCost("forge", 20)` against the spike-614 budget.
+- Findings: `docs/spikes/615-forge-billing-metering-findings.md`.
+- `lib/log-pipeline.ts`: `redactLogValue` (masks `S...` seeds and secret-named keys such as `rawPayload`, `errorResult`, `authorization`; cycle/depth safe), `shouldSampleLog` (warn/error always kept, info sampled by FNV hash of the correlation id so a request is kept or dropped whole), `toPipelineRecord` (only `level`, `event`, `route`, `method`, `status_class` are labels; wallets, CIDs, token ids, hashes stay unindexed in `fields`), and `LogPipeline` (bounded buffer, drop-oldest, single-flight flush, abort timeout, at-most-once delivery).
+- `lib/api-observability.ts`: every `log()` goes through `emitLog`, so the console line is redacted too when the flag is on.
+- Env: `LOG_SINK_URL` (https only, validated in `serverEnvSchema`), `LOG_SINK_TOKEN`, `LOG_SAMPLE_RATE_INFO` (0..1, default 0.1), `LOG_SINK_BATCH_SIZE`, `LOG_SINK_MAX_BUFFER`, `LOG_SINK_FLUSH_MS`, `LOG_SINK_TIMEOUT_MS`.
+- Counters (`lib/security-counters.ts`): `log_pipeline_enqueued`, `_sampled_out`, `_dropped`, `_redacted`, `_flush_ok`, `_flush_failed`.
+- Not covered: `waitUntil`-style flush on serverless freeze, counter export, migrating ad-hoc `console.*` callers.
+
+## 21. Backup and disaster recovery (spike 605)
+
+Flag: `phase-171` (`NEXT_PUBLIC_FEATURE_PHASE_171` / `FEATURE_PHASE_171`). Default off. See `docs/spikes/605-backup-dr-findings.md`.
+
+- `lib/backup-snapshot.ts`: `createSnapshot` locks every sidecar path (sorted, via `withFileLock`) and takes the SQLite image with `VACUUM INTO`, so the set and the database share one logical instant and no WAL copy is involved; a corrupt sidecar fails the snapshot. `verifySnapshot` re-hashes, parses JSON, runs `integrity_check` and `foreign_key_check`, and compares per-table row counts. `restoreSnapshot` verifies first, removes stale `-wal`/`-shm`, writes tmp+rename, and holds `.restore-in-progress` (stale after 10 min).
+- `app/api/cron/faucet-health/route.ts`: returns `503` + `Retry-After: 60` while the marker is fresh, so a refill cannot run against half-restored distributor state.
+- Secrets: never written to a snapshot. `sealSecrets`/`openSecrets` use AES-256-GCM with a scrypt key (passphrase ≥ 16 chars); failures never echo plaintext; `diffSecretsMap` reports drift by name only.
+- `lib/server-data-paths.ts`: `serverDataRoot`, `serverDataFileKeys`, `serverDataFileName` exported so backups cannot drift from the file table.
+- Drill: `npm run backup:drill` (snapshot → verify → restore to scratch → SQLite parity).
+- Restore replaces the database file: close the connection (`resetDbForTests`) and run offline for the live root.
+- Counters: `backup_snapshot_created|verified|corrupt`, `backup_restore_completed|blocked`.
+
+## 22. SQLite to Postgres migration rehearsal (spike 604)
+
+Flag: `phase-172` (`NEXT_PUBLIC_FEATURE_PHASE_172` / `FEATURE_PHASE_172`). Default off. See `docs/spikes/604-postgres-rehearsal-findings.md`.
+
+- `lib/db-parity.ts`: `toPositionalParams`, `sqliteTypeToPostgres` (integer flags stay `BIGINT` so parity compares like with like), `buildPostgresCreateTable`, `buildPostgresUpsert` (explicit conflict target replaces `INSERT OR REPLACE`), `perTestSchemaName`, `compareSources`/`compareTable` (value diffs, `type_coercion`, order-independent checksum), `DualWriter`.
+- Dual-write ordering: primary (SQLite) first and authoritative; secondary is bounded (`maxSecondaryInflight`, default 5) and timed out (1.5 s). Failures, timeouts and shed writes land in `driftLog()` and never throw. `setMode("primary-only")` is the rollback.
+- `PHASE_DATABASE_URL` + flag → `dual`; otherwise `primary-only`.
+- Check two databases with `npm run db:parity -- <left> <right>`.
+- Counters: `db_parity_checked`, `db_parity_mismatch`, `db_dual_write_ok|drift|shed`.
+- Not covered: a `pg` driver, async re-plumbing of the `MAX_CAS_ATTEMPTS` loops, advisory locks replacing `fileQueues`, pool storm testing.
+
+## 23. Preview environment isolation (spike 603)
+
+Flag: `phase-173` (`NEXT_PUBLIC_FEATURE_PHASE_173` / `FEATURE_PHASE_173`). Default off. See `docs/spikes/603-preview-isolation-findings.md`.
+
+- `lib/preview-isolation.ts`: `resolvePreviewId` (`pr-<n>` from `VERCEL_GIT_PULL_REQUEST_ID`, else `br-<slug>-<hash>`; always one safe path segment), `checkPreviewIsolation`, `isCronBlockedInPreview`, `previewTrustsVercelCronHeader`. The module has no `node:*` imports because `lib/env-validation.ts` reaches client bundles through `phase-protocol.ts`.
+- `lib/server-data-paths.ts`: in a preview the root becomes `<root>/previews/<id>`.
+- `lib/env-validation.ts`: `validatePhaseEnv` reports `isolation_violation` for a preview that resolves to the production issuer (public key or derived from `CLASSIC_LIQ_ISSUER_SECRET`), reuses the production cron secret, uses a production contract ID, or sets `STELLAR_NETWORK=mainnet`. Production identity is declared with `PHASE_PROD_ISSUER`, `PHASE_PROD_CRON_SECRET_SHA256`, `PHASE_PROD_CONTRACT_IDS`; messages never contain secret values.
+- `app/api/cron/faucet-health/route.ts`: preview runs return `{ skipped: "preview_cron_disabled" }` unless `PHASE_PREVIEW_CRON_ENABLED=1`; the unauthenticated-header shortcut is disabled in previews.
+- Caveat: Vercel `/tmp` is per-instance, so namespacing prevents cross-preview bleed, not loss between instances.
+- Counters: `preview_isolation_violation`, `preview_cron_blocked`.
+
+## 24. Leaderboard integrity: anti-farm scoring, decay and sybil discount (spike 616)
+
+Flag: `phase-178` (`NEXT_PUBLIC_FEATURE_PHASE_178` / `FEATURE_PHASE_178`). Default off. See `PROJECT_ARCHITECTURE.md` §10 and `docs/spikes/616-leaderboard-integrity-findings.md`.
+
+- `lib/leaderboard-integrity.ts`: `scoreLeaderboardCandidate` computes `finalScore = decayedPoints × farmPenalty × sybilDiscount` from an explicit `now`. Decay is `0.5 ** (age / 7d)` (same shape as the pricing oracle's wash discount). `detectFarmPatterns` multiplies down per rule — `event_burst` (×0.5, >12 events in 1h), `counterparty_concentration` (×0.6, one counterparty >80% of ≥6 counterpartied events), `point_velocity` (×0.7, >1000 points/day) — floored at `farmPenaltyFloor` 0.15. `sybilDiscountFor`: trusted 1, caution 0.7, suspect 0.35, missing band = caution.
+- Routes: `GET /api/leaderboard?limit=` ranks stored entries (ties break by wallet asc); `POST /api/leaderboard` requires `x-admin-key` and scores before persisting, so malformed events never reach `leaderboard-entries.json`.
+- Counters: `leaderboard_entries_ingested`, `leaderboard_scored`, `leaderboard_farm_penalized`, `leaderboard_sybil_discounted`.
+- Not covered: fetching sybil bands from Horizon inside the route (callers supply the band from phase-145 helpers).
+
+## 25. Retention TTL sweeps and GDPR erasure (spike 617)
+
+Flag: `phase-179` (`NEXT_PUBLIC_FEATURE_PHASE_179` / `FEATURE_PHASE_179`). Default off. See `docs/spikes/617-retention-gdpr-erasure-findings.md`.
+
+- `lib/retention-erasure.ts` sweeps: `sweepByTimestamp` (pure; records with a missing/non-finite timestamp are KEPT), `sweepAuthSessions` (expired SEP-10 sessions — `expires_at` normalized from seconds to ms — and consumed challenges past 24h), `sweepNotificationStore` (90-day notifications, empty wallet buckets dropped). `runRetentionSweeps()` applies both through `updateStore` and counts `retention_sweep_runs` / `retention_records_expired`.
+- `executeWalletErasure(wallet)`: validates the `G...` address, runs `assertNoLegalHold("wallet", …, "erasure")` (a hit → `RetentionErasureError LEGAL_HOLD_ACTIVE`, HTTP 423 in the route, `gdpr_erasure_blocked` counted, nothing deleted), then erases five registered domains (`ERASURE_TARGETS`: notifications, age declarations, follows, push subscriptions, auth sessions) and appends a receipt to `gdpr-erasure-log.json` — fingerprint only, capped at 1000 receipts, schema `phase-gdpr-article-17-erasure` 1.0.0.
+- Deliberate exclusion: `terms-consents.json` is never erased (Art. 17(3)(b) proof of legal basis). SQLite tables are a documented partial slice.
+- `POST /api/user/erasure`: fail-closed auth — admin key (`checkAdminKey`) or a matching `x-wallet-address`/`acting_wallet` header; missing header 401, mismatch 403, hold 423.
+- `GET /api/cron/retention-sweep`: daily 03:15 UTC, `validateCronAuth` + `isCronBlockedInPreview` + `isRestoreInProgress` (503 + `Retry-After`).
+
+## 26. Analytics warehouse export: Parquet and NDJSON (spike 618)
+
+Flag: `phase-180` (`NEXT_PUBLIC_FEATURE_PHASE_180` / `FEATURE_PHASE_180`). Default off. See `docs/spikes/618-analytics-warehouse-export-findings.md`.
+
+- `lib/analytics-warehouse.ts`: flat `WarehouseRow` (`table`, `ts`, `metric`, `value`, `status`, `wallet_fingerprint`) collected from the security-counter snapshot, distributor health history, and wash-excluded accepted-offer volume (`wash_flagged = 0`, matching `lib/wash-screening.ts` aggregates).
+- Redaction is unconditional: `redactWarehouseRow` fingerprints raw `G...` fields and rewrites wallet/secret-looking text in `metric`/`status`; it is idempotent (uses a fresh non-global regex because `WALLET_KEY_RE` is `/g` and `.test()` on it is stateful).
+- Manifest (`buildWarehouseManifest`): `phase-warehouse-export` 1.0.0, `generated_at`, `row_count`, sorted `tables`, `redacted: true`, `checksum` = sha256 over the rows-only NDJSON body (reproducible across formats; mirrored in `X-Warehouse-Checksum`).
+- Formats: NDJSON emits the manifest as line 1 then one row per line (`application/x-ndjson`); Parquet uses `hyparquet-writer`'s `parquetWriteBuffer` with typed columns and the manifest in `key_value_metadata` (`phase.schema_version`, `phase.checksum`, `phase.redacted`).
+- `GET /api/analytics/export?format=ndjson|parquet`: `checkAdminKey` fail-closed (401 unconfigured/denied), 400 on unknown format, `Content-Disposition` attachment, headers `X-Warehouse-Schema-Version` + `X-Warehouse-Checksum`.
+- Counters: `warehouse_export_runs`, `warehouse_records_redacted`, `warehouse_export_failed`.
+
+## 27. Anomaly detection with alert routing (spike 619)
+
+Flag: `phase-181` (`NEXT_PUBLIC_FEATURE_PHASE_181` / `FEATURE_PHASE_181`). Default off. See `docs/spikes/619-anomaly-detection-findings.md`.
+
+- `lib/anomaly-detection.ts` detectors over one `AnomalySample`:
+  - volume — `robustStats` (median + MAD×1.4826 → stddev fallback → σ floor 1e-9 so a flat baseline with a non-zero value still breaches), `z ≥ 3.5` warning / `≥ 6` critical, `minSamples` 8.
+  - counters — `counterDeltas` per run (resets and first-seen keys skipped), z-scored like volume; `collectAnomalySample` excludes `anomaly_*` counters so the detector cannot alert on itself.
+  - balances — `detectBalanceDrops`: ≥15% warning, ≥35% critical vs the previous run; no baseline needed.
+- Baseline hygiene: `detectAnomalies` measures BEFORE pushing, so a sample never pollutes its own reference; history rings cap at `maxHistory` 100 in `anomaly-baselines.json` (schema `phase-anomaly-baselines` 1.0.0).
+- `routeAnomalyAlerts` fans findings out through `sendWebhookAlert` with titles `Anomaly <kind>: <metric>` — distinct per kind+metric so the 15-minute `type:title` dedup cannot mask a second metric; attempts count `anomaly_alerts_routed`.
+- `GET /api/cron/anomaly-detect`: hourly at minute 5, `validateCronAuth` + preview fence + restore marker, then `collectAnomalySample` (volume SQL, counter snapshot, latest distributor health balances) → `detectAnomalies` → persist → route alerts → respond with findings.
+- Counters: `anomaly_checks_run`, `anomaly_volume_breaches`, `anomaly_counter_breaches`, `anomaly_balance_breaches`, `anomaly_alerts_routed`.
+- Not covered: per-channel alert thresholds, alert suppression windows beyond the webhook dedup, and a volume baseline warmer than one value per run.
+
+## 28. Liquidity pools: classic PHASELQ/XLM and Soroswap (spike 574)
+
+Flag: `phase-182` (`NEXT_PUBLIC_FEATURE_PHASE_182` / `FEATURE_PHASE_182`). Default off. See `docs/spikes/574-liquidity-pools-findings.md`.
+
+**Why two venues, not one.** Soroswap is a router contract (its own share token, its own quotes, its own failure modes). The classic DEX is `liquidity_pool_*` operations with shares represented as a `liquidity_pool_shares` trustline and reserves read from Horizon. Treating them as one "pool" is how a build silently sends a classic pool id to a router. `lib/liquidity-pool.ts` keeps one quote shape (`PoolQuote`) but separate builders (`buildClassicPool*` vs `buildSoroswapSwapXdr`).
+
+**Identity.** `classicPoolIdForAssets` sorts with `Asset.compare` (native < alphanum4 < alphanum12, then code, then issuer) and computes the id locally. The SDK rejects unsorted pairs; string sorting puts `PHASELQ` before `native` and produces an invalid id. A caller-supplied id is never trusted for a deposit: the route recomputes it from the pair.
+
+**Quotes.** Constant product, 30 bps taken from the input side. `spotPrice = reserveOut/reserveIn`; `executionPrice = amountOut/amountIn`; `priceImpactBps` is the difference. `minOutStroops` applies the user's slippage. Every quote carries a sha256 `quoteHash` over venue/pool/assets/size/out/min-out/ledger/expiry, and `assertQuoteUsable` returns `409 QUOTE_STALE` for `stale`, expired, or `If-Match`/`quote_hash` mismatch. There is no signed quote: the binding is short TTL (20 s) + hash + explicit min-out.
+
+**Write taxonomy.** `400` invalid input / asset mismatch, `404` flag off or pool missing, `409` stale quote / slippage / intent conflict, `412` missing trustlines (with `Retry-After: 2` and the exact `required_trustlines` array), `422` price impact above 500 bps, `429` per-wallet limiter with `Retry-After`, `503` Horizon/Soroswap unavailable. `poolErrorResponse` is the single mapping used by the route.
+
+**Trustlines.** For PHASELQ/XLM a wallet needs **two** lines: PHASELQ and pool shares. XLM is native. A credit/credit pool needs three. `poolTrustlineStatusFromAccount` returns the exact missing slots; the previous single-asset check reported the wrong one. `buildPoolShareTrustlineXdr` signs a `changeTrust` for `LiquidityPoolAsset`, not for either underlying asset.
+
+**Idempotency.** `recordPoolIntent` keys `WALLET:intent_id` and compares action/venue/pool/quote/size/shares/XDR hash. Same payload is a replay (`replayed: true`), different payload is `409 INTENT_CONFLICT`. The store holds hashes and stroops only, expires after 8 minutes, and never stores a signed XDR. It uses the sidecar lock (§5.4), so it is single-instance safe and diverges across serverless instances — the retry still converges because the signed XDR hash is the comparison key.
+
+**Resilience.** `getClassicPoolSnapshot` caches reserves for 5 s. On Horizon failure it serves a cached snapshot up to 60 s with `stale: true` and increments `lp_reserve_stale_on_error`; a write path then refuses with `409 QUOTE_STALE` instead of signing against unknown reserves. Market display degrades to no conversion. Soroswap config has **no default router**: `SOROSWAP_ROUTER_CONTRACT_ID` is required, validated as a C… StrKey, and compared with optional `SOROSWAP_EXPECTED_ROUTER_ID`; a mismatch returns `503 SOROSWAP_ROUTER_DRIFT` and increments `lp_router_address_drift`.
+
+**Wash.** Self-swap (wallet is both sides, or swaps against a pool it deposited into within 1 h) and self-provision (wallet holds ≥ 90% of shares and is the only swapper) are flagged, not blocked. `recordPoolActivity` stores the flag; `getPoolVolumeExcludingWash` excludes it. Activity ids are caller-supplied (`swap:<txHash>`), so a retried record cannot double-count. The route only records a swap after Horizon confirms `successful: true` and the tx source matches the wallet.
+
+**Seed capital.** `distributor_ledger.pool_seed_stroops` is additive (default 0). `availableBalance` and `reserveFunds` subtract balance − reserve − fee reserve − pool seed − pending holds. Seed capital is visible on-chain but never spendable by refill or settlement. `scripts/distributor-trust-and-payment.ts` adds the pool-share trustline when `LP_POOL_SEED_ENABLED=1`.
+
+**Contract.** `phase-protocol` gains `set_pool_leg` / `get_pool_leg` / `clear_pool_leg` (admin-only, non-zero pool id) and a `PoolLegConfig` storage entry. `settle` is intentionally unchanged: a Soroban contract cannot emit classic DEX operations, so the pool leg is a treasury-signed path payment that reads this config off-chain.

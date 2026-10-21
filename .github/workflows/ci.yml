@@ -45,6 +45,8 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Verify dependency cadence and Soroban/Stellar parity
+        run: npm run deps:cadence
       - name: Lint
         # eslint had no config/devDependency before this change (npm run lint
         # failed outright); now that it runs, ~95 pre-existing errors surface
@@ -52,10 +54,9 @@ jobs:
         continue-on-error: true
         run: npm run lint
       - name: Type check
-        # Pre-existing type errors exist outside this change's scope; surfaced but
-        # non-blocking until tracked and fixed separately.
-        continue-on-error: true
         run: npm run typecheck
+      - name: Unit tests
+        run: npm test
       - name: Build
         run: npm run build
         env:
@@ -82,7 +83,7 @@ jobs:
             contracts/mock-token
             contracts/phase-protocol
       - name: Install Stellar CLI
-        run: cargo install --locked stellar-cli --version ^23
+        run: cargo install --locked stellar-cli --version 23.0.0
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:

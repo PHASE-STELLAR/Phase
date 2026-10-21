@@ -1,4 +1,3 @@
-﻿// @ts-nocheck
 "use client"
 
 import { IpfsDisplayImg } from "@/components/ipfs-display-img"
@@ -6,16 +5,16 @@ import { cn } from "@/lib/utils"
 import { viewerSignatureShort } from "@/lib/viewer-signature"
 import { truncateAddress } from "@/lib/explore-domain"
 
-// â”€â”€ phase-92: push notifications for replies and mentions â”€â”€
+// ── phase-92: push notifications for replies and mentions ──
 // This preview component renders independently of push-subscription state
-// (core logic lives in lib/push-notifications.ts); no change needed here â€”
+// (core logic lives in lib/push-notifications.ts); no change needed here —
 // verified for zero regression.
 
-// â”€â”€ phase-77: wash-trading detection heuristics for listings â”€â”€
+// ── phase-77: wash-trading detection heuristics for listings ──
 // Renders independently while wash-trading analysis protects volume stats in
 // backend APIs and listing badges. Preserves preview wiring with zero regression. Rollback: unset FEATURE_PHASE_77.
 
-// â”€â”€ phase-122: off-chain delta display hint (flag-gated, zero regression when off) â”€â”€
+// ── phase-122: off-chain delta display hint (flag-gated, zero regression when off) ──
 function isPhase122Enabled(): boolean {
   const v = (typeof process !== "undefined" ? (process.env.NEXT_PUBLIC_FEATURE_PHASE_122 ?? "") : "")?.trim().toLowerCase()
   return v === "1" || v === "true" || v === "yes" || v === "on"
@@ -43,7 +42,7 @@ export type PhaseProtectedPreviewLabels = {
  * resolved ownership via full on-chain RPC (`chainVerified`), else derived
  * from comparing the truncated on-chain owner (as served by /api/explore)
  * against the connected viewer's own address using the same truncation.
- * UI signal only â€” not a security gate.
+ * UI signal only — not a security gate.
  */
 export function resolvePhaseProtectedPreviewVerified(
   chainVerified: boolean | undefined,
@@ -57,26 +56,26 @@ export function resolvePhaseProtectedPreviewVerified(
 }
 
 type Props = {
-  /** `ipfs://â€¦` o HTTPS (p. ej. metadatos / gateway); reintenta gateways si uno falla. */
+  /** `ipfs://…` o HTTPS (p. ej. metadatos / gateway); reintenta gateways si uno falla. */
   uri: string
   className?: string
   /**
-   * DueÃ±o on-chain de la utilidad PHASE para esta colecciÃ³n (wallet conectada).
-   * PÃ¡salo cuando ya hiciste la llamada RPC completa (p. ej. detalle/Reactor).
-   * Si se omite, el widget se autoverifica comparando `ownerTruncated` Ã— `viewerAddress`
-   * (mismo truncado que sirve /api/explore) sin RPC extra â€” solo seÃ±al de UI, no gate de seguridad.
+   * Dueño on-chain de la utilidad PHASE para esta colección (wallet conectada).
+   * Pásalo cuando ya hiciste la llamada RPC completa (p. ej. detalle/Reactor).
+   * Si se omite, el widget se autoverifica comparando `ownerTruncated` × `viewerAddress`
+   * (mismo truncado que sirve /api/explore) sin RPC extra — solo señal de UI, no gate de seguridad.
    */
   chainVerified?: boolean
-  /** Owner truncado (`GABCDEâ€¦WXYZ`) tal como lo devuelve /api/explore, para autoverificaciÃ³n cliente. */
+  /** Owner truncado (`GABCDE…WXYZ`) tal como lo devuelve /api/explore, para autoverificación cliente. */
   ownerTruncated?: string
-  /** Wallet conectada (para sello que varÃ­a por visor). */
+  /** Wallet conectada (para sello que varía por visor). */
   viewerAddress: string | null | undefined
   labels: PhaseProtectedPreviewLabels
 }
 
 /**
  * Mercado / listado: miniatura degradada + scanlines + PENDING_FUSION si no hay prueba on-chain.
- * Si `chainVerified`, muestra arte mÃ¡s nÃ­tido y sello de cadena (HD reservado al Reactor).
+ * Si `chainVerified`, muestra arte más nítido y sello de cadena (HD reservado al Reactor).
  */
 export function PhaseProtectedPreview({ uri, className, chainVerified, ownerTruncated, viewerAddress, labels }: Props) {
   const sig = viewerSignatureShort(viewerAddress)
@@ -103,7 +102,7 @@ export function PhaseProtectedPreview({ uri, className, chainVerified, ownerTrun
       />
       {isDelta ? (
         <div className="pointer-events-none absolute left-1.5 top-1.5 z-[4] rounded-sm border border-cyan-500/40 bg-black/80 px-1 py-0.5 font-mono text-[6px] font-bold uppercase tracking-widest text-cyan-300/90">
-          Î” off-chain
+          Δ off-chain
         </div>
       ) : null}
 
@@ -128,15 +127,14 @@ export function PhaseProtectedPreview({ uri, className, chainVerified, ownerTrun
       >
         {verified ? (
           <span>
-            {labels.chainVerifiedSeal} Â· SIG:{sig}
+            {labels.chainVerifiedSeal} · SIG:{sig}
           </span>
         ) : (
           <span>
-            {labels.unverifiedCopy} Â· {sig}
+            {labels.unverifiedCopy} · {sig}
           </span>
         )}
       </div>
     </div>
   )
 }
-

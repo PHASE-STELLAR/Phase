@@ -2565,3 +2565,13 @@ export function spikeContractErrorCode(message: string): string | null {
   if (/Contract\s*,\s*#21\b/.test(message)) return 'DUTCH_QUOTE_STALE';
   return null;
 }
+
+export {
+  CANONICAL_SOROBAN_ABI_VERSION,
+  CANONICAL_SOROBAN_SDK_MAJOR,
+  CANONICAL_STELLAR_CLI_VERSION,
+  CANONICAL_STELLAR_SDK_MAJOR,
+  CANONICAL_WASM_TARGET,
+  isDependencyCadenceEnabled,
+} from "@/lib/dependency-cadence"
+

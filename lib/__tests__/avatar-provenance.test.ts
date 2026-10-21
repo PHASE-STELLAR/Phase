@@ -15,21 +15,19 @@ import assert from "node:assert/strict"
 import { describe, it } from "vitest"
 import { Keypair } from "@stellar/stellar-sdk"
 import { CidIntegrityError, sha256Hex, verifyCID, verifyBytesIntegrity } from "@/lib/cid-cache"
-
-const SIGNATURE_PREFIX = "Stellar Signed Message:\n"
+import { sep53SignedBytes, verifySep53Signature } from "@/lib/viewer-signature"
 
 async function avatarMessage(wallet: string, imageUrl: string): Promise<string> {
-  return `phase-avatar:v1:${await sha256Hex(JSON.stringify({ wallet, imageUrl }))}`
+  return `phase-avatar:v1:${sha256Hex(new TextEncoder().encode(JSON.stringify({ wallet, imageUrl })))}`
 }
 
 async function verifyOwnership(wallet: string, imageUrl: string, signatureBase64: string) {
-  try {
-    const message = await avatarMessage(wallet, imageUrl)
-    const data = new TextEncoder().encode(SIGNATURE_PREFIX + message)
-    return Keypair.fromPublicKey(wallet).verify(data, Buffer.from(signatureBase64, "base64"))
-  } catch {
-    return false
-  }
+  return verifySep53Signature(wallet, await avatarMessage(wallet, imageUrl), signatureBase64)
+}
+
+/** What a wallet's SEP-53 signMessage produces for `message`. */
+async function walletSign(kp: Keypair, message: string): Promise<string> {
+  return Buffer.from(kp.sign(Buffer.from(await sep53SignedBytes(message)))).toString("base64")
 }
 
 const CID = "bafkreigh2akiscaildcqabsyg3dfr6chu3fgpregiymsck7e7aqa4s52zy"
@@ -38,9 +36,7 @@ describe("avatar wallet-ownership proof (Issue #226)", () => {
   it("accepts a signature over the exact wallet + imageUrl", async () => {
     const kp = Keypair.random()
     const url = "https://cdn.example/avatar.png"
-    const signature = Buffer.from(
-      kp.sign(Buffer.from(SIGNATURE_PREFIX + (await avatarMessage(kp.publicKey(), url)), "utf8")),
-    ).toString("base64")
+    const signature = await walletSign(kp, await avatarMessage(kp.publicKey(), url))
 
     assert.equal(await verifyOwnership(kp.publicKey(), url, signature), true)
   })
@@ -49,9 +45,7 @@ describe("avatar wallet-ownership proof (Issue #226)", () => {
     const kp = Keypair.random()
     const honestUrl = "https://cdn.example/honest.png"
     const attackerUrl = "https://evil.example/phish.png"
-    const signature = Buffer.from(
-      kp.sign(Buffer.from(SIGNATURE_PREFIX + (await avatarMessage(kp.publicKey(), honestUrl)), "utf8")),
-    ).toString("base64")
+    const signature = await walletSign(kp, await avatarMessage(kp.publicKey(), honestUrl))
 
     assert.equal(await verifyOwnership(kp.publicKey(), attackerUrl, signature), false)
   })
@@ -60,11 +54,7 @@ describe("avatar wallet-ownership proof (Issue #226)", () => {
     const victim = Keypair.random()
     const attacker = Keypair.random()
     const url = "https://evil.example/phish.png"
-    const signature = Buffer.from(
-      attacker.sign(
-        Buffer.from(SIGNATURE_PREFIX + (await avatarMessage(victim.publicKey(), url)), "utf8"),
-      ),
-    ).toString("base64")
+    const signature = await walletSign(attacker, await avatarMessage(victim.publicKey(), url))
 
     assert.equal(await verifyOwnership(victim.publicKey(), url, signature), false)
   })

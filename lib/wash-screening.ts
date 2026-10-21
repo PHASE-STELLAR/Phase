@@ -23,7 +23,12 @@
  */
 
 import { getDb } from "@/lib/sqlite-db"
-import { detectCircularTrades, detectSelfTrading } from "@/lib/wash-trading"
+import {
+  detectCircularTrades,
+  detectSelfProvisionedPools,
+  detectSelfSwaps,
+  detectSelfTrading,
+} from "@/lib/wash-trading"
 import { incSecurityCounter } from "@/lib/security-counters"
 
 export type WashScreenResult = {
@@ -219,3 +224,51 @@ export function washCompWeight(input: { washFlagged: boolean; repeatPairCount: n
   const repeats = Math.max(0, Math.floor(input.repeatPairCount) - 1)
   return repeats === 0 ? 1 : 0.5 ** repeats
 }
+
+// ── Spike 574 (phase-182): pool self-provision and self-swap ──
+// A classic pool lets one wallet be both liquidity provider and only trader.
+// The NFT detectors above cannot see it: there is no second wallet and no
+// token id. The rule stays flag-not-block, and every flagged row is excluded
+// from `getPoolVolumeExcludingWash`.
+
+export function screenPoolProvision(input: {
+  poolId: string
+  wallet: string
+  shareBps: number
+  swapWallets: string[]
+}): WashScreenResult {
+  const result = detectSelfProvisionedPools([
+    {
+      poolId: input.poolId,
+      wallet: input.wallet,
+      shareBps: input.shareBps,
+      swapWallets: input.swapWallets,
+    },
+  ])
+  if (result.flaggedPoolIds.length === 0) return { washFlagged: false, washReason: null }
+  incSecurityCounter("lp_pool_self_provision_flagged")
+  return { washFlagged: true, washReason: result.details[0] ?? "self_provision" }
+}
+
+export function screenPoolSwap(input: {
+  poolId: string
+  wallet: string
+  counterparty?: string | null
+}): WashScreenResult {
+  const result = detectSelfSwaps([input])
+  if (result.flaggedIndexes.length === 0) return { washFlagged: false, washReason: null }
+  incSecurityCounter("lp_pool_self_swap_flagged")
+  return { washFlagged: true, washReason: result.details[0] ?? "self_swap" }
+}
+
+// ── Spikes 673-675 (flag-gated): per-edition wash context ──
+// Wash screening stays listing-scoped; edition fields are carried for per-edition aggregates
+// without changing the flag-not-block contract.
+export type EditionWashContext = { edition_number?: number; is_artist_proof?: boolean };
+export function washScreenReasonForEdition(ctx: EditionWashContext, baseReason: string | null): string | null {
+  if (!baseReason) return null;
+  if (ctx.is_artist_proof) return `${baseReason}:artist_proof`;
+  if (ctx.edition_number != null) return `${baseReason}:edition_${ctx.edition_number}`;
+  return baseReason;
+}
+

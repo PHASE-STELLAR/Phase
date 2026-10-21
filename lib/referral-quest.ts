@@ -16,15 +16,15 @@
  * Rollback: unset the flag. Referral bonus logic is skipped entirely.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import path from "node:path"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 import { assessWalletSybilRisk, isSybilResistanceEnabled } from "@/lib/sybil-resistance"
+import { readJsonFile, updateStore } from "@/lib/json-store"
+import { serverDataJsonPath } from "@/lib/server-data-paths"
 
 const FLAG: "phase-132" = "phase-132"
 
-export function isReferralQuestEnabled(): boolean {
-  return isFeatureEnabled(FLAG)
+export function isReferralQuestEnabled(wallet?: string): boolean {
+  return isFeatureEnabled(FLAG, wallet ? { wallet } : undefined)
 }
 
 const REFERRAL_BONUS_STROOPS = "15000000" // 15 PHASELQ bonus
@@ -44,7 +44,7 @@ type ReferralRecord = {
   rateLimits?: Record<string, number>
 }
 
-type ReferralStore = {
+export type ReferralStore = {
   /** wallet → referral code */
   codesByWallet: Record<string, ReferralCode>
   /** code → referral record */
@@ -53,35 +53,18 @@ type ReferralStore = {
   referredByWallet: Record<string, ReferralCode>
 }
 
-function referralStorePath(): string {
-  const fromEnv = process.env.PHASE_SERVER_DATA_DIR?.trim()
-  const root = fromEnv
-    ? fromEnv
-    : process.env.VERCEL
-      ? path.join(require("node:os").tmpdir(), "phase-server-data")
-      : path.join(process.cwd(), ".data")
-  return path.join(root, "referral-quest.json")
+const DEFAULT_STORE: ReferralStore = {
+  codesByWallet: {},
+  recordsByCode: {},
+  referredByWallet: {},
 }
 
-async function readStore(): Promise<ReferralStore> {
-  try {
-    const raw = await readFile(referralStorePath(), "utf8")
-    const parsed = JSON.parse(raw)
-    if (parsed && typeof parsed === "object") return parsed as ReferralStore
-    return { codesByWallet: {}, recordsByCode: {}, referredByWallet: {} }
-  } catch {
-    return { codesByWallet: {}, recordsByCode: {}, referredByWallet: {} }
-  }
+export async function readReferralStore(): Promise<ReferralStore> {
+  return readJsonFile<ReferralStore>(serverDataJsonPath("referralQuests"), DEFAULT_STORE)
 }
 
 function hasOwn(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key)
-}
-
-async function writeStore(data: ReferralStore): Promise<void> {
-  const fp = referralStorePath()
-  await mkdir(path.dirname(fp), { recursive: true })
-  await writeFile(fp, JSON.stringify(data, null, 2), "utf8")
 }
 
 function generateCode(): ReferralCode {
@@ -98,20 +81,22 @@ function generateCode(): ReferralCode {
  * returns the existing code if one was already generated.
  */
 export async function getOrCreateReferralCode(wallet: string): Promise<ReferralCode> {
-  if (!isReferralQuestEnabled()) return ""
-  const store = await readStore()
-  if (hasOwn(store.codesByWallet, wallet) && store.codesByWallet[wallet]) return store.codesByWallet[wallet]
+  if (!isReferralQuestEnabled(wallet)) return ""
+  return updateStore<ReferralStore, ReferralCode>("referralQuests", (store) => {
+    if (hasOwn(store.codesByWallet, wallet) && store.codesByWallet[wallet]) {
+      return store.codesByWallet[wallet]
+    }
 
-  // Generate a unique code
-  let code = generateCode()
-  while (hasOwn(store.recordsByCode, code)) {
-    code = generateCode()
-  }
+    // Generate a unique code
+    let code = generateCode()
+    while (hasOwn(store.recordsByCode, code)) {
+      code = generateCode()
+    }
 
-  store.codesByWallet[wallet] = code
-  store.recordsByCode[code] = { referrer: wallet, referred: [], referredAt: [] }
-  await writeStore(store)
-  return code
+    store.codesByWallet[wallet] = code
+    store.recordsByCode[code] = { referrer: wallet, referred: [], referredAt: [] }
+    return code
+  })
 }
 
 /**
@@ -122,7 +107,7 @@ export async function validateReferralCode(
   claimingWallet: string,
 ): Promise<{ valid: boolean; referrer?: string; error?: string }> {
   if (!isReferralQuestEnabled()) return { valid: false, error: "Feature disabled" }
-  const store = await readStore()
+  const store = await readReferralStore()
   const record = hasOwn(store.recordsByCode, code) ? store.recordsByCode[code] : undefined
   if (!record) return { valid: false, error: "Invalid referral code." }
   if (record.referrer === claimingWallet) {
@@ -140,61 +125,62 @@ export async function recordReferral(
   referredWallet: string,
   originFingerprint?: string,
 ): Promise<{ bonus: string | null; error?: string }> {
-  if (!isReferralQuestEnabled()) return { bonus: null }
+  if (!isReferralQuestEnabled(referredWallet)) return { bonus: null }
   if (!referralCode || !referredWallet) return { bonus: null }
 
-  const store = await readStore()
-  const record = hasOwn(store.recordsByCode, referralCode) ? store.recordsByCode[referralCode] : undefined
-  if (!record) return { bonus: null, error: "Invalid referral code." }
-
-  // Self-referral check
-  if (record.referrer === referredWallet) {
-    return { bonus: null, error: "Cannot refer yourself." }
-  }
-
-  // The flag-gated assessment uses Horizon account creation time (not the
-  // first time this process saw the wallet), so waiting seven days cannot
-  // turn a newly-created farming wallet into an established one.
+  // Sybil check before taking lock
   if (isSybilResistanceEnabled()) {
     const risk = await assessWalletSybilRisk(referredWallet)
     if (risk?.suspect) return { bonus: null, error: "Wallet failed referral trust checks." }
   }
 
-  // Already referred check
-  if (hasOwn(store.referredByWallet, referredWallet)) {
-    return { bonus: null, error: "Wallet already referred." }
-  }
+  return updateStore<ReferralStore, { bonus: string | null; error?: string }>(
+    "referralQuests",
+    (store) => {
+      const record = hasOwn(store.recordsByCode, referralCode) ? store.recordsByCode[referralCode] : undefined
+      if (!record) return { bonus: null, error: "Invalid referral code." }
 
-  // Referrer cap check
-  if (record.referred.length >= MAX_REFERRALS_PER_WALLET) {
-    return { bonus: null, error: "Referrer has reached the maximum referral limit." }
-  }
+      // Self-referral check
+      if (record.referrer === referredWallet) {
+        return { bonus: null, error: "Cannot refer yourself." }
+      }
 
-  // Rate limit by origin fingerprint
-  if (originFingerprint) {
-    const now = Date.now()
-    record.rateLimits = record.rateLimits ?? {}
-    const lastClaim = hasOwn(record.rateLimits, originFingerprint)
-      ? record.rateLimits[originFingerprint]
-      : 0
-    if (now - lastClaim < REFERRAL_COOLDOWN_MS) {
-      return { bonus: null, error: "Referral rate limit. Try again later." }
-    }
-    Object.defineProperty(record.rateLimits, originFingerprint, {
-      value: now,
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    })
-  }
+      // Already referred check
+      if (hasOwn(store.referredByWallet, referredWallet)) {
+        return { bonus: null, error: "Wallet already referred." }
+      }
 
-  // Record the referral
-  record.referred.push(referredWallet)
-  record.referredAt.push(Date.now())
-  store.referredByWallet[referredWallet] = referralCode
+      // Referrer cap check
+      if (record.referred.length >= MAX_REFERRALS_PER_WALLET) {
+        return { bonus: null, error: "Referrer has reached the maximum referral limit." }
+      }
 
-  await writeStore(store)
-  return { bonus: REFERRAL_BONUS_STROOPS }
+      // Rate limit by origin fingerprint
+      if (originFingerprint) {
+        const now = Date.now()
+        record.rateLimits = record.rateLimits ?? {}
+        const lastClaim = hasOwn(record.rateLimits, originFingerprint)
+          ? record.rateLimits[originFingerprint]
+          : 0
+        if (now - lastClaim < REFERRAL_COOLDOWN_MS) {
+          return { bonus: null, error: "Referral rate limit. Try again later." }
+        }
+        Object.defineProperty(record.rateLimits, originFingerprint, {
+          value: now,
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        })
+      }
+
+      // Record the referral
+      record.referred.push(referredWallet)
+      record.referredAt.push(Date.now())
+      store.referredByWallet[referredWallet] = referralCode
+
+      return { bonus: REFERRAL_BONUS_STROOPS }
+    },
+  )
 }
 
 /**
@@ -206,7 +192,7 @@ export async function getReferralStats(wallet: string): Promise<{
   remainingSlots: number
 }> {
   if (!isReferralQuestEnabled()) return { code: null, totalReferred: 0, remainingSlots: 0 }
-  const store = await readStore()
+  const store = await readReferralStore()
   const code = hasOwn(store.codesByWallet, wallet) ? store.codesByWallet[wallet] : null
   if (!code) return { code: null, totalReferred: 0, remainingSlots: MAX_REFERRALS_PER_WALLET }
   const record = store.recordsByCode[code]
@@ -225,7 +211,7 @@ export async function getReferralAttribution(
   wallet: string,
 ): Promise<{ referrer: string; referralCode: string } | null> {
   if (!isReferralQuestEnabled()) return null
-  const store = await readStore()
+  const store = await readReferralStore()
   const code = hasOwn(store.referredByWallet, wallet) ? store.referredByWallet[wallet] : undefined
   if (!code) return null
   const record = store.recordsByCode[code]

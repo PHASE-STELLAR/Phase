@@ -156,6 +156,19 @@ export type PricingCopy = {
   useSuggestion: string
 }
 
+/** phase-174 (spike 612): A/B experiment copy variants for the forge/chamber payment gate. */
+export type ForgeExperimentVariantCopy = {
+  label: string
+  /** `{amount}` = formatted variant price. */
+  paymentGateExplainer: string
+  paymentGateHint: string
+}
+
+export type ForgeExperimentCopy = {
+  /** Keyed by copyKey (variant id, or "control"). Unknown keys fall back to control. */
+  variants: Record<string, ForgeExperimentVariantCopy>
+}
+
 /** phase-146: moderation pre-screen. */
 export type ModerationQueueCopy = {
   heldNotice: string
@@ -247,9 +260,80 @@ const PHASE_HOST_CONTRACT_UNKNOWN_EN =
 const PHASE_HOST_CONTRACT_UNKNOWN_ES =
   "Error de host en contrato PHASE #{code}. Ver contracts/phase-protocol (PhaseError) o el diagnóstico completo del host."
 
+export type IntegrationCopy = {
+  actionFailed: string
+  actionConflict: string
+  requirementsNotMet: string
+  rateLimited: string
+  quest: string
+  offer: string
+  buyer: string
+  seller: string
+  offerHint: string
+  claim: string
+  accept: string
+  reject: string
+  completed: string
+  pending: string
+  reviewLink: string
+  reviewLinkHint: string
+  destination: string
+  recipient: string
+  referral: string
+  signingWallet: string
+  connect: string
+  continue: string
+  cancel: string
+  linkError: string
+  mobileControls: string
+  taxTitle: string
+  taxHint: string
+  taxDownload: string
+  taxError: string
+  startDate: string
+  endDate: string
+  policy: string
+  kycRequired: string
+  sanctionsBlocked: string
+  screeningUnavailable: string
+}
+
 export const phaseCopy: Record<
   AppLang,
   {
+    integrations: IntegrationCopy
+    /** Spike 574 (phase-182): classic PHASELQ/XLM pool + Soroswap surface. */
+    liquidityPools: Record<
+      | "title"
+      | "subtitle"
+      | "spotPrice"
+      | "executionPrice"
+      | "priceImpact"
+      | "minReceived"
+      | "quoteExpires"
+      | "poolReserves"
+      | "totalShares"
+      | "deposit"
+      | "withdraw"
+      | "swap"
+      | "addTrustline"
+      | "trustlineRequired"
+      | "shareTrustlineRequired"
+      | "slippage"
+      | "thinPoolWarning"
+      | "quoteStale"
+      | "retryQuote"
+      | "depositSuccess"
+      | "withdrawSuccess"
+      | "swapSuccess"
+      | "poolDisabled"
+      | "soroswapNotConfigured"
+      | "routerDrift"
+      | "selfProvisionFlagged"
+      | "volumeExcluded"
+      | "rollback",
+      string
+    >
     nav: { home: string; market: string; forge: string; chamber: string; lang: string }
     dashboard: {
       title: string
@@ -734,9 +818,83 @@ export const phaseCopy: Record<
     pricing: PricingCopy
     moderationQueue: ModerationQueueCopy
     questArcs: QuestArcCopy
+    forgeExperiment: ForgeExperimentCopy
+    qrFlows: Record<"receiveTitle" | "scanTitle" | "shareReferral" | "scanPrompt" | "copyUri" | "copied" | "requestAmount" | "scanQr" | "viewQr" | "manualEntry" | "cameraError", string>
+    walletConnectResilience: Record<"title" | "reconnectPrompt" | "chainMismatch" | "openMobileWallet" | "relayDisconnected" | "reconnectedToast", string>
+    xbullParity: Record<"badge" | "signPrompt" | "trustlinePrompt" | "rejected" | "networkMismatch", string>
+    ledgerClearSigning: Record<"title" | "description" | "targetContract" | "hostFunction" | "verificationCode" | "matchCodePrompt" | "acknowledgePrompt" | "approveButton" | "cancelButton" | "blindSigningDisabled" | "gate13RiskAlert", string>
+    featureFlagOps: Record<"title" | "killSwitchActive" | "rolloutLabel" | "drillPassed" | "versionConflict", string>
+    dependencyCadence: Record<"title" | "sdkAligned" | "skewDetected" | "bytecodeGateBlocked", string>
   }
 > = {
   en: {
+    liquidityPools: {
+      title: "Liquidity pools",
+      subtitle: "Provide PHASELQ and XLM, or swap between them through the classic pool.",
+      spotPrice: "Spot price",
+      executionPrice: "Execution price",
+      priceImpact: "Price impact",
+      minReceived: "Minimum received",
+      quoteExpires: "Quote expires in {seconds}s",
+      poolReserves: "Pool reserves",
+      totalShares: "Pool shares",
+      deposit: "Deposit liquidity",
+      withdraw: "Withdraw liquidity",
+      swap: "Swap",
+      addTrustline: "Add pool trustline",
+      trustlineRequired: "This wallet needs both asset trustlines before depositing.",
+      shareTrustlineRequired: "This wallet needs a pool-share trustline before withdrawing.",
+      slippage: "Slippage tolerance",
+      thinPoolWarning: "The pool is thin: this size moves the price {bps} bps. The quote, not the spot price, is what you would get.",
+      quoteStale: "Reserves changed or this quote expired. Review the new bound before signing.",
+      retryQuote: "Refresh quote",
+      depositSuccess: "Liquidity added. Pool shares are a separate balance from your PHASELQ.",
+      withdrawSuccess: "Shares redeemed. Both assets return in pool proportion.",
+      swapSuccess: "Swap submitted with your minimum received enforced.",
+      poolDisabled: "Liquidity pools are disabled on this deployment.",
+      soroswapNotConfigured: "Soroswap routing is not configured on this network.",
+      routerDrift: "The Soroswap router changed since it was pinned. Routing is paused until an operator updates it.",
+      selfProvisionFlagged: "This pool is seeded and traded by a single wallet, so its volume is excluded from rankings.",
+      volumeExcluded: "Wash-flagged pool volume is excluded from every aggregate.",
+      rollback: "Rollback: turn phase-182 off and restart; pool data stays inert.",
+    },
+    integrations: {
+      "actionFailed": "The request failed. Your input is preserved; retry when ready.",
+      "actionConflict": "This request is already pending or its state has changed. Refresh the status before retrying.",
+      "requirementsNotMet": "Complete the quest requirements and add the required trustline before claiming.",
+      "rateLimited": "Too many requests. Wait before retrying.",
+      "quest": "Quest",
+      "offer": "Offer",
+      "buyer": "Buyer",
+      "seller": "Seller",
+      "offerHint": "Accepting records the agreement. It does not transfer the NFT or prove an on-chain payment.",
+      "claim": "Claim",
+      "accept": "Accept",
+      "reject": "Reject",
+      "completed": "Completed",
+      "pending": "Transaction pending. Keep this screen and retry to verify the outcome.",
+      "reviewLink": "Review incoming link",
+      "reviewLinkHint": "Check the destination and full recipient address. Continuing opens the requested screen; transactions always require a separate wallet confirmation.",
+      "destination": "Destination",
+      "recipient": "Suggested recipient (untrusted)",
+      "referral": "Referral code (untrusted)",
+      "signingWallet": "Connected wallet",
+      "connect": "Connect wallet",
+      "continue": "Continue",
+      "cancel": "Cancel",
+      "linkError": "This link is invalid, expired, or unavailable.",
+      "mobileControls": "Chamber controls",
+      "taxTitle": "Transaction export",
+      "taxHint": "Testnet records only. Missing basis and FX remain blank; unverified trades are flagged. This is not a tax form or tax advice.",
+      "taxDownload": "Download CSV",
+      "taxError": "Export failed. Check your wallet signature and try again.",
+      "startDate": "From (UTC)",
+      "endDate": "To (UTC, exclusive)",
+      "policy": "Lot policy",
+      "kycRequired": "Identity verification is required for this amount.",
+      "sanctionsBlocked": "This wallet cannot use this service.",
+      "screeningUnavailable": "Screening is unavailable. Try again later."
+    },
     nav: {
       home: "← Home",
       market: "Market",
@@ -1349,8 +1507,150 @@ export const phaseCopy: Record<
         identityBlocked: "This wallet is not eligible for quest arcs.",
       },
     },
+    qrFlows: {
+      receiveTitle: "◈ RECEIVE ASSETS",
+      scanTitle: "◈ SCAN QR CODE",
+      shareReferral: "◈ SHARE REFERRAL QR",
+      scanPrompt: "Position QR code within viewfinder",
+      copyUri: "[ COPY URI ]",
+      copied: "[ COPIED! ]",
+      requestAmount: "Request Amount",
+      scanQr: "Scan QR",
+      viewQr: "Show QR",
+      manualEntry: "Or enter address manually",
+      cameraError: "Camera access unavailable",
+    },
+    forgeExperiment: {
+      variants: {
+        control: {
+          label: "Standard",
+          paymentGateExplainer: "Pay {amount} PHASELQ to the Forge Agent — your artifact is generated and minted on the Stellar ledger automatically.",
+          paymentGateHint: "One payment settles on-chain; your artifact is minted automatically.",
+        },
+        price_cut: {
+          label: "Launch price",
+          paymentGateExplainer: "Launch price: pay {amount} PHASELQ to the Forge Agent — same on-chain settlement, same automatic mint.",
+          paymentGateHint: "Launch pricing — one on-chain payment, artifact minted automatically.",
+        },
+        copy_urgent: {
+          label: "Limited",
+          paymentGateExplainer: "Secure your artifact for {amount} PHASELQ — settlement is on-chain and minting is automatic.",
+          paymentGateHint: "Limited window — pay once on-chain and the Forge mints your artifact automatically.",
+        },
+      },
+    },
+    walletConnectResilience: {
+      title: "WalletConnect v2 Resilience",
+      reconnectPrompt: "WalletConnect session dropped. Click Reconnect to restore mobile link.",
+      chainMismatch: "Wallet chain mismatch: your wallet is connected to a different network. Switch to Stellar Testnet in your mobile wallet.",
+      openMobileWallet: "Open mobile wallet to sign",
+      relayDisconnected: "Relay websocket connection lost. Attempting auto-reconnect…",
+      reconnectedToast: "WalletConnect session restored successfully.",
+    },
+    xbullParity: {
+      badge: "xBull",
+      signPrompt: "Confirm transaction in xBull wallet",
+      trustlinePrompt: "Confirm PHASELQ trustline in xBull wallet",
+      rejected: "Transaction rejected in xBull wallet",
+      networkMismatch: "xBull network mismatch: please switch to Stellar Testnet",
+    },
+    ledgerClearSigning: {
+      title: "Ledger Clear-Signing Review",
+      description: "Inspect call parameters before transmitting payload to hardware",
+      targetContract: "Target Contract",
+      hostFunction: "Host Function",
+      verificationCode: "Ledger Verification Code",
+      matchCodePrompt: "Match with on-device hash pre-image",
+      acknowledgePrompt: "I have verified the contract ID and parameters match my intent",
+      approveButton: "Verify & Send to Device",
+      cancelButton: "Cancel",
+      blindSigningDisabled: "Blind signing is disabled in Ledger Stellar app settings. Set to Enabled or Clear signing to continue.",
+      gate13RiskAlert: "Contract Execution Blocked: Gate #13 Pre-empted (SelfTransfer or invalid authorization).",
+    },
+    featureFlagOps: {
+      title: "Feature-Flag Operations & Kill-Switch",
+      killSwitchActive: "Emergency kill-switch active — server writes halted for this flag",
+      rolloutLabel: "Staged rollout ({bps} bps)",
+      drillPassed: "Kill-switch & rollout drill verified",
+      versionConflict: "Concurrent operator update detected (version conflict)",
+    },
+    dependencyCadence: {
+      title: "Dependency Cadence & Soroban Parity",
+      sdkAligned: "Stellar SDK v15 and Soroban ABI 22000 aligned across app and scripts",
+      skewDetected: "Dependency or WASM target skew detected ({code})",
+      bytecodeGateBlocked: "WASM bytecode changed without a verified staging dry-run",
+    },
   },
+
+
   es: {
+    liquidityPools: {
+      title: "Pools de liquidez",
+      subtitle: "Aportá PHASELQ y XLM, o cambiá entre ambos por el pool clásico.",
+      spotPrice: "Precio spot",
+      executionPrice: "Precio de ejecución",
+      priceImpact: "Impacto en el precio",
+      minReceived: "Mínimo a recibir",
+      quoteExpires: "La cotización vence en {seconds}s",
+      poolReserves: "Reservas del pool",
+      totalShares: "Participaciones del pool",
+      deposit: "Depositar liquidez",
+      withdraw: "Retirar liquidez",
+      swap: "Cambiar",
+      addTrustline: "Agregar trustline del pool",
+      trustlineRequired: "Esta billetera necesita las trustlines de ambos activos antes de depositar.",
+      shareTrustlineRequired: "Esta billetera necesita la trustline de participaciones antes de retirar.",
+      slippage: "Tolerancia de slippage",
+      thinPoolWarning: "El pool es delgado: este tamaño mueve el precio {bps} bps. Lo que recibirías es el precio de ejecución, no el spot.",
+      quoteStale: "Cambiaron las reservas o venció la cotización. Revisá el nuevo límite antes de firmar.",
+      retryQuote: "Actualizar cotización",
+      depositSuccess: "Liquidez agregada. Las participaciones del pool son un saldo distinto de tu PHASELQ.",
+      withdrawSuccess: "Participaciones canjeadas. Ambos activos vuelven en proporción al pool.",
+      swapSuccess: "Cambio enviado con tu mínimo a recibir garantizado.",
+      poolDisabled: "Los pools de liquidez están deshabilitados en este despliegue.",
+      soroswapNotConfigured: "El ruteo por Soroswap no está configurado en esta red.",
+      routerDrift: "El router de Soroswap cambió desde que se fijó. El ruteo queda en pausa hasta que un operador lo actualice.",
+      selfProvisionFlagged: "Este pool lo fondea y opera una sola billetera, así que su volumen queda excluido de los rankings.",
+      volumeExcluded: "El volumen marcado como wash queda excluido de todos los agregados.",
+      rollback: "Rollback: apagá phase-182 y reiniciá; los datos del pool quedan inertes.",
+    },
+    integrations: {
+      "actionFailed": "Falló la solicitud. Conservamos los datos; reintentá cuando puedas.",
+      "actionConflict": "La solicitud está pendiente o cambió de estado. Actualizá el estado antes de reintentar.",
+      "requirementsNotMet": "Completá los requisitos de la misión y agregá la línea de confianza antes de reclamar.",
+      "rateLimited": "Demasiadas solicitudes. Esperá antes de reintentar.",
+      "quest": "Misión",
+      "offer": "Oferta",
+      "buyer": "Comprador",
+      "seller": "Vendedor",
+      "offerHint": "Aceptar registra el acuerdo. No transfiere el NFT ni demuestra un pago en cadena.",
+      "claim": "Reclamar",
+      "accept": "Aceptar",
+      "reject": "Rechazar",
+      "completed": "Completado",
+      "pending": "Transacción pendiente. Conservá la pantalla y reintentá para verificar el resultado.",
+      "reviewLink": "Revisar enlace entrante",
+      "reviewLinkHint": "Verificá el destino y la dirección completa. Continuar abre la pantalla solicitada; las transacciones requieren otra confirmación en la billetera.",
+      "destination": "Destino",
+      "recipient": "Destinatario sugerido (no verificado)",
+      "referral": "Código de referido (no verificado)",
+      "signingWallet": "Billetera conectada",
+      "connect": "Conectar billetera",
+      "continue": "Continuar",
+      "cancel": "Cancelar",
+      "linkError": "Este enlace no es válido, venció o no está disponible.",
+      "mobileControls": "Controles de la cámara",
+      "taxTitle": "Exportar transacciones",
+      "taxHint": "Solo registros de testnet. Base y cambio desconocidos quedan vacíos; operaciones no verificadas se marcan. No es un formulario ni asesoramiento fiscal.",
+      "taxDownload": "Descargar CSV",
+      "taxError": "Falló la exportación. Verificá la firma y reintentá.",
+      "startDate": "Desde (UTC)",
+      "endDate": "Hasta (UTC, exclusivo)",
+      "policy": "Política de lotes",
+      "kycRequired": "Este monto requiere verificación de identidad.",
+      "sanctionsBlocked": "Esta billetera no puede usar este servicio.",
+      "screeningUnavailable": "Verificación no disponible. Reintentá más tarde."
+    },
     nav: {
       home: "← Inicio",
       market: "Mercado",
@@ -1965,7 +2265,82 @@ export const phaseCopy: Record<
         identityBlocked: "Esta wallet no es elegible para arcos de misiones.",
       },
     },
+    qrFlows: {
+      receiveTitle: "◈ RECIBIR ACTIVOS",
+      scanTitle: "◈ ESCANEAR CÓDIGO QR",
+      shareReferral: "◈ COMPARTIR QR DE REFERIDO",
+      scanPrompt: "Posicioná el código QR dentro del visor",
+      copyUri: "[ COPIAR URI ]",
+      copied: "[ ¡COPIADO! ]",
+      requestAmount: "Monto solicitado",
+      scanQr: "Escanear QR",
+      viewQr: "Ver QR",
+      manualEntry: "O ingresá la dirección manualmente",
+      cameraError: "Acceso a cámara no disponible",
+    },
+    forgeExperiment: {
+      variants: {
+        control: {
+          label: "Estándar",
+          paymentGateExplainer: "Pagá {amount} PHASELQ al Forge Agent — tu artefacto se genera y se mintea en el ledger de Stellar automáticamente.",
+          paymentGateHint: "Un pago se liquida on-chain; tu artefacto se mintea automáticamente.",
+        },
+        price_cut: {
+          label: "Precio de lanzamiento",
+          paymentGateExplainer: "Precio de lanzamiento: pagá {amount} PHASELQ al Forge Agent — misma liquidación on-chain, mismo mint automático.",
+          paymentGateHint: "Precio de lanzamiento — un pago on-chain y el Forge mintea tu artefacto automáticamente.",
+        },
+        copy_urgent: {
+          label: "Por tiempo limitado",
+          paymentGateExplainer: "Asegurá tu artefacto por {amount} PHASELQ — la liquidación es on-chain y el mint es automático.",
+          paymentGateHint: "Ventana limitada — pagá una vez on-chain y el Forge mintea tu artefacto automáticamente.",
+        },
+      },
+    },
+    walletConnectResilience: {
+      title: "Resiliencia WalletConnect v2",
+      reconnectPrompt: "Sesión WalletConnect interrumpida. Hacé clic en Reconectar para restaurar el enlace móvil.",
+      chainMismatch: "Red incorrecta en wallet: tu wallet está conectada a otra red. Cambiá a Stellar Testnet en tu wallet móvil.",
+      openMobileWallet: "Abrir wallet móvil para firmar",
+      relayDisconnected: "Conexión con el relay perdida. Intentando reconexión automática…",
+      reconnectedToast: "Sesión de WalletConnect restaurada con éxito.",
+    },
+    xbullParity: {
+      badge: "xBull",
+      signPrompt: "Confirmar transacción en la billetera xBull",
+      trustlinePrompt: "Confirmar línea de confianza PHASELQ en xBull",
+      rejected: "Transacción rechazada en la billetera xBull",
+      networkMismatch: "Red de xBull incorrecta: por favor seleccioná Stellar Testnet",
+    },
+    ledgerClearSigning: {
+      title: "Revisión Clear-Signing de Ledger",
+      description: "Inspeccioná los parámetros antes de transmitir la carga al dispositivo",
+      targetContract: "Contrato destino",
+      hostFunction: "Función host",
+      verificationCode: "Código de verificación Ledger",
+      matchCodePrompt: "Compará con la preimagen en la pantalla del dispositivo",
+      acknowledgePrompt: "Verifiqué que el ID de contrato y los parámetros coinciden con mi intención",
+      approveButton: "Verificar y enviar al dispositivo",
+      cancelButton: "Cancelar",
+      blindSigningDisabled: "Firma ciega deshabilitada en la app Stellar del Ledger. Habilitá Blind signing en Configuración.",
+      gate13RiskAlert: "Ejecución bloqueada: Gate #13 prevenido (auto-transferencia o autorización inválida).",
+    },
+    featureFlagOps: {
+      title: "Operaciones de Feature Flags y Kill-Switch",
+      killSwitchActive: "Kill-switch de emergencia activo — escrituras del servidor detenidas para este flag",
+      rolloutLabel: "Despliegue gradual ({bps} bps)",
+      drillPassed: "Simulacro de kill-switch y despliegue verificado",
+      versionConflict: "Actualización concurrente de operador detectada (conflicto de versión)",
+    },
+    dependencyCadence: {
+      title: "Cadencia de Dependencias y Paridad Soroban",
+      sdkAligned: "Stellar SDK v15 y Soroban ABI 22000 alineados entre app y scripts",
+      skewDetected: "Desfase de dependencias o target WASM detectado ({code})",
+      bytecodeGateBlocked: "El bytecode WASM cambió sin una prueba previa en staging verificada",
+    },
   },
+
+
 }
 
 /** Only accept locales that are part of the copy registry.  This deliberately
@@ -1987,4 +2362,11 @@ export function fillCopy(template: string, vars: Record<string, string | number>
   return template.replace(/\{([a-z_]+)\}/gi, (match, key: string) =>
     Object.prototype.hasOwnProperty.call(vars, key) ? String(vars[key]) : match,
   )
+}
+
+/** phase-174 (spike 612): experiment copy variant for a language; unknown keys fall back to control. */
+export function pickForgeExperimentCopy(lang: unknown, copyKey: string): ForgeExperimentVariantCopy {
+  const registry = pickCopy(lang).forgeExperiment.variants
+  const key = copyKey.trim() || "control"
+  return registry[key] ?? registry.control!
 }

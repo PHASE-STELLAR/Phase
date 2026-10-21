@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { readFile } from "node:fs/promises"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
+import { isSearchAnalyticsEnabled, recordSearchQuery, searchQueryHash } from "@/lib/search-query-log"
 import type { ProfileData } from "@/lib/profile-store"
 
 export const runtime = "nodejs"
@@ -155,6 +156,20 @@ export async function GET(request: NextRequest) {
         is_following: viewerFollowing.has(wallet),
       })
     }
+  }
+
+  // Spike 613 (phase-175): non-blocking hashed query log. q<2 chars matches
+  // everything (browse), so only real queries (q>=2) are logged.
+  if (q.length >= 2 && isSearchAnalyticsEnabled()) {
+    const correctedFrom = request.nextUrl.searchParams.get("q0")?.trim() || undefined
+    void recordSearchQuery({
+      surface: "profile",
+      kind: "query",
+      query_hash: searchQueryHash(q),
+      result_count: results.length,
+      session_id: request.nextUrl.searchParams.get("sid")?.trim() || undefined,
+      corrected_from_hash: correctedFrom ? searchQueryHash(correctedFrom) : undefined,
+    }).catch(() => undefined)
   }
 
   return NextResponse.json({ results, suggested, totalCollectors, nextCursor })

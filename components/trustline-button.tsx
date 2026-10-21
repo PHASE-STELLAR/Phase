@@ -6,6 +6,8 @@ import {
   isAlbedoSelectedInKit,
   requestAlbedoImplicitTxFlow,
 } from "@/lib/albedo-intent-client"
+import { albedoRetiredMessage, isAlbedoRetired } from "@/lib/albedo-sunset"
+import { isFreighterMobile171Enabled, openFriendbot } from "@/lib/freighter-mobile"
 import { signTransaction } from "@/lib/stellar-wallet-kit"
 import { useLang } from "@/components/lang-context"
 import { TokenIcon } from "@/components/token-icon"
@@ -146,6 +148,13 @@ export function TrustlineButton({ address, onRequestConnect, onReady, className,
     }
 
     if (uiState === "GET_TESTNET_XLM") {
+      // Spike 627: on mobile (plain browser or Freighter in-app), window.open
+      // is blocked or spawned as a popup the in-app browser cannot return
+      // from — navigate same-tab instead. Legacy desktop behavior when off.
+      if (isFreighterMobile171Enabled()) {
+        openFriendbot(addr, typeof navigator !== "undefined" ? navigator.userAgent : null)
+        return
+      }
       if (typeof window !== "undefined") {
         window.open(`https://friendbot.stellar.org/?addr=${encodeURIComponent(addr)}`, "_blank", "noopener,noreferrer")
       }
@@ -157,6 +166,12 @@ export function TrustlineButton({ address, onRequestConnect, onReady, className,
     setMessage("")
     try {
       if (isAlbedoSelectedInKit()) {
+        // Spike 626: retired Albedo never reaches the pre-sign probe — the
+        // user is told to reconnect with a supported wallet instead.
+        if (isAlbedoRetired()) {
+          setMessage(albedoRetiredMessage(lang))
+          return
+        }
         const allowed = await albedoImplicitTxAllowed(addr)
         setAlbedoImplicitOk(allowed)
         if (!allowed) {
@@ -300,7 +315,7 @@ export function TrustlineButton({ address, onRequestConnect, onReady, className,
       {hero ? (
         <p className="mt-2 text-[11px] leading-snug text-zinc-300">{ff.trustline_beginner_blurb}</p>
       ) : null}
-      {walletAddress && albedoImplicitOk === false ? (
+      {walletAddress && albedoImplicitOk === false && !isAlbedoRetired() ? (
         <div className="mb-2 rounded border border-violet-500/45 bg-violet-950/30 p-2">
           <p className="text-[9px] font-semibold uppercase tracking-wide text-violet-200/95">
             {ff.trustline_albedo_prep_title}

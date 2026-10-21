@@ -20,6 +20,10 @@ import { NextRequest, NextResponse } from "next/server"
 import { Keypair } from "@stellar/stellar-sdk"
 import { settleX402Challenge, type X402Challenge } from "@/lib/x402-agent-client"
 import { PHASER_LIQ_SYMBOL, REQUIRED_AMOUNT, stroopsToLiqDisplay } from "@/lib/phase-protocol"
+import { resolveForgePaymentAmount } from "@/lib/forge/payment-verifier"
+import { checkForgeQuota, forgeBillingRetryAfterSeconds, recordForgeBillingEvent } from "@/lib/forge/billing"
+import { isSurfaceHalted } from "@/lib/cost-budgets"
+import { isAnalyticsWarehouseEnabled, recordWarehouseEvent } from "@/lib/analytics-warehouse"
 
 export const runtime = "nodejs"
 export const maxDuration = 180
@@ -326,6 +330,39 @@ export async function POST(request: NextRequest): Promise<NextResponse<AgentForg
   const origin = request.nextUrl.origin
   const outputLang = normalizeAgentForgeLang(body.lang)
 
+  // Spike 614 (phase-176): refuse before any spend when the forge surface is
+  // halted by its budget kill-switch.
+  if (isSurfaceHalted("forge")) {
+    return NextResponse.json(
+      { success: false, error: "FORGE_SURFACE_HALTED", retryAfterSeconds: 300 },
+      { status: 503, headers: { "Retry-After": "300" } },
+    )
+  }
+
+  // Spike 615 (phase-177): enforce the payer's daily tier quota BEFORE settle
+  // so an exhausted wallet never burns a real payment on a refused job.
+  const quota = await checkForgeQuota(payerAddress)
+  if (!quota.allowed) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "FORGE_QUOTA_EXCEEDED",
+        tierId: quota.tierId,
+        usedToday: quota.used,
+        dailyLimit: quota.limit,
+        resetAt: quota.resetAt,
+      },
+      { status: 429, headers: { "Retry-After": String(forgeBillingRetryAfterSeconds(quota)) } },
+    )
+  if (isAnalyticsWarehouseEnabled(payerAddress)) {
+    void recordWarehouseEvent({
+      surface: "forge",
+      stage: "agent_forge_started",
+      wallet: payerAddress,
+      metadata: { agentPublicKey, promptLength: prompt.length },
+    }).catch(() => {})
+  }
+
   // 4. Fetch the 402 payment challenge from /api/forge-agent
   let challenge: X402Challenge
   try {
@@ -339,8 +376,12 @@ export async function POST(request: NextRequest): Promise<NextResponse<AgentForg
     )
   }
 
-  // Override challenge amount with REQUIRED_AMOUNT from env if it looks more reliable.
-  const requiredAmount = parseInt(REQUIRED_AMOUNT, 10)
+  // Spike 612 (phase-174): resolve the amount for THIS payer instead of
+  // clobbering the challenge with the control constant — a variant-priced
+  // challenge must settle at the price it was issued at (higher variants would
+  // be underpaid, discounts overpaid, by a blind REQUIRED_AMOUNT override).
+  const requiredAmountStroops = await resolveForgePaymentAmount(payerAddress)
+  const requiredAmount = parseInt(requiredAmountStroops, 10)
   if (Number.isFinite(requiredAmount) && requiredAmount > 0) {
     challenge.amount = requiredAmount
   }
@@ -383,10 +424,27 @@ export async function POST(request: NextRequest): Promise<NextResponse<AgentForg
   const imageUrl = forgeResult.imageUrl ?? forgeResult.image_url ?? ""
   const lore = forgeResult.lore ?? ""
 
+  // Spike 615 (phase-177): meter the accepted job (idempotent by jobId = txHash).
+  await recordForgeBillingEvent({
+    wallet: payerAddress,
+    jobId: settlementTxHash,
+    settlementTxHash,
+    amountStroops: String(challenge.amount),
+  }).catch(() => undefined)
+
   // 7. Upload image to IPFS (best-effort)
   const ipfsCid = await uploadImageToIpfs(imageUrl)
 
   const amountPaid = `${stroopsToLiqDisplay(String(challenge.amount))} ${PHASER_LIQ_SYMBOL}`
+
+  if (isAnalyticsWarehouseEnabled(payerAddress)) {
+    void recordWarehouseEvent({
+      surface: "forge",
+      stage: "agent_forge_settled",
+      wallet: payerAddress,
+      metadata: { txHash: settlementTxHash, amountPaid, ipfsCid },
+    }).catch(() => {})
+  }
 
   return NextResponse.json({
     success: true,

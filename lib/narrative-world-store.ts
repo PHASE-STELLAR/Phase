@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import { readJsonFile, updateJsonFile } from "@/lib/json-store"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
 import { incrementVectorClock, type VectorClock } from "@/lib/world-conflict"
@@ -158,7 +158,7 @@ export async function getRecentNarrativesForCollection(
     .slice(0, limit)
 }
 
-// â”€â”€â”€ phase-111: localized narrative caching per language pack â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── phase-111: localized narrative caching per language pack ──────────────
 // Isolated, flag-gated. Every locale re-fetched the same lore from disk on
 // every request. When enabled, reads are cached per (tokenId, lang) with a
 // short TTL, avoiding redundant JSON-store reads across language packs.
@@ -192,7 +192,7 @@ export function invalidateLocalizedNarrativeCache(tokenId: number): void {
 
 /**
  * Reads a token's narrative through a per-(tokenId, lang) cache with a short TTL.
- * The underlying narrative text is not translated by this cache â€” it only avoids
+ * The underlying narrative text is not translated by this cache — it only avoids
  * redundant store reads when the same locale re-fetches the same lore.
  * When phase-111 is disabled, bypasses the cache entirely.
  */
@@ -211,7 +211,7 @@ export async function getNarrativeForTokenCached(
   return value
 }
 
-// â”€â”€â”€ phase-108: reader progression tracking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── phase-108: reader progression tracking ──────────────────────────────
 
 type ReaderProgressEntry = {
   wallet: string
@@ -247,7 +247,7 @@ export async function markNarrativeRead(wallet: string, collectionId: number, to
   )
 }
 
-// â”€â”€â”€ phase-109: collaborative world permissions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── phase-109: collaborative world permissions ──────────────────────────
 
 export type WorldRole = "editor" | "viewer"
 
@@ -293,7 +293,7 @@ export async function setWorldRole(
   )
 }
 
-// â”€â”€â”€ phase-112: world export to portable markdown/JSON â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── phase-112: world export to portable markdown/JSON ───────────────────
 
 export type WorldExportSnapshot = {
   collection_id: number
@@ -444,7 +444,7 @@ export function renderWorldExportMarkdown(snapshot: WorldExportSnapshot): string
 /**
  * Serialises a world export snapshot as Newline-Delimited JSON (NDJSON).
  *
- * One JSON object per line â€” the metadata header on the first line, then one
+ * One JSON object per line — the metadata header on the first line, then one
  * narrative record per subsequent line. Consumers can stream the response and
  * process records incrementally without buffering the whole file.
  *
@@ -466,7 +466,7 @@ export function renderWorldExportNdjson(snapshot: WorldExportSnapshot): string {
   return lines.join("\n") + "\n"
 }
 
-// â”€â”€â”€ phase-115: cross-artifact lore linking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── phase-115: cross-artifact lore linking ──────────────────────────────
 
 export type LoreLink = {
   from_token_id: number
@@ -505,7 +505,7 @@ export async function addLoreLink(fromTokenId: number, toTokenId: number, note?:
   )
 }
 
-// â”€â”€â”€ phase-110: narrative search helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── phase-110: narrative search helpers ──────────────────────────────────
 
 export async function getAllNarrativesWithTokenIds(): Promise<
   Array<{ tokenId: number; narrative: string; collection_id: number; generated_at: number }>

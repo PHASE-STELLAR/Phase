@@ -1,3 +1,6 @@
+import { recordTaxEvent } from "@/lib/tax-report"
+import { complianceGate } from "@/lib/compliance"
+import { decimalToStroops } from "@/lib/decimal-amount"
 import { mkdir, readFile, writeFile, open, unlink } from "node:fs/promises"
 import path from "node:path"
 import { NextRequest, NextResponse } from "next/server"
@@ -203,6 +206,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "walletAddress debe ser cuenta Stellar G válida." }, { status: 400 })
   }
 
+  const complianceBlock = await complianceGate(wallet, decimalToStroops(config.amount), "bootstrap")
+  if (complianceBlock) return complianceBlock
+
   const status = await walletStatus(wallet, config.asset)
   if (!status.accountExists) {
     return NextResponse.json(
@@ -234,6 +240,7 @@ export async function POST(req: NextRequest) {
     )
   }
 
+  let submittedHash: string | null = null
   try {
     const server = new Horizon.Server(HORIZON_URL)
     const source = await server.loadAccount(config.issuerKp.publicKey())
@@ -253,6 +260,8 @@ export async function POST(req: NextRequest) {
       .build()
     tx.sign(config.issuerKp)
     const submit = await server.submitTransaction(tx)
+    submittedHash = submit.hash
+    recordTaxEvent({ eventKey: `bootstrap:${submit.hash}`, wallet, kind: "reward", asset: `${config.asset.code}:${config.asset.issuer}`, amountStroops: decimalToStroops(config.amount), txHash: submit.hash, occurredAt: Date.now(), verified: true })
     return NextResponse.json({
       ok: true,
       hash: submit.hash,
@@ -260,6 +269,7 @@ export async function POST(req: NextRequest) {
       amount: config.amount,
     })
   } catch (e) {
+    if (submittedHash) return NextResponse.json({ pending: true, hash: submittedHash, code: "REPORTING_RECONCILIATION_REQUIRED" }, { status: 202 })
     await releaseClassicFundClaim(wallet)
     logHorizonSubmitError("classic-liq POST payment", e)
     return NextResponse.json(

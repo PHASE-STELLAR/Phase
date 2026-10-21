@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 /**
  * Distributor Auto-Refill Engine
  * 
@@ -16,6 +16,7 @@ import {
   TransactionBuilder,
 } from "@stellar/stellar-sdk"
 import { NETWORK_PASSPHRASE, RPC_URL } from "@/lib/phase-protocol"
+import { evaluateFeatureFlag } from "@/lib/feature-flags"
 import { incSecurityCounter } from "@/lib/security-counters"
 
 export interface RefillResult {
@@ -46,6 +47,21 @@ export async function executeDistributorRefill(
   amountStroops: string,
   tokenContractId: string
 ): Promise<RefillResult> {
+  // Spike 607 (phase-174): enforce instant server-side kill-switch before
+  // reserving funds or touching Soroban RPC so an incident kill halts hourly
+  // distributor refills without waiting for a redeploy.
+  const flagEval = evaluateFeatureFlag("phase-133", {
+    wallet: distributorAddress,
+    runtimeOnly: true,
+  })
+  if (flagEval.reason === "kill_switch" || flagEval.reason === "wallet_denied") {
+    return {
+      ok: false,
+      code: "KILL_SWITCH_ACTIVE",
+      error: `refill halted by feature-flag ops (${flagEval.reason})`,
+    }
+  }
+
   // Issue #231: take the reservation before touching the network. If the
   // distributor cannot cover the refill, this returns without a single RPC
   // call, and a concurrent caller that got here first has already consumed the

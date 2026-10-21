@@ -26,7 +26,7 @@ type Props = {
   height?: number
 }
 
-export function IpfsDisplayImg({ uri, alt = "", className, loading = "lazy", variant, focalPoint, onExhausted, priority, sizes, width = 640, height = 640 }: Props) {
+export function IpfsDisplayImg({ uri, alt = "", className, loading = "lazy", variant, focalPoint, onExhausted, fallback }: Props) {
   const candidates = useMemo(() => {
     const urls = ipfsHttpsGatewayUrls(uri)
     if (!variant) return urls

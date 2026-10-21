@@ -259,13 +259,7 @@ export async function verifyAvatarOwnershipSignature(
   imageUrl: string,
   signatureBase64: string,
 ): Promise<boolean> {
-  try {
-    const { Keypair } = await import("@stellar/stellar-sdk")
-    const { SIGNATURE_PREFIX, sha256Hex } = await import("@/lib/viewer-signature")
-    const message = `phase-avatar:v1:${await sha256Hex(JSON.stringify({ wallet, imageUrl }))}`
-    const data = new TextEncoder().encode(SIGNATURE_PREFIX + message)
-    return Keypair.fromPublicKey(wallet).verify(data, Buffer.from(signatureBase64, "base64"))
-  } catch {
-    return false
-  }
+  const { sha256Hex, verifySep53Signature } = await import("@/lib/viewer-signature")
+  const message = `phase-avatar:v1:${await sha256Hex(JSON.stringify({ wallet, imageUrl }))}`
+  return verifySep53Signature(wallet, message, signatureBase64)
 }

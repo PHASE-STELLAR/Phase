@@ -63,6 +63,10 @@ export function clearExploreOwnersCache(): void {
   store.clear()
 }
 
+export function exploreOwnersCacheStats(): { size: number; maxEntries: number } {
+  return { size: store.size, maxEntries: MAX_ENTRIES }
+}
+
 /**
  * phase-142: owner lookup for a known set of token ids, served from whichever
  * cached scan is freshest. The curator needs owners only for its shortlist (to

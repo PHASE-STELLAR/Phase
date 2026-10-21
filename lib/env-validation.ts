@@ -5,10 +5,13 @@
 
 import { StrKey } from "@stellar/stellar-sdk"
 import { z } from "zod"
+import { checkPreviewIsolation } from "@/lib/preview-isolation"
+import { auditFeatureFlagOpsWiring, isFeatureEnabled } from "@/lib/feature-flags"
+import { incSecurityCounter } from "@/lib/security-counters"
 
 export type EnvValidationError = {
   variable: string
-  issue: "missing" | "invalid_format" | "wrong_key_type"
+  issue: "missing" | "invalid_format" | "wrong_key_type" | "isolation_violation"
   message: string
   hint: string
 }
@@ -16,6 +19,15 @@ export type EnvValidationError = {
 export type EnvValidationResult = {
   valid: boolean
   errors: EnvValidationError[]
+}
+
+/** The log sink must be https; plain http would ship records in the clear. */
+export function isValidLogSinkUrl(value: string): boolean {
+  try {
+    return new URL(value.trim()).protocol === "https:"
+  } catch {
+    return false
+  }
 }
 
 function isValidContractId(value: string): boolean {
@@ -171,6 +183,10 @@ export const serverEnvSchema = z.object({
     { message: "STELLAR_RPC_URL must be a valid HTTP/HTTPS URL" },
   ),
   STELLAR_RPC_FALLBACK_URLS: z.string().optional(),
+  LOG_SINK_URL: z.string().optional().refine(
+    (v) => !v || isValidLogSinkUrl(v),
+    { message: "LOG_SINK_URL must be a valid https:// URL" },
+  ),
   SOROBAN_PROXY_FETCH_TIMEOUT_MS: z.string().optional().refine(
     (v) => {
       if (!v) return true
@@ -183,6 +199,7 @@ export const serverEnvSchema = z.object({
 
 export function validateClientEnv(rawEnv: Record<string, string | undefined> = process.env): EnvValidationResult {
   const errors: EnvValidationError[] = []
+
   const parsed = clientEnvSchema.safeParse(rawEnv)
   if (!parsed.success) {
     for (const issue of parsed.error.issues) {
@@ -234,8 +251,21 @@ export function validateServerEnv(rawEnv: Record<string, string | undefined> = p
  * Valida la configuración completa de entorno para PHASE
  */
 export function validatePhaseEnv(): EnvValidationResult {
-  const errors: EnvValidationError[] = []
   const env = process.env || {}
+  const errors: EnvValidationError[] = []
+  if (env.FEATURE_PHASE_176 === "1" || env.NEXT_PUBLIC_FEATURE_PHASE_176 === "1") {
+    const mode = env.PHASE_KYC_MODE ?? "off"
+    if (!["off", "mock", "live"].includes(mode) || (mode === "mock" && env.STELLAR_NETWORK === "mainnet")) {
+      errors.push({ variable: "PHASE_KYC_MODE", issue: "invalid_format", message: "Invalid KYC mode for this network.", hint: "Use off, mock (testnet only), or live." })
+    }
+    if (mode !== "off") for (const key of ["PHASE_KYC_HASH_KEY", "PHASE_KYC_WEBHOOK_SECRET"] as const) {
+      if ((env[key]?.length ?? 0) < 32) errors.push({ variable: key, issue: "missing", message: "Compliance key must contain at least 32 characters.", hint: "Configure a private server-runtime key." })
+    }
+    if (mode === "live") {
+      try { if (new URL(env.PHASE_SANCTIONS_URL ?? "").protocol !== "https:") throw new Error() }
+      catch { errors.push({ variable: "PHASE_SANCTIONS_URL", issue: "invalid_format", message: "HTTPS screening endpoint required.", hint: "Configure the server-side sanctions adapter URL." }) }
+    }
+  }
 
   const clientRes = validateClientEnv(env)
   if (!clientRes.valid) errors.push(...clientRes.errors)
@@ -263,6 +293,16 @@ export function validatePhaseEnv(): EnvValidationResult {
     "protocolo PHASE (NFT)",
   )
   if (phaseProtocol) errors.push(phaseProtocol)
+
+  for (const violation of checkPreviewIsolation(env)) {
+    errors.push({
+      variable: violation.variable,
+      issue: "isolation_violation",
+      message: violation.message,
+      hint: violation.hint,
+    })
+    incSecurityCounter("preview_isolation_violation")
+  }
 
   // Validar secret keys del faucet si están configuradas
   const adminSecret = validateSecretKey(env.ADMIN_SECRET_KEY, "ADMIN_SECRET_KEY")
@@ -320,9 +360,8 @@ export function validateFaucetIssuerConfig(
 //           follow-store data is untouched (read/write path in follow-store.ts
 //           is not modified by this module).
 
-export function isPhase95Enabled(): boolean {
-  const v = (process.env.NEXT_PUBLIC_FEATURE_PHASE_95 ?? process.env.FEATURE_PHASE_95 ?? "").trim().toLowerCase()
-  return v === "1" || v === "true" || v === "yes" || v === "on"
+export function isPhase95Enabled(wallet?: string): boolean {
+  return isFeatureEnabled("phase-95", wallet ? { wallet } : undefined)
 }
 
 export function flag95RollbackNote(): string {
@@ -374,7 +413,7 @@ export function buildFollowGraphExport(
   following: string[],
   followers: string[],
 ): FollowGraphExport {
-  if (!isPhase95Enabled()) {
+  if (!isPhase95Enabled(wallet)) {
     throw new FollowGraphPortabilityError("FLAG_DISABLED", "Follow-graph export disabled (phase-95 flag off)")
   }
   const cleanWallet = wallet.trim()
@@ -475,9 +514,8 @@ export function formatEnvValidationErrors(result: EnvValidationResult): string {
 // Rollback: unset the flag → assignQuestVariant throws FLAG_DISABLED and callers
 //           fall back to their static reward. No data migration to undo.
 
-export function isQuestExperimentEnabled(): boolean {
-  const v = (process.env.NEXT_PUBLIC_FEATURE_PHASE_50 ?? process.env.FEATURE_PHASE_50 ?? "").trim().toLowerCase()
-  return v === "1" || v === "true" || v === "yes" || v === "on"
+export function isQuestExperimentEnabled(wallet?: string): boolean {
+  return isFeatureEnabled("phase-50", wallet ? { wallet } : undefined)
 }
 
 export function flag50RollbackNote(): string {
@@ -555,7 +593,7 @@ export type QuestVariantAssignment = {
  * variant while the config's variant set and weights are unchanged.
  */
 export function assignQuestVariant(rawConfig: unknown, wallet: string, opts: { force?: boolean } = {}): QuestVariantAssignment {
-  if (!opts.force && !isQuestExperimentEnabled()) {
+  if (!opts.force && !isQuestExperimentEnabled(wallet)) {
     throw new QuestExperimentError("FLAG_DISABLED", "Quest A/B experimentation disabled (phase-50 flag off)", {
       rollback: flag50RollbackNote(),
     })
@@ -654,6 +692,11 @@ export async function auditPhaseFeatureWiring(): Promise<{ ok: boolean; notes: s
   const phase95 = auditFollowGraphPortabilityWiring()
   notes.push(phase95.note)
   if (!phase95.ok) allOk = false
+
+  // Audit phase-174 (feature-flag ops: staged rollout, wallet targeting & kill-switch)
+  const phase174 = auditFeatureFlagOpsWiring()
+  notes.push(phase174.note)
+  if (!phase174.ok) allOk = false
 
   // Audit phase-80 (fractional ownership)
   try {

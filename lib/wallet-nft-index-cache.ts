@@ -32,8 +32,8 @@ function cacheKey(contractId: string, address: string): string {
   return `${contractId}:${address.trim().toUpperCase()}`
 }
 
-export function isWalletNftIndexCacheEnabled(): boolean {
-  return isFeatureEnabled("phase-135")
+export function isWalletNftIndexCacheEnabled(address?: string): boolean {
+  return isFeatureEnabled("phase-135", address ? { wallet: address } : undefined)
 }
 
 export function isWalletNftIndexEntryFresh(entry: WalletNftIndexEntry, freshMs = DEFAULT_FRESH_MS): boolean {

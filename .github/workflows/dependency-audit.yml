@@ -5,6 +5,11 @@ on:
     paths:
       - "package.json"
       - "package-lock.json"
+      - "scripts/package.json"
+      - "scripts/package-lock.json"
+      - "contracts/**/Cargo.toml"
+      - "contracts/**/Cargo.lock"
+      - ".github/dependabot.yml"
       - ".github/workflows/dependency-audit.yml"
   push:
     branches:
@@ -12,6 +17,11 @@ on:
     paths:
       - "package.json"
       - "package-lock.json"
+      - "scripts/package.json"
+      - "scripts/package-lock.json"
+      - "contracts/**/Cargo.toml"
+      - "contracts/**/Cargo.lock"
+      - ".github/dependabot.yml"
       - ".github/workflows/dependency-audit.yml"
   schedule:
     - cron: "17 3 * * 1"
@@ -31,5 +41,7 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Verify grouped Soroban and Stellar dependency parity
+        run: npm run deps:cadence
       - name: Scan dependencies for high severity vulnerabilities
         run: npm run security:audit

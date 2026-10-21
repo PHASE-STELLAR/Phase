@@ -70,6 +70,7 @@ type WalletAvatarProps = {
   displayName?: string
   size?: number
   className?: string
+  showBadge?: boolean
 }
 
 export function WalletAvatar({
@@ -77,6 +78,7 @@ export function WalletAvatar({
   displayName,
   size = 32,
   className = "",
+  showBadge = false,
 }: WalletAvatarProps) {
   const [avatar, setAvatar] = useState<AvatarData | null>(null)
   const [loading, setLoading] = useState(true)

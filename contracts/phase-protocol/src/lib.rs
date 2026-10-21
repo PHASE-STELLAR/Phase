@@ -127,6 +127,23 @@ pub enum DataKey {
     RaffleEntry(u64, Address),
     /// Ranking publicado tras el sorteo: `[0, slots)` ganadores, `[slots, 2*slots)` suplentes.
     RaffleRanking(u64),
+    /// Spike 574 (phase-182): pool leg declarado por el admin. Solo configuración:
+    /// el ruteo real es un path payment clásico firmado por la tesorería, porque
+    /// Soroban no puede emitir operaciones del DEX clásico.
+    PoolLegConfig,
+}
+
+/// Configuración del pool leg (PHASELQ/XLM clásico o router Soroswap).
+#[contracttype]
+#[derive(Clone)]
+pub struct PoolLegConfig {
+    pub enabled: bool,
+    /// `classic` o `soroswap` — Symbol para mantener el ABI pequeño.
+    pub venue: Symbol,
+    /// Pool id (32 bytes) en classic; router contract id en Soroswap.
+    pub pool_id: BytesN<32>,
+    pub asset_code: Symbol,
+    pub asset_issuer: Address,
 }
 
 pub const RAFFLE_STATUS_OPEN: u32 = 0;
@@ -1112,6 +1129,60 @@ impl PhaseProtocol {
         env.current_contract_address()
     }
 
+    /// Spike 574 (phase-182): declara el pool leg. Admin-only y aditivo; no
+    /// cambia `settle`. Un `pool_id` todo-cero se rechaza para que un error de
+    /// configuración no se lea como "pool " + 64 ceros.
+    pub fn set_pool_leg(env: Env, admin: Address, config: PoolLegConfig) {
+        let stored: Address = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("Admin"))
+            .expect("Admin not set — call initialize first");
+        if stored != admin {
+            panic!("only admin can set the pool leg");
+        }
+        admin.require_auth();
+        if config.pool_id == BytesN::from_array(&env, &[0u8; 32]) {
+            panic!("pool leg requires a non-zero pool id");
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::PoolLegConfig, &config.clone());
+        env.events().publish(
+            (Symbol::new(&env, "pool_leg_set"), admin),
+            (config.enabled, config.venue, config.pool_id),
+        );
+    }
+
+    /// Lectura del pool leg. `None` cuando la integración está apagada o nunca
+    /// se configuró; los clientes deben tratar `None` como "sin pool leg".
+    pub fn get_pool_leg(env: Env) -> Option<PoolLegConfig> {
+        env.storage().persistent().get(&DataKey::PoolLegConfig)
+    }
+
+    /// Desactiva el pool leg sin borrar la configuración (rollback barato).
+    pub fn clear_pool_leg(env: Env, admin: Address) {
+        let stored: Address = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("Admin"))
+            .expect("Admin not set — call initialize first");
+        if stored != admin {
+            panic!("only admin can clear the pool leg");
+        }
+        admin.require_auth();
+        if let Some(mut config) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, PoolLegConfig>(&DataKey::PoolLegConfig)
+        {
+            config.enabled = false;
+            env.storage()
+                .persistent()
+                .set(&DataKey::PoolLegConfig, &config);
+        }
+    }
+
     /// Colección (Freighter / SEP-0050 / SEP-41 metadata): lectura on-chain sin estado.
     pub fn name(env: Env) -> String {
         String::from_str(&env, "Phase Artifact")
@@ -1871,6 +1942,12 @@ impl PhaseProtocol {
             .persistent()
             .get(&DataKey::RaffleEntry(collection_id, entrant))
             .unwrap_or(0)
+    }
+
+    /// Spike 608: Exposes the pinned Soroban SDK / ABI version (`22000` for soroban-sdk 22.0.0)
+    /// so grouped dependency updates and staging dry-runs can verify WASM ABI parity.
+    pub fn soroban_abi_version(_env: Env) -> u32 {
+        22_000
     }
 }
 

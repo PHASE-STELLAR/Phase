@@ -153,10 +153,15 @@ export async function viewerSignatureDigest(text: string): Promise<string> {
     .join("")
 }
 
-/** The exact bytes a wallet signs: SEP-53 prefix over the digest of the message. */
+/** The SEP-53 message a wallet is asked to sign (the wallet adds the prefix). */
+export async function viewerSignatureMessage(claims: ViewerSignatureClaims): Promise<string> {
+  return `phase-viewer:v1:${await viewerSignatureDigest(buildViewerSignatureMessage(claims))}`
+}
+
+/** The exact bytes the wallet's Ed25519 key signs: SHA-256(SEP-53 prefix + message). */
 export async function viewerSignatureBytes(claims: ViewerSignatureClaims): Promise<Uint8Array> {
-  const digest = await viewerSignatureDigest(buildViewerSignatureMessage(claims))
-  return new TextEncoder().encode(`${VIEWER_SIGNATURE_PREFIX}phase-viewer:v1:${digest}`)
+  const data = new TextEncoder().encode(VIEWER_SIGNATURE_PREFIX + (await viewerSignatureMessage(claims)))
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", data))
 }
 
 function parseClaims(
@@ -232,7 +237,7 @@ export async function verifyViewerSignature(input: {
   try {
     const { Keypair } = await import("@stellar/stellar-sdk")
     const bytes = await viewerSignatureBytes(claims)
-    signatureValid = Keypair.fromPublicKey(claims.viewer).verify(bytes, Buffer.from(input.signatureBase64, "base64"))
+    signatureValid = Keypair.fromPublicKey(claims.viewer).verify(Buffer.from(bytes), Buffer.from(input.signatureBase64, "base64"))
   } catch {
     signatureValid = false
   }

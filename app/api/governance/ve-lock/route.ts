@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
     if (!claimRes.ok) {
       return NextResponse.json({ error: claimRes.error }, { status: 400, headers: CORS });
     }
-    return NextResponse.json({ ok: true, ...claimRes }, { status: 200, headers: CORS });
+    return NextResponse.json({ ...claimRes }, { status: 200, headers: CORS });
   }
 
   if (action === "withdraw") {
@@ -100,7 +100,7 @@ export async function POST(request: NextRequest) {
     if (!withdrawRes.ok) {
       return NextResponse.json({ error: withdrawRes.error }, { status: 400, headers: CORS });
     }
-    return NextResponse.json({ ok: true, ...withdrawRes }, { status: 200, headers: CORS });
+    return NextResponse.json({ ...withdrawRes }, { status: 200, headers: CORS });
   }
 
   if (action === "lock") {

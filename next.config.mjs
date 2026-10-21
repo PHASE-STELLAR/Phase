@@ -7,6 +7,7 @@ const phase171Enabled = ["1", "true", "yes", "on"].includes(
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Spike 608 (phase-175): bonded with next 16.2.2 + react 19.2.0 + @stellar/stellar-sdk ^15.0.1
   transpilePackages: ["@creit.tech/stellar-wallets-kit"],
   ...(phase172Enabled
     ? {
@@ -57,6 +58,14 @@ const nextConfig = {
   },
   async headers() {
     return [
+      {
+        source: "/.well-known/:association(assetlinks.json|apple-app-site-association)",
+        headers: [
+          { key: "Content-Type", value: "application/json" },
+          { key: "Access-Control-Allow-Origin", value: "*" },
+          { key: "Cache-Control", value: "public, max-age=300" },
+        ],
+      },
       // Security headers — applied to every route
       {
         source: "/(.*)",
@@ -66,7 +75,7 @@ const nextConfig = {
           { key: "Strict-Transport-Security",    value: "max-age=63072000; includeSubDomains; preload" },
           { key: "Cross-Origin-Opener-Policy",   value: "same-origin-allow-popups" },
           { key: "Referrer-Policy",              value: "strict-origin-when-cross-origin" },
-          { key: "Permissions-Policy",           value: "camera=(), microphone=(), geolocation=()" },
+          { key: "Permissions-Policy",           value: "camera=(self), microphone=(), geolocation=()" },
           {
             key: "Content-Security-Policy",
             value: [

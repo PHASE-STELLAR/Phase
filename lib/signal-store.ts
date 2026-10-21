@@ -331,28 +331,52 @@ export async function cancelScheduledSignal(
   return rowToSignal({ ...row, status: "cancelled" });
 }
 
+/**
+ * Cast (or move) a wallet's poll vote, guarded by the `version` column.
+ *
+ * `poll_json` is a JSON blob, so voting is a read-modify-write. Without a
+ * guard, two instances that read the same row would each write back their own
+ * copy and one vote would vanish. Same pattern as `upvoteSignal`: the UPDATE
+ * is `WHERE id = ? AND version = ?`, and a lost race re-reads and recomputes.
+ */
 export async function voteOnPoll(
   signalId: string,
   optionId: string,
   wallet: string,
 ): Promise<Signal> {
-  const row = getSignalRow(signalId);
-  if (!row || row.type !== "poll" || !row.poll_json)
-    throw new Error("Poll not found");
-  const poll = JSON.parse(row.poll_json) as SignalPoll;
-  if (poll.closes_at && poll.closes_at <= Date.now())
-    throw new Error("Poll is closed");
-  const selected = poll.options.find((option) => option.id === optionId);
-  if (!selected) throw new Error("Poll option not found");
-  for (const option of poll.options) {
-    option.voters = option.voters.filter((voter) => voter !== wallet);
-  }
-  selected.voters.push(wallet);
+  const db = getDb();
+  const update = db.prepare(
+    `UPDATE signals
+        SET poll_json = ?, version = ?
+      WHERE id = ? AND version = ?`,
+  );
 
-  getDb()
-    .prepare("UPDATE signals SET poll_json = ? WHERE id = ?")
-    .run(JSON.stringify(poll), signalId);
-  return rowToSignal({ ...row, poll_json: JSON.stringify(poll) });
+  for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt++) {
+    const row = getSignalRow(signalId);
+    if (!row || row.type !== "poll" || !row.poll_json)
+      throw new Error("Poll not found");
+    const poll = JSON.parse(row.poll_json) as SignalPoll;
+    if (poll.closes_at && poll.closes_at <= Date.now())
+      throw new Error("Poll is closed");
+    const selected = poll.options.find((option) => option.id === optionId);
+    if (!selected) throw new Error("Poll option not found");
+    for (const option of poll.options) {
+      option.voters = option.voters.filter((voter) => voter !== wallet);
+    }
+    selected.voters.push(wallet);
+
+    const pollJson = JSON.stringify(poll);
+    const nextVersion = row.version + 1;
+    const result = update.run(pollJson, nextVersion, signalId, row.version);
+    if (result.changes === 1) {
+      return rowToSignal({ ...row, poll_json: pollJson, version: nextVersion });
+    }
+    // Lost the CAS: a peer committed between our read and our write.
+    recordSignalVersionConflict("vote", { retried: true });
+  }
+
+  const current = getSignalRow(signalId);
+  throw new VersionConflictError(current ? current.version : 0);
 }
 
 /**
@@ -564,7 +588,7 @@ export async function getSignalChannelStats(
   return channels;
 }
 
-// â”€â”€â”€ phase-113: narrative content moderation with takedown flow â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── phase-113: narrative content moderation with takedown flow ────────────
 // Isolated, flag-gated. Abusive lore/signals previously had no removal path.
 // When enabled, taken-down signals are excluded from getSignals() listings.
 // When flag off, takedown/restore are no-ops on the read path (zero regression).
@@ -623,7 +647,7 @@ export async function restoreSignal(id: string): Promise<Signal> {
   });
 }
 
-// â”€â”€â”€ phase-116: narrative contributor attribution & credit ledger â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── phase-116: narrative contributor attribution & credit ledger ───────────
 // Isolated, flag-gated. Co-authors now receive on-chain credit via a
 // side-car ledger. When flag off, helpers return empty / no-op (zero regression).
 // Rollback: unset NEXT_PUBLIC_FEATURE_PHASE_116 / FEATURE_PHASE_116.
@@ -652,7 +676,7 @@ export type {
   AddContributorRequest,
 } from "@/lib/contributor-ledger";
 
-// â”€â”€â”€ phase-156 (Module #56): faucet / participation deny-list with governance veto â”€â”€â”€
+// ─── phase-156 (Module #56): faucet / participation deny-list with governance veto ───
 // Isolated, flag-gated. Abusive wallets previously could not be cleanly excluded.
 // When enabled, the replies route rejects posts from denied wallets. When flag
 // off, isWalletDenied() returns false (zero regression).
@@ -754,7 +778,7 @@ export async function recordReplyAttribution(
   }
 }
 
-// â”€â”€ Issue #104: IPFS Media Attachments (phase-86) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Issue #104: IPFS Media Attachments (phase-86) ─────────────────────────────
 
 export function isPhase86Enabled(): boolean {
   const v = (
@@ -824,7 +848,7 @@ export async function generateThumbnail(
   };
 }
 
-// â”€â”€ Issue #64 (phase-136): per-CID IPFS gateway resolution cache â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Issue #64 (phase-136): per-CID IPFS gateway resolution cache ──────────────
 //
 // Isolated, flag-gated. Every metadata read re-resolved a CID against the
 // gateway list from scratch, so repeated reads of the same attachment paid the
@@ -835,7 +859,7 @@ export async function generateThumbnail(
 // gateway is dropped on the next recorded failure.
 //
 // Feature flag: phase-136 (NEXT_PUBLIC_FEATURE_PHASE_136 / FEATURE_PHASE_136)
-// Rollback: unset the flag â†’ resolveCidGateway() falls back to a deterministic
+// Rollback: unset the flag → resolveCidGateway() falls back to a deterministic
 //           first-gateway pick with no caching. No persistent state to revert.
 
 export function isPhase136Enabled(): boolean {
@@ -927,8 +951,8 @@ function normalizeCidPath(cid: string): string {
 }
 
 /**
- * Pulls the `<cid>/<path?>` portion out of an `ipfs://â€¦` URI or a
- * `https://gateway/ipfs/â€¦` URL. Returns null for a non-IPFS value so callers can
+ * Pulls the `<cid>/<path?>` portion out of an `ipfs://…` URI or a
+ * `https://gateway/ipfs/…` URL. Returns null for a non-IPFS value so callers can
  * skip resolution and keep the stored URL untouched.
  */
 export function extractIpfsCidPath(value: string | undefined | null): string | null {
@@ -940,7 +964,7 @@ export function extractIpfsCidPath(value: string | undefined | null): string | n
   return null;
 }
 
-/** 0â€“100 health score: 70% success ratio, 30% latency (0msâ†’100, â‰¥5sâ†’0). */
+/** 0–100 health score: 70% success ratio, 30% latency (0ms→100, ≥5s→0). */
 export function scoreGateway(gateway: string): number {
   const h = gatewayHealth.get(normalizeGatewayBase(gateway));
   if (!h || h.ok + h.fail === 0) return 50;
@@ -1091,16 +1115,16 @@ export function __resetCidGatewayCacheForTests(): void {
   gatewayHealth.clear();
 }
 
-// â”€â”€ Issue #100 (phase-82): signal edit history with version diffing â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Issue #100 (phase-82): signal edit history with version diffing ────────
 //
-// Edits to a signal's title/body were destructive â€” the prior text was
+// Edits to a signal's title/body were destructive — the prior text was
 // simply overwritten with no audit trail. This module snapshots the
 // pre-edit title/body into `signal_versions` before every edit, so history
 // is a plain read (no reconstruction), and computes a word-level diff
 // on demand between any two snapshots (or a snapshot and the live signal).
 //
 // Feature flag: phase-82 (NEXT_PUBLIC_FEATURE_PHASE_82 / FEATURE_PHASE_82)
-// Rollback: unset the flag â†’ `editSignal`/the history route throw/404;
+// Rollback: unset the flag → `editSignal`/the history route throw/404;
 //           signals remain editable only through whatever pre-82 path
 //           existed (none, today). Existing `signal_versions` rows are
 //           historical record and are simply no longer appended to.
@@ -1161,7 +1185,7 @@ export type DiffOp = { type: "equal" | "add" | "remove"; value: string };
  * Word-level LCS diff between two strings. Splits on runs of whitespace
  * (kept as tokens so the reconstructed text is exact), then walks the
  * standard dynamic-programming LCS table and merges adjacent same-type ops.
- * O(n*m) in token count â€” signal title/body are bounded (see createSignal
+ * O(n*m) in token count — signal title/body are bounded (see createSignal
  * validation), so this stays well within an interactive request budget.
  */
 export function diffWords(oldText: string, newText: string): DiffOp[] {
@@ -1317,7 +1341,7 @@ export async function getSignalEditHistory(
   return { signal, versions, diffs };
 }
 
-// â”€â”€ Issue #101 (phase-83): emoji-reaction aggregation with rate limits â”€â”€â”€â”€â”€
+// ── Issue #101 (phase-83): emoji-reaction aggregation with rate limits ─────
 //
 // Signals only had a binary upvote. This module adds a small curated set of
 // emoji reactions, toggle-able per (signal, wallet, emoji), with per-wallet
@@ -1328,7 +1352,7 @@ export async function getSignalEditHistory(
 // anonymous read.
 //
 // Feature flag: phase-83 (NEXT_PUBLIC_FEATURE_PHASE_83 / FEATURE_PHASE_83)
-// Rollback: unset the flag â†’ the reactions route 404s and
+// Rollback: unset the flag → the reactions route 404s and
 //           `toggleSignalReaction` throws; existing `signal_reactions` rows
 //           remain on disk (no migration to undo) but stop being written to.
 

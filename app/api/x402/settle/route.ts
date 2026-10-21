@@ -1,5 +1,8 @@
+import { complianceGate } from "@/lib/compliance"
+import { isFeatureEnabled } from "@/lib/feature-flags"
 import { NextRequest, NextResponse } from "next/server"
 import { REQUIRED_AMOUNT, tokenContractIdForServer } from "@/lib/phase-protocol"
+import { resolveForgeRequiredAmountStroops } from "@/lib/experiments"
 
 export const dynamic = 'force-dynamic'
 
@@ -25,14 +28,17 @@ function decodeX402Token(raw: string): LocalX402Token | null {
   }
 }
 
-function isSatisfiedPayment(payload: LocalX402Token | null): boolean {
+function isSatisfiedPayment(payload: LocalX402Token | null, requiredStroops: string = REQUIRED_AMOUNT): boolean {
   if (!payload) return false
   const amount = Number(payload.amount)
-  const required = Number.parseInt(REQUIRED_AMOUNT, 10)
+  const required = Number.parseInt(requiredStroops, 10)
   return Boolean(payload.invoice) && Number.isFinite(amount) && Number.isFinite(required) && amount >= required
 }
 
 export async function POST(request: NextRequest) {
+  if (isFeatureEnabled("phase-176") && process.env.PHASE_KYC_MODE === "live") {
+    return NextResponse.json({ code: "DEMO_SHIM_FORBIDDEN" }, { status: 503 })
+  }
   if (!localShimEnabled()) {
     return NextResponse.json({ error: "x402 local shim disabled" }, { status: 503 })
   }
@@ -45,6 +51,11 @@ export async function POST(request: NextRequest) {
     }
 
     const payload = decodeX402Token(token)
+    // Spike 612: variant-aware floor for the settling payer; control otherwise.
+    const requiredStroops = (await resolveForgeRequiredAmountStroops(user)).amountStroops
+    if (!isSatisfiedPayment(payload, requiredStroops)) {
+    const block = await complianceGate(body.user_address ?? "", String(payload?.amount ?? ""), "x402")
+    if (block) return block
     if (!isSatisfiedPayment(payload)) {
       return NextResponse.json({ error: "Invalid or insufficient x402 payment token" }, { status: 401 })
     }

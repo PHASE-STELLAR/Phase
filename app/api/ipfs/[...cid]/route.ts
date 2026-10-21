@@ -50,7 +50,7 @@ export async function GET(
     // the 1-year shared cache.
     const { verifyCID, cacheControlForCid } = await import("@/lib/cid-verification")
     const requestedCid = parsed.data[0] ?? ""
-    const verification = verifyCID(requestedCid, result.bytes)
+    const verification = verifyCID(requestedCid, new Uint8Array(result.bytes))
     const gated = request.headers.get("x-phase-gated") === "1"
 
     if (!verification.ok && verification.code === "CID_MISMATCH") {

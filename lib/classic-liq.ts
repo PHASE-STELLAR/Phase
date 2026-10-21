@@ -244,10 +244,19 @@ export async function buildClassicTrustlineTransactionXdr(
 }
 
 export function parseSignedTxXdr(result: unknown): string | null {
-  if (!result || typeof result !== "object") return null
-  const r = result as { signedTxXdr?: string; signedTransaction?: string }
-  return r.signedTxXdr || r.signedTransaction || null
+  if (!result) return null
+  if (typeof result === "string") return result.trim() || null
+  if (typeof result !== "object") return null
+  const r = result as {
+    signedTxXdr?: string
+    signedTransaction?: string
+    xdr?: string
+    result?: string
+    signedXDR?: string
+  }
+  return r.signedTxXdr || r.signedTransaction || r.xdr || r.result || r.signedXDR || null
 }
+
 
 import { z } from "zod"
 

@@ -525,6 +525,11 @@ impl MockToken {
             .map(|m: TokenMetadata| m.symbol)
             .unwrap_or_else(|| String::from_str(&env, "MOCK"))
     }
+
+    /// Spike 608: Exposes the pinned Soroban SDK / ABI version (`22000` for soroban-sdk 22.0.0).
+    pub fn soroban_abi_version(_env: Env) -> u32 {
+        22_000
+    }
 }
 
 #[cfg(test)]
@@ -535,13 +540,14 @@ mod test {
     #[test]
     fn test_initialize() {
         let env = Env::default();
+        env.mock_all_auths();
         let admin = Address::generate(&env);
-        let token = MockToken;
+        let client = MockTokenClient::new(&env, &env.register(MockToken, ()));
 
         let name = String::from_str(&env, "Mock Token");
         let symbol = String::from_str(&env, "MOCK");
 
-        token.initialize(env.clone(), admin, 7, name, symbol).unwrap();
-        assert!(MockToken::is_initialized(env));
+        client.initialize(&admin, &7, &name, &symbol);
+        assert!(client.is_initialized());
     }
 }

@@ -138,7 +138,7 @@ function normalizeReasons(
   })
 }
 
-const SECRET_KEY_RE = /(secret|seed|priv|passphrase|password|token|jwt|mnemonic|api[_-]?key)/i
+const SECRET_KEY_RE = /(secret|seed|priv|passphrase|password|token|jwt|mnemonic|api[_-]?key|dob|birth|document|passport|ssn|email|subject|verification[_-]?id|legal[_-]?name)/i
 const MAX_STRING_LEN = 4096
 const MAX_DEPTH = 6
 

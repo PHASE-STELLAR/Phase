@@ -3,6 +3,16 @@
     {
       "path": "/api/cron/faucet-health",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/cost-budgets",
+      "schedule": "0 * * * *"
+      "path": "/api/cron/anomaly-detect",
+      "schedule": "5 * * * *"
+    },
+    {
+      "path": "/api/cron/retention-sweep",
+      "schedule": "15 3 * * *"
     }
   ],
   "headers": [

@@ -7,6 +7,9 @@ import { readJsonFile, updateJsonFile } from "@/lib/json-store";
 import { serverDataJsonPath } from "@/lib/server-data-paths";
 import { getDb } from "@/lib/sqlite-db";
 import { incSecurityCounter } from "@/lib/security-counters";
+import { recordTaxEvent } from "@/lib/tax-report";
+import { decimalToStroops } from "@/lib/decimal-amount";
+import { phaseProtocolContractIdForServer } from "@/lib/phase-protocol";
 
 export type ListingStatus = "active" | "sold" | "cancelled";
 export type OfferStatus = "pending" | "accepted" | "rejected" | "expired";
@@ -14,6 +17,7 @@ export type OfferStatus = "pending" | "accepted" | "rejected" | "expired";
 export type Listing = {
   id: string;
   token_id: number;
+  contract_id?: string;
   collection_id: number;
   seller_wallet: string;
   price_phaselq: number;
@@ -200,7 +204,7 @@ export async function getCreatorProfileViewAnalytics(
   return store[creatorWallet] ?? null;
 }
 
-// â”€â”€ Listings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Listings ──────────────────────────────────────────────────────────────────
 // Issue #36: backed by SQLite (indexed on status/listed_at, collection_id,
 // seller_wallet) instead of parsing the full market-listings.json array on
 // every call.
@@ -208,6 +212,7 @@ export async function getCreatorProfileViewAnalytics(
 type ListingRow = {
   id: string;
   token_id: number;
+  contract_id: string | null;
   collection_id: number;
   seller_wallet: string;
   price_phaselq: number;
@@ -235,6 +240,7 @@ function rowToListing(row: ListingRow): Listing {
   return {
     id: row.id,
     token_id: row.token_id,
+    contract_id: row.contract_id ?? undefined,
     collection_id: row.collection_id,
     seller_wallet: row.seller_wallet,
     price_phaselq: row.price_phaselq,
@@ -267,6 +273,58 @@ export function phaseEditionsRollbackNote(): string { return flagRollbackNote('p
 export function phaseCollabSplitsRollbackNote(): string { return flagRollbackNote('phase-collab-splits'); }
 export function phaseTimedDropsRollbackNote(): string { return flagRollbackNote('phase-timed-drops'); }
 export function phaseDutchAuctionRollbackNote(): string { return flagRollbackNote('phase-dutch-auction'); }
+
+// ── Spike 574 (issue #438, phase-182): pool-denominated price reference ──
+// Listings are priced in PHASELQ. Displaying an XLM equivalent needs the pool's
+// spot AND the execution price for a specific size: a thin testnet pool moves
+// double digits, so a spot-only number is misleading. This is read-only; the
+// write path (offers) never blocks on a pool outage.
+export function isPhase182Enabled(wallet?: string): boolean {
+  return isFeatureEnabled('phase-182', wallet ? { wallet } : undefined);
+}
+
+export function phase182RollbackNote(): string {
+  return flagRollbackNote('phase-182');
+}
+
+export type PoolDenominatedPrice = {
+  price_phaselq: number
+  amount_phaselq: number
+  amount_xlm_spot: number
+  amount_xlm_execution: number
+  spot_price_xlm: number
+  execution_price_xlm: number
+  price_impact_bps: number
+  quote_hash: string
+  /** True when the quote came from a cached reserve snapshot after an outage. */
+  stale: boolean
+}
+
+/** Convert a PHASELQ-denominated listing (or offer) into both XLM readings. */
+export function denoteListingInPool(
+  pricePhaselq: number,
+  quote: {
+    spotPrice: number
+    executionPrice: number
+    priceImpactBps: number
+    amountInStroops: bigint
+    quoteHash: string
+    stale: boolean
+  },
+  amountPhaselq: number = pricePhaselq,
+): PoolDenominatedPrice {
+  return {
+    price_phaselq: pricePhaselq,
+    amount_phaselq: amountPhaselq,
+    amount_xlm_spot: amountPhaselq * quote.spotPrice,
+    amount_xlm_execution: amountPhaselq * quote.executionPrice,
+    spot_price_xlm: quote.spotPrice,
+    execution_price_xlm: quote.executionPrice,
+    price_impact_bps: quote.priceImpactBps,
+    quote_hash: quote.quoteHash,
+    stale: quote.stale,
+  }
+}
 
 /** Spike 673: 'Edition X/Y' label, or 'Artist Proof' for AP holds. Pure. */
 export function editionBadge(listing: Pick<Listing, 'edition_number' | 'edition_size' | 'is_artist_proof'>): string | null {
@@ -438,6 +496,7 @@ export async function createListing(
 ): Promise<Listing> {
   const listing: Listing = {
     ...data,
+    contract_id: isFeatureEnabled("phase-177") ? phaseProtocolContractIdForServer() : undefined,
     id: randomUUID(),
     listed_at: Date.now(),
     status: "active",
@@ -466,8 +525,8 @@ export async function createListing(
          (id, token_id, collection_id, seller_wallet, price_phaselq,
           accepts_offers, min_offer, image, name, listed_at, status,
           creator_wallet, royalty_bps, edition_number, edition_size, is_artist_proof, supply_mode,
-          drop_start_at, drop_end_at, dutch_start_price, dutch_floor_price, dutch_end_at, split_payees_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          drop_start_at, drop_end_at, dutch_start_price, dutch_floor_price, dutch_end_at, split_payees_json, contract_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       listing.id,
@@ -493,6 +552,7 @@ export async function createListing(
       listing.dutch_floor_price ?? null,
       listing.dutch_end_at ?? null,
       listing.split_payees ? JSON.stringify(listing.split_payees) : null,
+      listing.contract_id ?? null,
     );
   return listing;
 }
@@ -525,7 +585,7 @@ export async function soldListing(id: string): Promise<Listing | null> {
   return setListingStatus(id, "sold");
 }
 
-// â”€â”€ Offers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Offers ────────────────────────────────────────────────────────────────────
 // Issue #36: backed by SQLite (indexed on listing_id, buyer_wallet, and
 // status+expires_at for expiration scans) instead of a full-array scan.
 // Expiration remains computed lazily on read (matching prior behavior): a
@@ -644,6 +704,42 @@ export async function updateOfferStatus(
   return rowToOffer(row, Date.now());
 }
 
+/** One SQLite transaction owns the decision and its reporting evidence. */
+export function decideOfferAtomic(listingId: string, offerId: string, wallet: string, action: "accept" | "reject") {
+  const db = getDb()
+  let taxRecords = 0
+  db.exec("BEGIN IMMEDIATE")
+  try {
+    const listingRow = db.prepare("SELECT * FROM listings WHERE id=?").get(listingId) as ListingRow | undefined
+    const offerRow = db.prepare("SELECT * FROM offers WHERE id=? AND listing_id=?").get(offerId, listingId) as OfferRow | undefined
+    if (!listingRow || !offerRow || listingRow.seller_wallet !== wallet) throw new Error("FORBIDDEN")
+    const now = Date.now()
+    if (listingRow.status !== "active" || offerRow.status !== "pending" || offerRow.expires_at <= now || offerRow.buyer_wallet === wallet) {
+      incSecurityCounter("market_accept_conflict")
+      throw Object.assign(new Error("OFFER_CONFLICT"), { current_status: offerRow.expires_at <= now ? "expired" : offerRow.status })
+    }
+    const status = action === "accept" ? "accepted" : "rejected"
+    db.prepare("UPDATE offers SET status=?, decided_at=? WHERE id=? AND status='pending'").run(status, now, offerId)
+    if (action === "accept") {
+      db.prepare("UPDATE listings SET status='sold' WHERE id=? AND status='active'").run(listingId)
+      db.prepare("UPDATE offers SET status='rejected', decided_at=? WHERE listing_id=? AND id<>? AND status='pending'").run(now, listingId, offerId)
+      if (isFeatureEnabled("phase-177")) {
+        const listing = rowToListing(listingRow)
+        const split = isPhase140Enabled() ? computeRoyaltySplit(listing, offerRow.amount_phaselq) : { seller_amount_phaselq: offerRow.amount_phaselq, royalty_amount_phaselq: 0 }
+        const asset = `${listing.contract_id ?? `unknown-contract:${listing.id}`}:${listing.token_id}`
+        // Offer acceptance is an agreement, not a chain receipt. Never report it as verified proceeds.
+        const common = { asset, occurredAt: now, verified: false, washFlagged: !!offerRow.wash_flagged }
+        taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:seller`, wallet, kind: "disposal", amountStroops: decimalToStroops(split.seller_amount_phaselq.toFixed(7)) }, false))
+        taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:buyer`, wallet: offerRow.buyer_wallet, kind: "acquisition", amountStroops: decimalToStroops(offerRow.amount_phaselq.toFixed(7)) }, false))
+        if (listing.creator_wallet && split.royalty_amount_phaselq > 0) taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:royalty`, wallet: listing.creator_wallet, kind: "royalty", amountStroops: decimalToStroops(split.royalty_amount_phaselq.toFixed(7)) }, false))
+      }
+    }
+    db.exec("COMMIT")
+    if (taxRecords) incSecurityCounter("tax_event_recorded", taxRecords)
+    return rowToOffer({ ...offerRow, status }, now)
+  } catch (error) { db.exec("ROLLBACK"); throw error }
+}
+
 export async function getOffersByBuyer(
   buyer_wallet: string,
   opts: { limit?: number; cursor?: number } = {},
@@ -659,7 +755,7 @@ export async function getOffersByBuyer(
   return rows.map((row) => rowToOffer(row, now));
 }
 
-// â”€â”€ Issue #88 (phase-139): collection-level offer books â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Issue #88 (phase-139): collection-level offer books ────────────────────
 //
 // Buyers previously had to open each token's listing individually to see
 // what it was being offered, and to make a bulk bid across a collection had
@@ -670,7 +766,7 @@ export async function getOffersByBuyer(
 // unchanged, so accept/reject/expiry behave exactly as before).
 //
 // Feature flag: phase-139 (NEXT_PUBLIC_FEATURE_PHASE_139 / FEATURE_PHASE_139)
-// Rollback: unset the flag â†’ the offer-book route returns 404 and bulk bids
+// Rollback: unset the flag → the offer-book route returns 404 and bulk bids
 //           are rejected; per-listing offers (`/api/market/[id]/offers`) are
 //           untouched either way. No data migration to undo.
 
@@ -822,10 +918,10 @@ export async function createBulkOffer(
   return { created, skipped };
 }
 
-// â”€â”€ Issue #89 (phase-140): royalty enforcement on secondary sales â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Issue #89 (phase-140): royalty enforcement on secondary sales ──────────
 //
 // Accepting an offer marked the listing sold but moved no value to the
-// original creator on a resale â€” only the current seller and buyer were
+// original creator on a resale — only the current seller and buyer were
 // party to the transaction. This module computes the creator/seller split
 // for a listing's `royalty_bps` (set at listing time, see `createListing`)
 // and records it as a settlement-ready ledger line at accept time. It is a
@@ -834,7 +930,7 @@ export async function createBulkOffer(
 // creator are the same wallet.
 //
 // Feature flag: phase-140 (NEXT_PUBLIC_FEATURE_PHASE_140 / FEATURE_PHASE_140)
-// Rollback: unset the flag â†’ `createListing`/`app/api/market` stop accepting
+// Rollback: unset the flag → `createListing`/`app/api/market` stop accepting
 //           `creator_wallet`/`royalty_bps`, and offer-accept stops computing
 //           a split (money continues to move 100% to the seller, pre-140
 //           behavior). Existing `royalty_payouts` rows are historical record
@@ -911,7 +1007,7 @@ function rowToRoyaltyPayout(row: RoyaltyPayoutRow): RoyaltyPayout {
   };
 }
 
-/** Records a non-zero royalty split for an accepted offer. Callers only invoke this for a secondary sale with `royalty_bps > 0` â€” a primary sale has nothing to record. */
+/** Records a non-zero royalty split for an accepted offer. Callers only invoke this for a secondary sale with `royalty_bps > 0` — a primary sale has nothing to record. */
 export async function recordRoyaltyPayout(
   listing: Pick<Listing, "id" | "seller_wallet" | "creator_wallet">,
   offer_id: string,
@@ -962,7 +1058,7 @@ export async function getRoyaltyPayoutsForCreator(
   return rows.map(rowToRoyaltyPayout);
 }
 
-// â”€â”€ Issue #103: Mute and Block Primitives (phase-85) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Issue #103: Mute and Block Primitives (phase-85) ─────────────────────────
 
 type BlockedWallet = { wallet: string; blocked_at: number; reason?: string };
 type MutedWallet = { wallet: string; muted_at: number; expires_at?: number };

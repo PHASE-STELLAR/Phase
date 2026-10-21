@@ -31,7 +31,7 @@ before(async () => {
     },
   }
   await writeFile(
-    path.join(TEST_DATA_DIR, "worldRoles.json"),
+    path.join(TEST_DATA_DIR, "world-roles.json"),
     JSON.stringify(store),
     "utf8",
   )

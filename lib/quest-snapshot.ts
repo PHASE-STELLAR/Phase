@@ -17,8 +17,8 @@ import { isFeatureEnabled } from "@/lib/feature-flags"
 
 const FLAG: "phase-130" = "phase-130"
 
-export function isQuestSnapshotEnabled(): boolean {
-  return isFeatureEnabled(FLAG)
+export function isQuestSnapshotEnabled(wallet?: string): boolean {
+  return isFeatureEnabled(FLAG, wallet ? { wallet } : undefined)
 }
 
 export type QuestId =
@@ -38,6 +38,7 @@ export type QuestSnapshotEntry = {
   wallet: string
   progress: Record<QuestId, QuestProgress>
   snapshotAt: number
+  cohortKey?: string
 }
 
 type QuestSnapshotStore = Record<string, QuestSnapshotEntry>
@@ -78,7 +79,7 @@ async function writeSnapshotStore(data: QuestSnapshotStore): Promise<void> {
 export async function loadQuestSnapshot(
   wallet: string,
 ): Promise<Record<QuestId, QuestProgress> | null> {
-  if (!isQuestSnapshotEnabled()) return null
+  if (!isQuestSnapshotEnabled(wallet)) return null
   if (!wallet) return null
 
   const store = await readSnapshotStore()
@@ -96,7 +97,7 @@ export async function saveQuestSnapshot(
   wallet: string,
   progress: Record<QuestId, QuestProgress>,
 ): Promise<void> {
-  if (!isQuestSnapshotEnabled()) return
+  if (!isQuestSnapshotEnabled(wallet)) return
   if (!wallet) return
 
   const store = await readSnapshotStore()

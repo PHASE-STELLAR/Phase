@@ -1,8 +1,7 @@
-﻿// @ts-nocheck
 /**
- * Stellar clÃ¡sico (Horizon) â€” asset PHASELQ alineado con TrustlineButton / stellar.toml.
+ * Stellar clásico (Horizon) — asset PHASELQ alineado con TrustlineButton / stellar.toml.
  * TrustlineButton usa el `asset` devuelto por GET /api/classic-liq; ese endpoint debe usar
- * la misma resoluciÃ³n que aquÃ­ cuando no hay CLASSIC_LIQ_ISSUER_SECRET.
+ * la misma resolución que aquí cuando no hay CLASSIC_LIQ_ISSUER_SECRET.
  */
 
 import { Asset, rpc, scValToNative, StrKey, xdr } from "@stellar/stellar-sdk"
@@ -14,7 +13,7 @@ import {
   type ClassicLiqAsset,
 } from "@/lib/classic-liq"
 
-// â”€â”€ phase-122: off-chain metadata delta storage (isolated, flag-gated) â”€â”€
+// ── phase-122: off-chain metadata delta storage (isolated, flag-gated) ──
 // Large metadata inflates contract storage rent. Keep full JSON off-chain,
 // store only hash+stub on-chain. Thin re-export keeps stellar.ts as single import.
 import { computeDeltaHash as _computeDeltaHash, buildOnChainStub as _buildOnChainStub } from "@/lib/offchain-delta"
@@ -31,7 +30,7 @@ export {
 } from "@/lib/offchain-delta"
 export type { OffchainDeltaManifest, DeltaStoreResult, DeltaFetchResult } from "@/lib/offchain-delta"
 
-// â”€â”€ phase-77: wash-trading detection heuristics for listings (isolated, flag-gated) â”€â”€
+// ── phase-77: wash-trading detection heuristics for listings (isolated, flag-gated) ──
 // Manipulated volume is indistinguishable from real without heuristics.
 // Thin re-export keeps stellar.ts as single import for market verification routes;
 // core logic lives in lib/wash-trading.ts (single source of truth).
@@ -50,7 +49,7 @@ export {
 } from "@/lib/wash-trading"
 export type { TradeRecord, WashTradeAnalysisRequest, WashTradeRiskAssessment, WashTradePattern } from "@/lib/wash-trading"
 
-// â”€â”€ phase-92: push notifications for replies and mentions (isolated, flag-gated) â”€â”€
+// ── phase-92: push notifications for replies and mentions (isolated, flag-gated) ──
 // Users missed engagement without active polling. Thin re-export keeps stellar.ts
 // as single import for verification-adjacent routes; core logic lives in
 // lib/push-notifications.ts (single source of truth).
@@ -87,8 +86,8 @@ export function toOnChainDeltaStub(tokenId: number, fullMetadata: unknown): stri
 }
 
 /**
- * Activo clÃ¡sico para trustline / comprobaciones Horizon: si NEXT_PUBLIC_* estÃ¡ completo,
- * coincide con Freighter; si no, cae al mismo emisor por defecto que `stellar.toml` (GAXâ€¦ + PHASELQ).
+ * Activo clásico para trustline / comprobaciones Horizon: si NEXT_PUBLIC_* está completo,
+ * coincide con Freighter; si no, cae al mismo emisor por defecto que `stellar.toml` (GAX… + PHASELQ).
  */
 export function resolvePhaserLiqClassicAsset(): ClassicLiqAsset {
   const fromEnv = classicLiqAssetConfigFromPublicEnv()
@@ -107,7 +106,7 @@ export function createPhaserLiqClassicSdkAsset(): Asset {
 
 /**
  * El servidor no puede firmar changeTrust por el usuario; solo comprobar Horizon antes de un payment.
- * Usar en rutas que envÃ­an PHASELQ clÃ¡sico (p. ej. bootstrap issuer â†’ wallet).
+ * Usar en rutas que envían PHASELQ clásico (p. ej. bootstrap issuer → wallet).
  */
 export async function ensureTrustlineBeforeClassicPayment(
   walletAddress: string,
@@ -124,7 +123,7 @@ export async function ensureTrustlineBeforeClassicPayment(
 
 type Jsonish = Record<string, unknown>
 
-/** Extrae `extras.result_codes` de errores tÃ­picos de `Horizon.Server#submitTransaction`. */
+/** Extrae `extras.result_codes` de errores típicos de `Horizon.Server#submitTransaction`. */
 export function horizonSubmitErrorDetail(err: unknown): Jsonish | string {
   if (!err || typeof err !== "object") return String(err)
   const e = err as {
@@ -208,7 +207,7 @@ export function summarizeSorobanFailedMint(st: rpc.Api.GetFailedTransactionRespo
         const topics = body.topics()
         const tNat = topics.map((t) => safeScValNative(t)).filter(Boolean) as string[]
         const dNat = safeScValNative(body.data())
-        const chunk = [...tNat, dNat].filter(Boolean).join("Â·")
+        const chunk = [...tNat, dNat].filter(Boolean).join("·")
         if (chunk) fragments.push(chunk)
       } catch {
         /* siguiente evento */
@@ -220,11 +219,11 @@ export function summarizeSorobanFailedMint(st: rpc.Api.GetFailedTransactionRespo
 
   if (ihfName === "invokeHostFunctionTrapped") {
     parts.push(
-      "nota=ihf_trapped: el WASM del contrato abortÃ³ (p. ej. Unauthorized, lÃ­mite supply, panic). Verifica que ADMIN_SECRET_KEY sea el minter del TOKEN_ADDRESS desplegado y que el contrato coincida con testnet.",
+      "nota=ihf_trapped: el WASM del contrato abortó (p. ej. Unauthorized, límite supply, panic). Verifica que ADMIN_SECRET_KEY sea el minter del TOKEN_ADDRESS desplegado y que el contrato coincida con testnet.",
     )
   }
 
-  return parts.join(" Â· ")
+  return parts.join(" · ")
 }
 
 export const PHASE_SETTLE_FUNCTION_NAME = "settle"
@@ -321,17 +320,17 @@ function decodeContractId(contractId: string): Buffer | null {
 }
 
 function sorobanEventsFromTransactionMeta(meta: xdr.TransactionMeta): xdr.ContractEvent[] {
+  // Protocol 23+ (meta v4) carries contract events per operation.
+  try {
+    return meta.v4().operations().flatMap((op) => op.events())
+  } catch {
+    // Try meta v3 below.
+  }
   try {
     const sorobanMeta = meta.v3().sorobanMeta()
     if (sorobanMeta) return sorobanMeta.events()
   } catch {
-    // Try older meta version below.
-  }
-  try {
-    const sorobanMeta = meta.v1().sorobanMeta()
-    if (sorobanMeta) return sorobanMeta.events()
-  } catch {
-    // No Soroban events available.
+    // No Soroban events available (v1/v2 meta never carried them).
   }
   return []
 }
@@ -356,7 +355,9 @@ function parseSettleEvent(event: xdr.ContractEvent): ParsedSettleEvent | null {
       }
     }
     if (amount === null) return null
-    const contractId = Buffer.from(v0.contractId() as unknown as Uint8Array)
+    const emitter = event.contractId()
+    if (!emitter) return null
+    const contractId = Buffer.from(emitter as unknown as Uint8Array)
     return { contractId, amount }
   } catch {
     return null
@@ -383,4 +384,3 @@ function scValToEventAmount(data: xdr.ScVal): bigint | null {
   }
   return null
 }
-

@@ -19,7 +19,7 @@
  */
 
 /** Where a stale version was detected. Mirrors the CAS guards in `lib/signal-store.ts`. */
-export const SIGNAL_CONFLICT_SURFACES = ["upvote", "edit", "reply", "put"] as const;
+export const SIGNAL_CONFLICT_SURFACES = ["upvote", "edit", "reply", "put", "vote"] as const;
 export type SignalConflictSurface = (typeof SIGNAL_CONFLICT_SURFACES)[number];
 
 /** Outcome of a CRDT draft commit, which still has to clear the CAS guard. */

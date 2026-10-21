@@ -24,8 +24,8 @@ import { isFeatureEnabled } from "@/lib/feature-flags"
 
 const FLAG: "phase-131" = "phase-131"
 
-export function isStreakMultiplierEnabled(): boolean {
-  return isFeatureEnabled(FLAG)
+export function isStreakMultiplierEnabled(wallet?: string): boolean {
+  return isFeatureEnabled(FLAG, wallet ? { wallet } : undefined)
 }
 
 const DAY_MS = 86_400_000
@@ -39,7 +39,16 @@ const MULTIPLIER_TIERS: Array<{ minDay: number; multiplier: number }> = [
   { minDay: 1, multiplier: 1.0 },
 ]
 
+export function streakCohortCategory(streak: number): "day1_2" | "day3_6" | "day7_13" | "day14_29" | "day30_plus" {
+  if (streak >= 30) return "day30_plus"
+  if (streak >= 14) return "day14_29"
+  if (streak >= 7) return "day7_13"
+  if (streak >= 3) return "day3_6"
+  return "day1_2"
+}
+
 export function streakMultiplier(streak: number): number {
+
   for (const tier of MULTIPLIER_TIERS) {
     if (streak >= tier.minDay) return tier.multiplier
   }

@@ -1,5 +1,9 @@
+import { redactSecrets } from "@/lib/x402-dead-letter"
+import { isFeatureEnabled } from "@/lib/feature-flags"
 import { randomUUID } from "node:crypto"
 import { NextRequest, NextResponse } from "next/server"
+import { emitLog } from "@/lib/log-pipeline"
+import { isAnalyticsWarehouseEnabled, recordWarehouseEvent } from "@/lib/analytics-warehouse"
 
 type ApiLogLevel = "info" | "warn" | "error"
 type ApiMetadata = Record<string, unknown>
@@ -7,6 +11,28 @@ type ApiMetadata = Record<string, unknown>
 type ApiJsonInit = ResponseInit & {
   event?: string
   metadata?: ApiMetadata
+}
+
+/** Bound metadata so an event cannot grow unbounded labels or leak long text. */
+function sanitizeAnalyticsMetadata(metadata: ApiMetadata | undefined): ApiMetadata {
+  const out: ApiMetadata = {}
+  if (!metadata || typeof metadata !== "object") return out
+  let count = 0
+  for (const [key, value] of Object.entries(metadata)) {
+    if (count >= 24) break
+    if (typeof key !== "string" || key.length > 64) continue
+    if (typeof value === "string") {
+      out[key] = value.slice(0, 200)
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      out[key] = value
+    } else if (typeof value === "boolean") {
+      out[key] = value
+    } else {
+      continue
+    }
+    count++
+  }
+  return out
 }
 
 const CORRELATION_HEADER = "x-correlation-id"
@@ -29,7 +55,7 @@ export function createApiRequestContext(request: NextRequest, route: string) {
   const correlationId = getIncomingCorrelationId(request)
 
   function log(level: ApiLogLevel, event: string, metadata: ApiMetadata = {}) {
-    const payload = {
+    const payload = emitLog({
       timestamp: new Date().toISOString(),
       level,
       event,
@@ -37,7 +63,7 @@ export function createApiRequestContext(request: NextRequest, route: string) {
       method: request.method,
       correlationId,
       ...metadata,
-    }
+    })
     const line = JSON.stringify(payload)
 
     if (level === "error") console.error(line)
@@ -51,11 +77,29 @@ export function createApiRequestContext(request: NextRequest, route: string) {
     const response = NextResponse.json(body, { ...responseInit, status, headers })
     response.headers.set(CORRELATION_HEADER, correlationId)
     response.headers.set(REQUEST_ID_HEADER, correlationId)
+    const durationMs = Date.now() - startedAt
+    const boundedMetadata = sanitizeAnalyticsMetadata(metadata)
     log(status >= 500 ? "error" : status >= 400 ? "warn" : "info", event, {
       status,
-      durationMs: Date.now() - startedAt,
-      ...metadata,
+      durationMs,
+      ...boundedMetadata,
     })
+
+    if (isAnalyticsWarehouseEnabled()) {
+      void recordWarehouseEvent({
+        surface: "observability",
+        stage: event,
+        correlation_id: correlationId,
+        metadata: {
+          route,
+          method: request.method,
+          status,
+          durationMs,
+          ...boundedMetadata,
+        },
+      }).catch(() => {})
+    }
+
     return response
   }
 

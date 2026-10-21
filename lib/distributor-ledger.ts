@@ -67,6 +67,13 @@ function ensureLedgerTable(): void {
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_distributor_reservations_open ON distributor_reservations (distributor, state)",
   )
+  // Spike 574 (phase-182): pool seed capital is not spendable. The column is
+  // additive and defaults to 0, so a flag-off ledger behaves exactly as before.
+  try {
+    db.exec("ALTER TABLE distributor_ledger ADD COLUMN pool_seed_stroops INTEGER NOT NULL DEFAULT 0")
+  } catch {
+    // column already exists on a migrated database
+  }
 }
 
 export type LedgerRow = {
@@ -74,8 +81,26 @@ export type LedgerRow = {
   balance_stroops: number
   reserve_stroops: number
   fee_reserve_stroops: number
+  /** Seeded into a classic pool; never spendable by refills or settlements. */
+  pool_seed_stroops: number
   version: number
   updated_at: number
+}
+
+/**
+ * Records how much of the distributor's balance is committed as pool seed
+ * capital. Seed capital still shows on-chain, so `availableBalance` must
+ * subtract it or a refill will try to spend the same tokens twice.
+ */
+export function setPoolSeedReserve(distributor: string, seedStroops: string | number): LedgerRow {
+  ensureLedgerTable()
+  const db = getDb()
+  db.prepare(
+    `UPDATE distributor_ledger
+        SET pool_seed_stroops = ?, version = version + 1, updated_at = ?
+      WHERE distributor = ?`,
+  ).run(String(seedStroops), Date.now(), distributor)
+  return readLedger(distributor)!
 }
 
 /** Create the ledger row if absent, and return the current row. */
@@ -135,8 +160,13 @@ export function availableBalance(distributor: string): bigint {
   const row = readLedger(distributor)
   if (!row) return 0n
   const pending = BigInt(pendingReservedStroops(distributor))
+  const seed = BigInt(row.pool_seed_stroops ?? 0)
   const value =
-    BigInt(row.balance_stroops) - BigInt(row.reserve_stroops) - BigInt(row.fee_reserve_stroops) - pending
+    BigInt(row.balance_stroops) -
+    BigInt(row.reserve_stroops) -
+    BigInt(row.fee_reserve_stroops) -
+    seed -
+    pending
   return value > 0n ? value : 0n
 }
 
@@ -212,7 +242,11 @@ export function reserveFunds(input: {
     )
 
     const available =
-      BigInt(row.balance_stroops) - BigInt(row.reserve_stroops) - BigInt(row.fee_reserve_stroops) - pending
+      BigInt(row.balance_stroops) -
+      BigInt(row.reserve_stroops) -
+      BigInt(row.fee_reserve_stroops) -
+      BigInt(row.pool_seed_stroops ?? 0) -
+      pending
     const usable = available > 0n ? available : 0n
 
     if (usable < amount) {
@@ -304,6 +338,7 @@ export function distributorLedgerStats(distributor: string, now: number = Date.n
     balanceStroops: String(row.balance_stroops),
     reserveStroops: String(row.reserve_stroops),
     feeReserveStroops: String(row.fee_reserve_stroops),
+    poolSeedStroops: String(row.pool_seed_stroops ?? 0),
     pendingReservedStroops: String(pending),
     availableStroops: String(availableBalance(distributor)),
     version: row.version,

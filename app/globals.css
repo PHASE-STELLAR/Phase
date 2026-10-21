@@ -634,3 +634,37 @@
     animation: none !important;
   }
 }
+
+/* Spike 620: keep the desktop cockpit intact; phone layout follows the visual viewport. */
+@media (max-width: 767px) {
+  [data-mobile-layout] {
+    height: var(--phase-viewport-height, 100dvh) !important;
+    max-height: var(--phase-viewport-height, 100dvh) !important;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  [data-mobile-layout] > header { flex-wrap: wrap; height: auto; flex-shrink: 0; }
+  [data-mobile-layout] button, [data-mobile-layout] a, .phase-mobile-sheet button, .phase-mobile-sheet a {
+    min-height: 44px; min-width: 44px; touch-action: manipulation;
+  }
+  [data-mobile-layout] input, [data-mobile-layout] textarea, [data-mobile-layout] select { font-size: 16px; }
+  [data-mobile-layout] .tactical-cockpit-stage, [data-mobile-layout] .tactical-cockpit-stage__content {
+    overflow-y: auto; overscroll-behavior-y: contain;
+  }
+  [data-mobile-layout] .tactical-cockpit-stage__content > div,
+  [data-mobile-layout] .tactical-cockpit-stage__content > div > div,
+  [data-mobile-layout] .tactical-cockpit-stage__content > div > div > div { overflow: visible; flex-shrink: 0; }
+  .phase-mobile-sheet aside { height: auto; overflow: visible; }
+  .phase-mobile-sheet button { font-size: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-mobile-layout] *, .phase-mobile-sheet { animation: none !important; transition: none !important; }
+}
+@media (max-width: 1023px) {
+  [data-mobile-layout] button, [data-mobile-layout] a { min-height: 44px; min-width: 44px; }
+}
+@media (max-width: 767px) {
+  [data-mobile-layout] p, [data-mobile-layout] label, [data-mobile-layout] button, [data-mobile-layout] a { font-size: 12px; }
+  [data-mobile-layout] [role="dialog"] { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  [data-mobile-layout] [role="dialog"] > div { max-height: calc(var(--phase-viewport-height, 100dvh) - 24px); }
+}

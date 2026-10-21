@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "diagnose": "cd .. && npm run diagnose",
+    "deps:cadence": "cd .. && npm run deps:cadence",
     "build:token": "cd ../contracts/mock-token && cargo build --target wasm32-unknown-unknown --release",
-    "build:phase": "cd ../contracts/phase-protocol && cargo build --target wasm32v1-none --release",
+    "build:phase": "cd ../contracts/phase-protocol && cargo build --target wasm32-unknown-unknown --release",
     "build:all": "npm run build:token && npm run build:phase",
     "optimize:token": "stellar contract optimize --wasm ../contracts/mock-token/target/wasm32-unknown-unknown/release/mock_token.wasm --wasm-out ../contracts/mock-token/target/wasm32-unknown-unknown/release/mock_token.optimized.wasm",
-    "optimize:phase": "stellar contract optimize --wasm ../contracts/phase-protocol/target/wasm32v1-none/release/phase_protocol.wasm --wasm-out ../contracts/phase-protocol/target/wasm32v1-none/release/phase_protocol.optimized.wasm",
+    "optimize:phase": "stellar contract optimize --wasm ../contracts/phase-protocol/target/wasm32-unknown-unknown/release/phase_protocol.wasm --wasm-out ../contracts/phase-protocol/target/wasm32-unknown-unknown/release/phase_protocol.optimized.wasm",
     "optimize:all": "npm run optimize:token && npm run optimize:phase",
     "compile": "npm run build:all && npm run optimize:all",
     "deploy:token": "tsx deploy-token.ts",
@@ -28,7 +29,7 @@
   },
   "dependencies": {
     "@stellar/freighter-api": "^6.0.1",
-    "@stellar/stellar-sdk": "^12.0.0",
+    "@stellar/stellar-sdk": "^15.0.1",
     "chalk": "^5.6.2",
     "dotenv": "^16.4.5",
     "zod": "^3.25.76"

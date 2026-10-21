@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { useLang } from "@/components/lang-context"
 import { WalletAvatar } from "./wallet-avatar"
+import { WalletBadge } from "./wallet-badge"
+import { QrCodeDialog } from "./qr-code-dialog"
 
 // Social icons (inline SVG)
 function DiscordIcon({ className }: { className?: string }) {
@@ -778,6 +780,7 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
   const [copied, setCopied] = useState(false)
   const [avatarSelectorOpen, setAvatarSelectorOpen] = useState(false)
   const [savingAvatar, setSavingAvatar] = useState(false)
+  const [qrDialogOpen, setQrDialogOpen] = useState(false)
   const selectorRef = useRef<HTMLDivElement>(null)
 
   const t =
@@ -1078,9 +1081,12 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
 
           {/* Identity */}
           <div className="min-w-0 flex-1 pt-0.5">
-            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-violet-400 mb-0.5">
-              {t.profile}
-            </p>
+            <div className="flex items-center gap-2 mb-0.5">
+              <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-violet-400">
+                {t.profile}
+              </p>
+              <WalletBadge />
+            </div>
             {profile.display_name && (
               <p className="font-mono text-[11px] text-zinc-200 font-medium truncate mb-0.5">
                 {profile.display_name}
@@ -1096,6 +1102,14 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
                 className="shrink-0 font-mono text-[8px] uppercase tracking-widest text-zinc-700 hover:text-violet-400 transition-colors"
               >
                 {copied ? t.copied : t.copyAddress}
+              </button>
+              <button
+                type="button"
+                onClick={() => setQrDialogOpen(true)}
+                title="Show QR Code"
+                className="shrink-0 font-mono text-[8px] uppercase tracking-widest text-zinc-700 hover:text-violet-400 transition-colors"
+              >
+                [QR]
               </button>
             </div>
           </div>
@@ -1330,6 +1344,12 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
           </button>
         </div>
 
+        <QrCodeDialog
+          open={qrDialogOpen}
+          onOpenChange={setQrDialogOpen}
+          mode="receive"
+          address={address}
+        />
       </SheetContent>
     </Sheet>
   )

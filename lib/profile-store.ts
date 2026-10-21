@@ -867,15 +867,8 @@ export async function getTrendingSignals(
 // Rollback: unset the flag → enforceFaucetClaimRateLimit throws FLAG_DISABLED
 //           and the faucet route keeps its legacy JSON counter. No migration.
 
-export function isFaucetRateLimitRedisEnabled(): boolean {
-  const v = (
-    process.env.NEXT_PUBLIC_FEATURE_PHASE_51 ??
-    process.env.FEATURE_PHASE_51 ??
-    ""
-  )
-    .trim()
-    .toLowerCase();
-  return v === "1" || v === "true" || v === "yes" || v === "on";
+export function isFaucetRateLimitRedisEnabled(wallet?: string): boolean {
+  return isFeatureEnabled("phase-51", wallet ? { wallet } : undefined);
 }
 
 export function flag51RollbackNote(): string {

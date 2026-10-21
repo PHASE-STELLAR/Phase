@@ -281,6 +281,58 @@ export function auditWashTradingWiring(): { ok: boolean; note: string } {
   }
 }
 
+// ── Spike 574 (phase-182): self-provision + self-swap pool heuristics ──
+// Classic AMM pools introduce a manipulation primitive the existing NFT-trade
+// detectors cannot see: a wallet can deposit most of a pool's liquidity and then
+// swap against itself to print volume at a price it chose. Both shapes are
+// flagged, never blocked (a solo testnet pool is legitimate), and callers must
+// exclude flagged rows from volume aggregates.
+
+export type PoolProvision = {
+  poolId: string
+  wallet: string
+  /** Share of total pool shares in basis points. */
+  shareBps: number
+  /** Wallets observed swapping against this pool in the window. */
+  swapWallets?: string[]
+}
+
+export function detectSelfProvisionedPools(
+  provisions: PoolProvision[],
+  opts: { concentrationBps?: number } = {},
+): { flaggedPoolIds: string[]; details: string[] } {
+  const threshold = opts.concentrationBps ?? 9_000
+  const flagged = new Set<string>()
+  const details: string[] = []
+  for (const p of provisions) {
+    if (p.shareBps < threshold) continue
+    const wallets = new Set((p.swapWallets ?? []).map((w) => w.toUpperCase()))
+    const onlySelf = wallets.size > 0 && [...wallets].every((w) => w === p.wallet.toUpperCase())
+    if (!onlySelf && wallets.size > 0) continue
+    if (wallets.size === 0) continue
+    flagged.add(p.poolId)
+    details.push(
+      `Self-provisioned pool ${p.poolId.slice(0, 8)}…: ${p.wallet.slice(0, 6)}… holds ${p.shareBps} bps and is the only swapper.`,
+    )
+  }
+  return { flaggedPoolIds: [...flagged], details }
+}
+
+export type PoolSwap = { poolId: string; wallet: string; counterparty?: string | null }
+
+export function detectSelfSwaps(swaps: PoolSwap[]): { flaggedIndexes: number[]; details: string[] } {
+  const flagged: number[] = []
+  const details: string[] = []
+  swaps.forEach((s, i) => {
+    if (!s.counterparty) return
+    if (s.counterparty.trim().toUpperCase() === s.wallet.trim().toUpperCase()) {
+      flagged.push(i)
+      details.push(`Self-swap on pool ${s.poolId.slice(0, 8)}… by ${s.wallet.slice(0, 6)}….`)
+    }
+  })
+  return { flaggedIndexes: flagged, details }
+}
+
 // ── Spike 673 (flag-gated): edition-scoped circular-trade hint ──
 // Existing circular/rapid-flip/self detectors are unchanged; this pure helper lets callers
 // partition trade windows per edition_number so one edition cannot launder another.

@@ -1,18 +1,19 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import assert from "node:assert/strict"
 import { test } from "vitest"
 import { Keypair } from "@stellar/stellar-sdk"
 import {
-  SIGNATURE_PREFIX,
   canonicalSignalPayload,
+  sep53SignedBytes,
   signalProofMessage,
+  verifySep53Signature,
   verifySignalSignature,
 } from "@/lib/viewer-signature"
 
 /**
- * Simulates the client signing step (SEP-53 framing) without a real wallet.
- * A SEP-53 signature is `ed25519_sign(sha256(prefix + message))`, which is
- * exactly what `Keypair.sign(prefix + message)` produces in @stellar/stellar-sdk.
+ * Simulates a wallet's SEP-53 signMessage without a real wallet:
+ * ed25519_sign(sha256(prefix + message)). Keypair.sign does NOT hash, so it
+ * has to be given the digest; signing the raw prefixed bytes was the old bug.
  */
 async function signPayload(payload: {
   title: string
@@ -20,9 +21,37 @@ async function signPayload(payload: {
   timestamp: number
 }, keypair: Keypair): Promise<string> {
   const message = await signalProofMessage(payload)
-  const data = SIGNATURE_PREFIX + message
-  return Buffer.from(keypair.sign(data)).toString("base64")
+  return Buffer.from(keypair.sign(Buffer.from(await sep53SignedBytes(message)))).toString("base64")
 }
+
+// Official vectors from stellar-protocol ecosystem/sep-0053.md (published test key, no funds).
+const SEP53_ADDRESS = "GBXFXNDLV4LSWA4VB7YIL5GBD7BVNR22SGBTDKMO2SBZZHDXSKZYCP7L"
+
+test("verifySep53Signature accepts the SEP-53 spec test vectors", async () => {
+  assert.equal(
+    await verifySep53Signature(
+      SEP53_ADDRESS,
+      "Hello, World!",
+      "fO5dbYhXUhBMhe6kId/cuVq/AfEnHRHEvsP8vXh03M1uLpi5e46yO2Q8rEBzu3feXQewcQE5GArp88u6ePK6BA==",
+    ),
+    true,
+  )
+  assert.equal(
+    await verifySep53Signature(
+      SEP53_ADDRESS,
+      "こんにちは、世界！",
+      "CDU265Xs8y3OWbB/56H9jPgUss5G9A0qFuTqH2zs2YDgTm+++dIfmAEceFqB7bhfN3am59lCtDXrCtwH2k1GBA==",
+    ),
+    true,
+  )
+})
+
+test("verifySep53Signature rejects a signature over the raw prefixed bytes", async () => {
+  const kp = Keypair.random()
+  const raw = Buffer.from("Stellar Signed Message:\nhello", "utf8")
+  const signature = Buffer.from(kp.sign(raw)).toString("base64")
+  assert.equal(await verifySep53Signature(kp.publicKey(), "hello", signature), false)
+})
 
 test("verifySignalSignature accepts a genuine wallet signature", async () => {
   const kp = Keypair.random()
@@ -46,7 +75,7 @@ test("verifySignalSignature rejects tampered content", async () => {
   const kp = Keypair.random()
   const payload = { title: "Hello", body: "World", timestamp: 1234567890 }
   const signature = await signPayload(payload, kp)
-  // Body changed after signing â€” signature must no longer verify.
+  // Body changed after signing — signature must no longer verify.
   const tampered = await verifySignalSignature(kp.publicKey(), { ...payload, body: "Tampered" }, signature)
   assert.equal(tampered, false)
 })

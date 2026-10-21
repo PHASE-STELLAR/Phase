@@ -15,7 +15,7 @@
 
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { Keypair, StrKey } from "@stellar/stellar-sdk"
+import { Address, Keypair, scValToNative, StrKey } from "@stellar/stellar-sdk"
 import { z } from "zod"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 
@@ -256,7 +256,7 @@ export async function checkOnChainArtistAttestation(
       fee: "100",
       networkPassphrase: Networks.TESTNET,
     })
-      .addOperation(contract.call("is_artist_attested", xdr.ScVal.scvAddress(wallet)))
+      .addOperation(contract.call("is_artist_attested", Address.fromString(wallet).toScVal()))
       .setTimeout(300)
       .build()
 
@@ -267,9 +267,7 @@ export async function checkOnChainArtistAttestation(
       result = "not_attested"
     } else {
       const retval = sim.result?.retval
-      const decoded = retval ? xdr.ScVal.fromXDR(retval, "base64") : null
-      const isVerified =
-        decoded?.switch?.() === xdr.ScValType.scvBool && decoded.bool() === true
+      const isVerified = retval ? scValToNative(retval) === true : false
       result = isVerified ? "verified" : "not_attested"
     }
   } catch {

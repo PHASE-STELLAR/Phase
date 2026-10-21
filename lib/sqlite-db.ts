@@ -16,6 +16,32 @@ import { serverDataJsonPath } from "@/lib/server-data-paths";
 let db: DatabaseSync | null = null;
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS compliance_credentials (
+  wallet_hash TEXT PRIMARY KEY,
+  subject_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('verified', 'revoked')),
+  expires_at INTEGER NOT NULL,
+  version INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_compliance_subject ON compliance_credentials(subject_hash);
+CREATE TABLE IF NOT EXISTS compliance_webhooks (id TEXT PRIMARY KEY, received_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS tax_events (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_key TEXT NOT NULL UNIQUE,
+  wallet TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('acquisition','disposal','royalty','reward')),
+  asset TEXT NOT NULL,
+  amount_stroops TEXT NOT NULL,
+  basis_stroops TEXT,
+  tx_hash TEXT,
+  occurred_at INTEGER NOT NULL,
+  verified INTEGER NOT NULL DEFAULT 0,
+  wash_flagged INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tax_wallet_time ON tax_events(wallet, occurred_at, seq);
+CREATE INDEX IF NOT EXISTS idx_tax_wallet_asset ON tax_events(wallet, asset, occurred_at, seq);
+CREATE TABLE IF NOT EXISTS tax_export_nonces (nonce TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS tax_export_rate (wallet TEXT NOT NULL, minute INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(wallet, minute));
 CREATE TABLE IF NOT EXISTS listings (
   id              TEXT PRIMARY KEY,
   token_id        INTEGER NOT NULL,
@@ -230,6 +256,123 @@ CREATE TABLE IF NOT EXISTS gauge_epoch_aggregates (
   allocated_budget_stroops TEXT NOT NULL,
   PRIMARY KEY (epoch, collection_id)
 );
+-- phase-142: curator-authored exhibitions. The hang (ordered tokens + wall
+-- text) is one JSON column so a show is published or rotated as one versioned
+-- row; there is no partial hang to observe. input_hash is the deterministic
+-- selection fingerprint, so a retried draft request returns the same draft
+-- instead of paying for a second model call.
+CREATE TABLE IF NOT EXISTS exhibitions (
+  id               TEXT PRIMARY KEY,
+  scope            TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'draft',
+  version          INTEGER NOT NULL DEFAULT 1,
+  lang             TEXT NOT NULL,
+  title            TEXT NOT NULL,
+  statement        TEXT NOT NULL,
+  theme_json       TEXT NOT NULL,
+  hang_json        TEXT NOT NULL,
+  cover_token_id   INTEGER NOT NULL,
+  input_hash       TEXT NOT NULL,
+  model_id         TEXT,
+  prompt_hash      TEXT,
+  text_source      TEXT NOT NULL,
+  created_at       INTEGER NOT NULL,
+  updated_at       INTEGER NOT NULL,
+  published_at     INTEGER,
+  rotated_at       INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_exhibitions_scope_status
+  ON exhibitions (scope, status, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_exhibitions_input
+  ON exhibitions (input_hash, lang, status);
+
+-- phase-143: every suggestion the oracle shows (or withholds, for the control
+-- arm) and what the seller then did with it. outcome is written once, by a
+-- conditional UPDATE, so a retried listing POST cannot record it twice.
+CREATE TABLE IF NOT EXISTS price_suggestions (
+  id                 TEXT PRIMARY KEY,
+  seller_wallet      TEXT NOT NULL,
+  collection_id      INTEGER NOT NULL,
+  token_id           INTEGER,
+  arm                TEXT NOT NULL,
+  level              TEXT NOT NULL,
+  suggested_phaselq  REAL,
+  p25_phaselq        REAL,
+  p75_phaselq        REAL,
+  comp_ids_json      TEXT NOT NULL,
+  effective_comps    REAL NOT NULL,
+  created_at         INTEGER NOT NULL,
+  outcome            TEXT,
+  listing_id         TEXT,
+  listed_price       REAL,
+  outcome_at         INTEGER,
+  sold_at            INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_price_suggestions_seller
+  ON price_suggestions (seller_wallet, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_price_suggestions_listing
+  ON price_suggestions (listing_id);
+CREATE INDEX IF NOT EXISTS idx_price_suggestions_arm
+  ON price_suggestions (arm, created_at);
+
+-- phase-146: one row per screened revision of a signal or reply. The signal
+-- row is never mutated by the AI; visibility lives here so unsetting the flag
+-- leaves signals exactly as they were written.
+CREATE TABLE IF NOT EXISTS moderation_queue (
+  id             TEXT PRIMARY KEY,
+  target_kind    TEXT NOT NULL,
+  target_id      TEXT NOT NULL,
+  author_wallet  TEXT NOT NULL,
+  text_hash      TEXT NOT NULL,
+  has_media      INTEGER NOT NULL DEFAULT 0,
+  state          TEXT NOT NULL,
+  decision       TEXT,
+  visibility     TEXT NOT NULL DEFAULT 'visible',
+  confidence     REAL,
+  scores_json    TEXT,
+  model_id       TEXT,
+  prompt_hash    TEXT,
+  attempts       INTEGER NOT NULL DEFAULT 0,
+  lease_until    INTEGER,
+  assigned_to    TEXT,
+  due_at         INTEGER,
+  appeal_reason  TEXT,
+  appealed_at    INTEGER,
+  resolution     TEXT,
+  resolved_by    TEXT,
+  resolved_at    INTEGER,
+  version        INTEGER NOT NULL DEFAULT 1,
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL,
+  UNIQUE (target_kind, target_id, text_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_moderation_queue_state_due
+  ON moderation_queue (state, due_at);
+CREATE INDEX IF NOT EXISTS idx_moderation_queue_target
+  ON moderation_queue (target_kind, target_id, created_at DESC);
+
+-- phase-147: generated quest arcs. Steps live in steps_json and every step
+-- transition is a version-guarded rewrite of the row, so a claim and a
+-- supersede cannot both win.
+CREATE TABLE IF NOT EXISTS quest_arcs (
+  id                    TEXT PRIMARY KEY,
+  wallet                TEXT NOT NULL,
+  status                TEXT NOT NULL,
+  version               INTEGER NOT NULL DEFAULT 1,
+  lang                  TEXT NOT NULL,
+  title                 TEXT NOT NULL,
+  steps_json            TEXT NOT NULL,
+  total_reward_stroops  TEXT NOT NULL,
+  diagnosis_json        TEXT NOT NULL,
+  model_id              TEXT,
+  text_source           TEXT NOT NULL,
+  created_at            INTEGER NOT NULL,
+  updated_at            INTEGER NOT NULL,
+  expires_at            INTEGER NOT NULL,
+  superseded_by         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_quest_arcs_wallet_status
+  ON quest_arcs (wallet, status, created_at DESC);
 `;
 
 // Issue #89 (phase-140): `listings` predates the creator/royalty concept, so
@@ -238,6 +381,7 @@ CREATE TABLE IF NOT EXISTS gauge_epoch_aggregates (
 // change. Both are nullable; a listing without them is simply not eligible
 // for royalty enforcement (phase-140 off, or no creator on file).
 const LISTING_COLUMNS: Array<{ name: string; ddl: string }> = [
+  { name: "contract_id", ddl: "contract_id TEXT" },
   { name: "creator_wallet", ddl: "creator_wallet TEXT" },
   { name: "royalty_bps", ddl: "royalty_bps INTEGER" },
   // Spike 673 (phase-editions): per-collection edition numbering. Nullable; NULL = uneditioned legacy row.
@@ -304,40 +448,51 @@ export function getDb(): DatabaseSync {
   mkdirSync(path.dirname(dbPath), { recursive: true });
 
   db = new DatabaseSync(dbPath);
-  db.exec("PRAGMA journal_mode = WAL;");
-  db.exec("PRAGMA foreign_keys = ON;");
-  db.exec(SCHEMA);
-  ensureListingColumns(db);
-  ensureOfferColumns(db);
-  // Idempotent migration for databases created before signature_verified existed.
+  let migrationStarted = false;
   try {
-    db.exec(
-      "ALTER TABLE signals ADD COLUMN signature_verified INTEGER NOT NULL DEFAULT 0;",
-    );
-  } catch {
-    // Column already present — no-op.
+    db.exec("PRAGMA busy_timeout = 5000;");
+    db.exec("PRAGMA journal_mode = WAL;");
+    db.exec("PRAGMA foreign_keys = ON;");
+    db.exec("BEGIN IMMEDIATE;");
+    migrationStarted = true;
+    db.exec(SCHEMA);
+    ensureListingColumns(db);
+    ensureOfferColumns(db);
+    // Idempotent migration for databases created before signature_verified existed.
+    try {
+      db.exec(
+        "ALTER TABLE signals ADD COLUMN signature_verified INTEGER NOT NULL DEFAULT 0;",
+      );
+    } catch {
+      // Column already present — no-op.
+    }
+    try {
+      db.exec(
+        "ALTER TABLE signal_replies ADD COLUMN signature_verified INTEGER NOT NULL DEFAULT 0;",
+      );
+    } catch {
+      // Column already present — no-op.
+    }
+    try {
+      db.exec(
+        "ALTER TABLE signals ADD COLUMN version INTEGER NOT NULL DEFAULT 1;",
+      );
+    } catch {
+      // Column already present — no-op.
+    }
+    // The version column originally defaulted to 0, but every consumer of it
+    // (ETag, If-Match, parent_version) treats 0 as invalid, so a signal that had
+    // never been edited or upvoted could not be replied to. Normalize the
+    // sentinel to the same 1-based origin new rows get.
+    db.exec("UPDATE signals SET version = 1 WHERE version <= 0;");
+    db.exec("COMMIT;");
+    return db;
+  } catch (error) {
+    if (migrationStarted) db.exec("ROLLBACK;");
+    db.close();
+    db = null;
+    throw error;
   }
-  try {
-    db.exec(
-      "ALTER TABLE signal_replies ADD COLUMN signature_verified INTEGER NOT NULL DEFAULT 0;",
-    );
-  } catch {
-    // Column already present — no-op.
-  }
-  try {
-    db.exec(
-      "ALTER TABLE signals ADD COLUMN version INTEGER NOT NULL DEFAULT 1;",
-    );
-  } catch {
-    // Column already present — no-op.
-  }
-  // The version column originally defaulted to 0, but every consumer of it
-  // (ETag, If-Match, parent_version) treats 0 as invalid, so a signal that had
-  // never been edited or upvoted could not be replied to. Normalize the
-  // sentinel to the same 1-based origin new rows get.
-  db.exec("UPDATE signals SET version = 1 WHERE version <= 0;");
-
-  return db;
 }
 
 /** Test-only: drop the cached connection so a fresh one is opened next call. */
