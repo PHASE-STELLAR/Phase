@@ -5,6 +5,7 @@ import { getSignal, getReplies, getSignalContributors, computeCreditLedger, isPh
 import { ModerationHoldNotice } from "@/components/moderation-hold-notice"
 import { isFaucetDenyListEnabled, isWalletDenied } from "@/lib/faucet-deny-list"
 import { SignalDetailClient } from "./signal-detail-client"
+import { IpfsDisplayImg } from "@/components/ipfs-display-img"
 
 export const dynamic = "force-dynamic"
 
@@ -140,7 +141,7 @@ export default async function SignalDetailPage({ params }: Props) {
             <div className="flex items-center gap-3 border border-[var(--color-border-tertiary)] p-2">
               {nftImageSrc && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={nftImageSrc} alt={signal.nft_name} className="h-10 w-10 object-cover" />
+                <IpfsDisplayImg uri={nftImageSrc} alt={signal.nft_name} className="h-10 w-10 object-cover" width={40} height={40} sizes="40px" />
               )}
               <div className="flex flex-col">
                 <span className="font-mono text-[10px] text-foreground/80">{signal.nft_name}</span>
