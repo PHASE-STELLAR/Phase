@@ -107,3 +107,7 @@ export default function ChamberPage() {
     </Suspense>
   )
 }
+
+// ── Spikes 672/675 (flag-gated): chamber mint button reuses dropStatusForListing /
+// currentDutchPrice + lobbyAdmissionForBand; countdown + queue-ticket UI mount only when
+// phase-timed-drops / phase-dutch-auction are on. No change to immediate-mint path when off.

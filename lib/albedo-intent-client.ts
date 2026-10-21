@@ -1,6 +1,10 @@
 "use client"
 
 import { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit"
+import {
+  albedoRetiredSignMessage,
+  isAlbedoRetired,
+} from "@/lib/albedo-sunset"
 
 /** Misma red que `Networks.TESTNET` del kit Albedo (`albedo.module.js`). */
 export const ALBEDO_NETWORK_TESTNET = "testnet"
@@ -45,12 +49,20 @@ export function isAlbedoSelectedInKit(): boolean {
 }
 
 export async function getAlbedoIntent(): Promise<AlbedoLike> {
+  // Spike 626: once retired the intent bundle is never loaded and no popup
+  // can open — the write path is closed at the source.
+  if (isAlbedoRetired()) {
+    throw new Error(`Albedo retired: ${albedoRetiredSignMessage()}`)
+  }
   const pkg = await import("@albedo-link/intent")
   return resolveAlbedoApi(pkg)
 }
 
 export async function albedoImplicitTxAllowed(pubkey: string): Promise<boolean> {
   if (!pubkey || !isAlbedoSelectedInKit()) return true
+  // Spike 626: pre-sign probes short-circuit when retired; signing itself is
+  // blocked fail-closed by the kit sign guard with migration copy.
+  if (isAlbedoRetired()) return true
   const albedo = await getAlbedoIntent()
   return albedo.isImplicitSessionAllowed("tx", pubkey)
 }
@@ -60,6 +72,10 @@ export async function albedoImplicitTxAllowed(pubkey: string): Promise<boolean> 
  * Tras conceder, `tx` puede firmarse vía iframe sin ventana emergente en flujos async largos.
  */
 export async function requestAlbedoImplicitTxFlow(): Promise<{ ok: true } | { ok: false; message: string }> {
+  // Spike 626: never open the Albedo popup once retired — surface migration copy.
+  if (isAlbedoRetired()) {
+    return { ok: false, message: albedoRetiredSignMessage() }
+  }
   try {
     const albedo = await getAlbedoIntent()
     const res = await albedo.implicitFlow({

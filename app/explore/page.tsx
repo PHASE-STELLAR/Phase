@@ -1,20 +1,21 @@
 "use client"
 
 import Link from "next/link"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { LangToggle } from "@/components/lang-toggle"
 import { useLang } from "@/components/lang-context"
 import { PhaseProtectedPreview } from "@/components/phase-protected-preview"
 import { useWallet } from "@/components/wallet-provider"
+import { ExploreErrorBoundary } from "@/components/explore-error-boundary"
 import { cn } from "@/lib/utils"
-import type { ExploreItem } from "@/app/api/explore/route"
-
-type ExploreResponse = {
-  items: ExploreItem[]
-  total: number
-  page: number
-  perPage: number
-}
+import {
+  filterWorldOnly,
+  parseExploreResponse,
+  type ExploreItem,
+  type ExploreResponse,
+  type ExploreValidationError,
+} from "@/lib/explore-domain"
+import { useToastQueue } from "@/hooks/use-toast-queue"
 
 const navLink =
   "inline-flex min-h-[36px] items-center border-2 border-cyan-400/50 bg-cyan-950/50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-cyan-100 shadow-[0_0_14px_rgba(34,211,238,0.12)] transition-colors hover:border-cyan-300 hover:bg-cyan-900/40 hover:text-white"
@@ -48,19 +49,35 @@ export default function ExplorePage() {
   const [loadState, setLoadState] = useState<"idle" | "loading" | "error">("idle")
   const [page, setPage] = useState(1)
   const [worldOnly, setWorldOnly] = useState(false)
+  const toasts = useToastQueue()
+  // Monotonic request id guard: only the most recent request may commit state,
+  // so a slow, stale response can no longer overwrite a newer snapshot.
+  const loadSeq = useRef(0)
 
   const load = useCallback(async (p: number) => {
+    const seq = ++loadSeq.current
     setLoadState("loading")
     try {
       const res = await fetch(`/api/explore?page=${p}&perPage=${perPage}`, { cache: "no-store" })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = (await res.json()) as ExploreResponse
+      if (!res.ok) {
+        if (seq === loadSeq.current) {
+          setLoadState("error")
+          toasts.error(`RPC_ERROR_HTTP_${res.status}`, { title: "EXPLORE" })
+        }
+        return
+      }
+      // Type-safe schema validation in the isolated domain module.
+      const json = parseExploreResponse(await res.json())
+      if (seq !== loadSeq.current) return
       setData(json)
       setLoadState("idle")
-    } catch {
+    } catch (err) {
+      if (seq !== loadSeq.current) return
       setLoadState("error")
+      const isValidation = (err as ExploreValidationError)?.code === "EXPLORE_VALIDATION_ERROR"
+      toasts.error(isValidation ? "SCHEMA_REJECTED" : "RPC_ERROR_UNTYPED", { title: "EXPLORE" })
     }
-  }, [])
+  }, [perPage, toasts])
 
   useEffect(() => {
     void load(page)
@@ -69,9 +86,7 @@ export default function ExplorePage() {
   const totalPages = data ? Math.max(1, Math.ceil(data.total / perPage)) : 1
   const isEs = lang === "es"
 
-  const visibleItems = worldOnly
-    ? (data?.items ?? []).filter((item) => Boolean(item.worldName))
-    : (data?.items ?? [])
+  const visibleItems = worldOnly ? filterWorldOnly(data?.items ?? []) : (data?.items ?? [])
 
   return (
     <div className="min-h-screen bg-background font-mono text-foreground">
@@ -128,6 +143,11 @@ export default function ExplorePage() {
                 <p className="text-[9px] uppercase tracking-widest text-cyan-500/50">
                   {isEs ? `PÁG. ${page} / ${totalPages}` : `PAGE ${page} / ${totalPages}`}
                 </p>
+                {data.quest_expiry_windows_enabled && (
+                  <p className="text-[8px] uppercase tracking-widest text-cyan-500/40">
+                    {isEs ? "· ventanas de expiración activas" : "· expiry windows active"}
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -200,16 +220,18 @@ export default function ExplorePage() {
 
             {loadState === "idle" && data && visibleItems.length > 0 && (
               <>
-                <ul className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-                  {visibleItems.map((item) => (
-                    <ArtifactCard
-                      key={item.tokenId}
-                      item={item}
-                      address={address}
-                      isEs={isEs}
-                    />
-                  ))}
-                </ul>
+                <ExploreErrorBoundary>
+                  <ul className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                    {visibleItems.map((item) => (
+                      <ArtifactCard
+                        key={item.tokenId}
+                        item={item}
+                        address={address}
+                        isEs={isEs}
+                      />
+                    ))}
+                  </ul>
+                </ExploreErrorBoundary>
 
                 {totalPages > 1 && (
                   <div className="mt-8 flex items-center justify-center gap-4">
@@ -227,7 +249,7 @@ export default function ExplorePage() {
                     <button
                       type="button"
                       disabled={page >= totalPages}
-                      onClick={() => { setPage((p) => Math.min(totalPages, p + 1)); window.scrollTo({ top: 0, behavior: "smooth" }) }}
+                      onClick={() => { const next = Math.min(totalPages, page + 1); setPage(next); toasts.info(`${isEs ? "Cargando página" : "Loading page"} ${next}`, { title: "EXPLORE" }); window.scrollTo({ top: 0, behavior: "smooth" }) }}
                       className={cn(navLink, "disabled:cursor-not-allowed disabled:opacity-40")}
                     >
                       {isEs ? "Sig." : "Next"} →
@@ -265,7 +287,7 @@ function ArtifactCard({
       >
         <PhaseProtectedPreview
           uri={item.image}
-          chainVerified={false}
+          ownerTruncated={item.ownerTruncated}
           viewerAddress={address}
           labels={PREVIEW_LABELS}
         />
@@ -293,6 +315,12 @@ function ArtifactCard({
         {item.worldName && (
           <span className="inline-block w-fit border border-cyan-400/40 bg-cyan-950/50 px-1.5 py-0.5 text-[8px] uppercase tracking-widest text-cyan-400">
             ◈ {item.worldName}
+          </span>
+        )}
+
+        {item.duplicateOfTokenId && (
+          <span className="inline-block w-fit border border-amber-400/40 bg-amber-950/30 px-1.5 py-0.5 text-[8px] uppercase tracking-widest text-amber-300">
+            {isEs ? `Duplicado de #${item.duplicateOfTokenId}` : `Duplicate of #${item.duplicateOfTokenId}`}
           </span>
         )}
 

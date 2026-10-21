@@ -6,6 +6,8 @@ import {
   isAlbedoSelectedInKit,
   requestAlbedoImplicitTxFlow,
 } from "@/lib/albedo-intent-client"
+import { albedoRetiredMessage, isAlbedoRetired } from "@/lib/albedo-sunset"
+import { isFreighterMobile171Enabled, openFriendbot } from "@/lib/freighter-mobile"
 import { signTransaction } from "@/lib/stellar-wallet-kit"
 import { useLang } from "@/components/lang-context"
 import { TokenIcon } from "@/components/token-icon"
@@ -21,6 +23,10 @@ import { pickCopy } from "@/lib/phase-copy"
 import { HORIZON_URL, NETWORK_PASSPHRASE } from "@/lib/phase-protocol"
 import { playTacticalUiClick } from "@/lib/tactical-ui-click"
 import { cn } from "@/lib/utils"
+
+// phase-119 wiring preserved: trustline-button can optionally verify CID integrity
+// when the flag is enabled. Dynamic import keeps flag-off path zero-cost.
+// When flag off, verifyRePinned… is a no-op in lib/classic-liq.
 
 type TrustlineUiState = "STANDBY" | "SIGNING" | "SYNCING" | "READY" | "GET_TESTNET_XLM"
 
@@ -142,6 +148,13 @@ export function TrustlineButton({ address, onRequestConnect, onReady, className,
     }
 
     if (uiState === "GET_TESTNET_XLM") {
+      // Spike 627: on mobile (plain browser or Freighter in-app), window.open
+      // is blocked or spawned as a popup the in-app browser cannot return
+      // from — navigate same-tab instead. Legacy desktop behavior when off.
+      if (isFreighterMobile171Enabled()) {
+        openFriendbot(addr, typeof navigator !== "undefined" ? navigator.userAgent : null)
+        return
+      }
       if (typeof window !== "undefined") {
         window.open(`https://friendbot.stellar.org/?addr=${encodeURIComponent(addr)}`, "_blank", "noopener,noreferrer")
       }
@@ -153,6 +166,12 @@ export function TrustlineButton({ address, onRequestConnect, onReady, className,
     setMessage("")
     try {
       if (isAlbedoSelectedInKit()) {
+        // Spike 626: retired Albedo never reaches the pre-sign probe — the
+        // user is told to reconnect with a supported wallet instead.
+        if (isAlbedoRetired()) {
+          setMessage(albedoRetiredMessage(lang))
+          return
+        }
         const allowed = await albedoImplicitTxAllowed(addr)
         setAlbedoImplicitOk(allowed)
         if (!allowed) {
@@ -207,9 +226,17 @@ export function TrustlineButton({ address, onRequestConnect, onReady, className,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ signedXdr }),
       })
-      const payload = (await submitRes.json().catch(() => ({}))) as { error?: string; detail?: string; code?: string }
+      const payload = (await submitRes.json().catch(() => ({}))) as { error?: string; detail?: string; code?: string; deadLetterId?: string }
       if (!submitRes.ok) {
         // Mensajes de error más específicos basados en el código
+        if (payload.code === "QUARANTINED") {
+          // phase-144 (Module #44): malformed payload was filed in the review queue
+          throw new Error(
+            lang === "es"
+              ? `Solicitud con formato inválido: se archivó en la cola de revisión${payload.deadLetterId ? ` (ref ${payload.deadLetterId.slice(0, 8)})` : ""}. Un operador la revisará.`
+              : `Malformed request: filed in the review queue${payload.deadLetterId ? ` (ref ${payload.deadLetterId.slice(0, 8)})` : ""} for an operator to inspect.`,
+          )
+        }
         if (payload.code === "ACCOUNT_NOT_FOUND" || payload.error?.includes("not found")) {
           throw new Error(
             `Cuenta no encontrada\n\n` +
@@ -288,7 +315,7 @@ export function TrustlineButton({ address, onRequestConnect, onReady, className,
       {hero ? (
         <p className="mt-2 text-[11px] leading-snug text-zinc-300">{ff.trustline_beginner_blurb}</p>
       ) : null}
-      {walletAddress && albedoImplicitOk === false ? (
+      {walletAddress && albedoImplicitOk === false && !isAlbedoRetired() ? (
         <div className="mb-2 rounded border border-violet-500/45 bg-violet-950/30 p-2">
           <p className="text-[9px] font-semibold uppercase tracking-wide text-violet-200/95">
             {ff.trustline_albedo_prep_title}

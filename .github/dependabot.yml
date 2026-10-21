@@ -1,0 +1,69 @@
+# Spike 608 (#472, phase-175): Automated dependency-update cadence with
+# grouped Soroban (Cargo) and Stellar / Next.js (npm) pull requests.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+    open-pull-requests-limit: 5
+    groups:
+      stellar-sdk-root:
+        patterns:
+          - "@stellar/*"
+          - "@creit.tech/stellar-wallets-kit"
+          - "x402-stellar"
+      nextjs-react-bonded:
+        patterns:
+          - "next"
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      vitest-bonded:
+        patterns:
+          - "vitest"
+          - "@vitest/coverage-v8"
+
+  - package-ecosystem: "npm"
+    directory: "/scripts"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+    open-pull-requests-limit: 3
+    groups:
+      stellar-sdk-scripts:
+        patterns:
+          - "@stellar/*"
+
+  - package-ecosystem: "cargo"
+    directory: "/contracts/phase-protocol"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:30"
+    groups:
+      soroban-sdk-phase-protocol:
+        patterns:
+          - "soroban-*"
+
+  - package-ecosystem: "cargo"
+    directory: "/contracts/mock-token"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:30"
+    groups:
+      soroban-sdk-mock-token:
+        patterns:
+          - "soroban-*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"

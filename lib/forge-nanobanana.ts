@@ -1,7 +1,18 @@
 /**
  * Cliente para https://api.nanobananaapi.ai (docs: docs.nanobananaapi.ai).
- * Text-to-image vía POST /generate + polling GET /record-info (callBackUrl sigue siendo obligatorio en el body).
+ *
+ * Two modes:
+ *  - generateForgeImageUrlViaNanobananaApi — synchronous polling mode (legacy):
+ *      submits a task and blocks until successFlag === 1 or timeout (110s).
+ *      Used as fallback when async webhooks are not configured.
+ *
+ *  - submitForgeImageTaskViaNanobananaApi — async submit mode (new):
+ *      submits a task and returns the taskId immediately without polling.
+ *      The caller registers a generation job and waits for the webhook callback
+ *      from app/api/webhooks/nanobanana to deliver the result.
  */
+
+import { fetchWithRetry } from "@/lib/pipeline-retry"
 
 const NANOBANANA_BASE = "https://api.nanobananaapi.ai"
 
@@ -33,20 +44,19 @@ function isNanobananaOverloadLike(code: number | undefined, msg: string): boolea
 }
 
 /**
- * Crea tarea TEXTTOIAMGE y hace poll hasta successFlag === 1 o error.
- * @returns URL https de imagen (resultImageUrl preferida sobre originImageUrl).
+ * Returns true when async webhook mode is available.
+ * Requires NANOBANANA_WEBHOOK_SECRET and a resolvable NANOBANANA_CALLBACK_URL.
  */
-export async function generateForgeImageUrlViaNanobananaApi(options: {
-  prompt: string
-  callBackUrl: string
-  pollIntervalMs?: number
-  maxWaitMs?: number
-}): Promise<string> {
-  const { prompt, callBackUrl } = options
-  const pollIntervalMs = options.pollIntervalMs ?? 2000
-  const maxWaitMs = options.maxWaitMs ?? 110_000
-  const apiKey = nanobananaApiKey()
+export function nanobananaAsyncWebhookEnabled(): boolean {
+  const secret = process.env.NANOBANANA_WEBHOOK_SECRET?.trim()
+  const url = process.env.NANOBANANA_CALLBACK_URL?.trim()
+  return Boolean(secret && secret.length >= 8 && url && url.startsWith("http"))
+}
 
+// ─── Shared submit helper ─────────────────────────────────────────────────────
+
+async function submitGenerateTask(prompt: string, callBackUrl: string): Promise<string> {
+  const apiKey = nanobananaApiKey()
   const body = {
     prompt,
     type: "TEXTTOIAMGE" as const,
@@ -55,7 +65,7 @@ export async function generateForgeImageUrlViaNanobananaApi(options: {
     callBackUrl,
   }
 
-  const genRes = await fetch(`${NANOBANANA_BASE}/api/v1/nanobanana/generate`, {
+  const genRes = await fetchWithRetry(`${NANOBANANA_BASE}/api/v1/nanobanana/generate`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -81,13 +91,53 @@ export async function generateForgeImageUrlViaNanobananaApi(options: {
     throw new Error(`NANOBANANA_GENERATE_FAILED: ${msg}`)
   }
 
-  const taskId = genJson.data.taskId
+  return genJson.data.taskId
+}
+
+// ─── Async submit — returns taskId immediately ────────────────────────────────
+
+export type SubmitForgeImageTaskResult = {
+  taskId: string
+  callBackUrl: string
+}
+
+/**
+ * Submits an image generation task to NanoBanana and returns the taskId
+ * immediately without polling. The webhook at `callBackUrl` will receive
+ * the result once NanoBanana finishes (may take up to several minutes).
+ */
+export async function submitForgeImageTaskViaNanobananaApi(options: {
+  prompt: string
+  callBackUrl: string
+}): Promise<SubmitForgeImageTaskResult> {
+  const taskId = await submitGenerateTask(options.prompt, options.callBackUrl)
+  return { taskId, callBackUrl: options.callBackUrl }
+}
+
+// ─── Synchronous polling — legacy / fallback ──────────────────────────────────
+
+/**
+ * Crea tarea TEXTTOIAMGE y hace poll hasta successFlag === 1 o error.
+ * @returns URL https de imagen (resultImageUrl preferida sobre originImageUrl).
+ */
+export async function generateForgeImageUrlViaNanobananaApi(options: {
+  prompt: string
+  callBackUrl: string
+  pollIntervalMs?: number
+  maxWaitMs?: number
+}): Promise<string> {
+  const { prompt, callBackUrl } = options
+  const pollIntervalMs = options.pollIntervalMs ?? 2000
+  const maxWaitMs = options.maxWaitMs ?? 110_000
+  const apiKey = nanobananaApiKey()
+
+  const taskId = await submitGenerateTask(prompt, callBackUrl)
   const deadline = Date.now() + maxWaitMs
 
   while (Date.now() < deadline) {
     await sleep(pollIntervalMs)
 
-    const infoRes = await fetch(
+    const infoRes = await fetchWithRetry(
       `${NANOBANANA_BASE}/api/v1/nanobanana/record-info?taskId=${encodeURIComponent(taskId)}`,
       {
         headers: { Authorization: `Bearer ${apiKey}` },

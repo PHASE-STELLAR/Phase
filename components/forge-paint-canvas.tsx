@@ -168,7 +168,7 @@ export const ForgePaintCanvas = forwardRef<ForgePaintCanvasHandle, Props>(functi
     redraw()
   }, [redraw])
 
-  const clientToCanvas = (e: React.MouseEvent<HTMLCanvasElement>): [number, number] => {
+  const clientToCanvas = (e: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
     const c = canvasRef.current
     if (!c) return [0, 0]
     const r = c.getBoundingClientRect()
@@ -183,7 +183,9 @@ export const ForgePaintCanvas = forwardRef<ForgePaintCanvasHandle, Props>(functi
     if (!last || last[0] !== p[0] || last[1] !== p[1]) path.push(p)
   }
 
-  const onDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const onDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!e.isPrimary || e.button !== 0) return
+    e.currentTarget.setPointerCapture(e.pointerId)
     const p = clientToCanvas(e)
     if (tool === "pencil") {
       draftRef.current = { tool: "pencil", start: p, current: p, path: [p] }
@@ -193,7 +195,7 @@ export const ForgePaintCanvas = forwardRef<ForgePaintCanvasHandle, Props>(functi
     bump((n) => n + 1)
   }
 
-  const onMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const onMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!draftRef.current) return
     const p = clientToCanvas(e)
     draftRef.current.current = p
@@ -276,10 +278,11 @@ export const ForgePaintCanvas = forwardRef<ForgePaintCanvasHandle, Props>(functi
         height={height}
         className="max-w-full cursor-crosshair touch-none bg-black"
         style={{ width: "100%", height: "auto", aspectRatio: `${width} / ${height}` }}
-        onMouseDown={onDown}
-        onMouseMove={onMove}
-        onMouseUp={onUp}
-        onMouseLeave={onLeave}
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
+        onPointerCancel={onLeave}
+        onLostPointerCapture={onLeave}
       />
       {toolRail === "internal" && (
         <p className="font-mono text-[8px] uppercase tracking-wider text-[#00ff00]/45">

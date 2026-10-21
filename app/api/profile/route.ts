@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getProfile, saveProfile } from "@/lib/profile-store"
+import { isProfile2faEnabled, touchesHighValueField, verifyProfileChangeConfirmation } from "@/lib/profile-2fa"
+import { isConsent166Enabled, hasAcceptedCurrentLegal } from "@/lib/legal-consent"
 
 export const dynamic = "force-dynamic"
 
@@ -9,7 +11,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "wallet param required" }, { status: 400 })
   }
   const profile = await getProfile(wallet)
-  return NextResponse.json({ wallet, profile: profile ?? null })
+  const consent = isConsent166Enabled() ? await hasAcceptedCurrentLegal(wallet) : undefined
+  return NextResponse.json({ wallet, profile: profile ?? null, ...(consent ? { consent } : {}) })
 }
 
 type ProfileBody = {
@@ -20,6 +23,8 @@ type ProfileBody = {
   telegram?: unknown
   avatar_token_id?: unknown
   avatar_image_url?: unknown
+  /** Code from POST /api/profile/request-change — only checked when phase-104 is enabled. */
+  confirmation_code?: unknown
 }
 
 function sanitizeHandle(value: unknown, prefix: string): string | undefined {
@@ -40,6 +45,43 @@ export async function POST(request: NextRequest) {
   const wallet = typeof body.wallet === "string" ? body.wallet.trim() : ""
   if (!wallet || wallet.length < 10) {
     return NextResponse.json({ error: "wallet required" }, { status: 400 })
+  }
+
+  // phase-166: require active legal terms-of-service and privacy-policy consent
+  if (isConsent166Enabled()) {
+    const consentStatus = await hasAcceptedCurrentLegal(wallet)
+    if (!consentStatus.accepted) {
+      return NextResponse.json(
+        {
+          error: "consent_required",
+          code: "CONSENT_REQUIRED",
+          pending_documents: consentStatus.pending_documents,
+          current_versions: consentStatus.current_versions,
+          hint: "Review and accept Terms of Service & Privacy Policy via POST /api/legal/consent before updating profile",
+        },
+        { status: 451 },
+      )
+    }
+  }
+
+  // phase-104: require a two-factor confirmation code before applying
+  // high-value profile changes (display name / socials)
+  if (isProfile2faEnabled() && touchesHighValueField(body as Record<string, unknown>)) {
+    const confirmation = verifyProfileChangeConfirmation(
+      wallet,
+      body as Record<string, unknown>,
+      typeof body.confirmation_code === "string" ? body.confirmation_code : undefined,
+    )
+    if (!confirmation.ok) {
+      return NextResponse.json(
+        {
+          error: "confirmation_required",
+          reason: confirmation.reason,
+          hint: "POST /api/profile/request-change first, then resubmit with confirmation_code",
+        },
+        { status: 428 },
+      )
+    }
   }
 
   const display_name =

@@ -42,6 +42,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Missing or invalid query param: owner" }, { status: 400 })
   }
 
+  // Issue #298 fix: Add pagination support with cursor and limit
+  const limitParam = req.nextUrl.searchParams.get("limit")?.trim()
+  const cursorParam = req.nextUrl.searchParams.get("cursor")?.trim()
+  const limit = limitParam ? Math.min(parseInt(limitParam, 10) || 100, 1000) : 100
+  const cursor = cursorParam ? parseInt(cursorParam, 10) || 0 : 0
+
   // ── Intenta upstream indexer si está configurado ──
   const upstreamBaseUrl = resolveUpstreamBaseUrl()
   if (upstreamBaseUrl) {
@@ -74,20 +80,33 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // ── Fallback: Soroban RPC directo ──
+  // ── Fallback: Soroban RPC directo con paginación ──
   try {
     const contractId = phaseProtocolContractIdForServer()
-    const tokenIds = await fetchOwnedPhaseTokenIdsForWallet(owner, {
+    const allTokenIds = await fetchOwnedPhaseTokenIdsForWallet(owner, {
       contractId,
-      maxTokenIdCap: 5000,
+      maxTokenIdCap: 10000,
       concurrency: 8,
     })
+
+    // Aplicar paginación
+    const paginatedTokenIds = allTokenIds.slice(cursor, cursor + limit)
+    const hasMore = cursor + limit < allTokenIds.length
+    const nextCursor = hasMore ? cursor + limit : null
+
     return NextResponse.json(
       {
         owner,
         contractId,
-        tokenIds,
-        tokens: tokenIds.map((id) => ({ token_id: id })),
+        tokenIds: paginatedTokenIds,
+        tokens: paginatedTokenIds.map((id) => ({ token_id: id })),
+        pagination: {
+          cursor,
+          limit,
+          total: allTokenIds.length,
+          hasMore,
+          nextCursor,
+        },
         indexedVia: "soroban-rpc",
       },
       {

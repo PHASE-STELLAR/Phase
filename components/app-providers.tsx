@@ -8,6 +8,7 @@ import { WalletProvider } from "@/components/wallet-provider"
 import { FaucetModal } from "@/components/faucet-modal"
 import { FloatingHeader } from "@/components/floating-header"
 import { NotificationsModal } from "@/components/notifications-modal"
+import { LinkPrefetchProvider } from "@/components/link-prefetch-provider"
 
 /**
  * Respaldo si el `Script` beforeInteractive del layout no aplicó (p. ej. orden de listeners).
@@ -38,20 +39,22 @@ export function AppProviders({ children }: { children: ReactNode }) {
   return (
     <LangProvider>
       <WalletProvider>
-        <SwallowEmptyUnhandledRejections />
-        <FloatingHeader />
-        {children}
-        <FaucetModal />
-        <NotificationsModal />
-        <Toaster
-          theme="dark"
-          position="top-center"
-          richColors
-          toastOptions={{
-            className: "font-mono text-xs",
-            duration: 4500,
-          }}
-        />
+        <LinkPrefetchProvider>
+          <SwallowEmptyUnhandledRejections />
+          <FloatingHeader />
+          {children}
+          <FaucetModal />
+          <NotificationsModal />
+          <Toaster
+            theme="dark"
+            position="top-center"
+            richColors
+            toastOptions={{
+              className: "font-mono text-xs",
+              duration: 4500,
+            }}
+          />
+        </LinkPrefetchProvider>
       </WalletProvider>
     </LangProvider>
   )

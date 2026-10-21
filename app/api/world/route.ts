@@ -5,10 +5,21 @@ import {
   getAllNarrativesCount,
   countCollectorsInWorlds,
   getRecentNarrativesForCollection,
+  getWorldForCollection,
   saveWorldForCollection,
+  ensureWorldOwner,
   type NarratorTone,
 } from "@/lib/narrative-world-store"
 import { checkAndUnlock } from "@/lib/achievement-store"
+import { checkWorldConflict, normalizeVectorClock, type VectorClock } from "@/lib/world-conflict"
+import { isAge164Enabled, isAgeGate, assertAgeGate, AgeGateError, type AgeGate } from "@/lib/age-gate"
+import {
+  isLicense165Enabled,
+  recordLicenseAttestation,
+  LicenseAttestationError,
+  type RightsBasis,
+} from "@/lib/license-attestation"
+import { resolveSessionWallet } from "@/lib/sep10-auth"
 
 export type WorldsListItem = {
   collectionId: number
@@ -18,6 +29,10 @@ export type WorldsListItem = {
   narrativeCount: number
   latestNarrative: string | null
   narrator_tone?: NarratorTone
+  /** Current revision — pass as `expected_version` on the next save (phase-105). */
+  version?: number
+  /** Per-author vector clock — pass as `expected_vector_clock` on the next save (phase-105). */
+  vector_clock?: VectorClock
 }
 
 export type WorldsGlobalStats = {
@@ -40,6 +55,8 @@ export async function GET() {
         narrativeCount: narratives.length,
         latestNarrative: narratives[0]?.narrative ?? null,
         narrator_tone: data.narrator_tone,
+        version: data.version,
+        vector_clock: normalizeVectorClock(data.vector_clock) ?? undefined,
       }
     }),
   )
@@ -72,6 +89,23 @@ type WorldSaveBody = {
   world_prompt?: unknown
   narrator_tone?: unknown
   creator_wallet?: unknown
+  /** Client's last-known world version — only checked when phase-105 is enabled. */
+  expected_version?: unknown
+  /** Client's last-known vector clock (object or `[node, counter]` entries) — phase-105. */
+  expected_vector_clock?: unknown
+  /** Campaign age gate for this world — phase-164. Requires a SEP-10 session from the creator. */
+  age_gate?: unknown
+  /** Signed licensing declaration, required on first creation when phase-165 is on. */
+  license_attestation?: unknown
+}
+
+type LicenseAttestationBody = {
+  wallet?: unknown
+  rights_basis?: unknown
+  evidence_cid?: unknown
+  issued_at?: unknown
+  nonce?: unknown
+  signature?: unknown
 }
 
 function isNonEmptyString(v: unknown): v is string {
@@ -116,16 +150,117 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  await saveWorldForCollection(collectionId, {
+  const creatorWallet =
+    typeof body.creator_wallet === "string" && StrKey.isValidEd25519PublicKey(body.creator_wallet)
+      ? body.creator_wallet
+      : undefined
+
+  let expectedVersion: number | undefined
+  if (body.expected_version !== undefined) {
+    if (!Number.isSafeInteger(body.expected_version) || (body.expected_version as number) < 0) {
+      return NextResponse.json(
+        { error: "expected_version debe ser un entero no negativo" },
+        { status: 400 },
+      )
+    }
+    expectedVersion = body.expected_version as number
+  }
+
+  let expectedVectorClock: VectorClock | undefined
+  if (body.expected_vector_clock !== undefined) {
+    const normalized = normalizeVectorClock(body.expected_vector_clock)
+    if (!normalized) {
+      return NextResponse.json(
+        { error: "expected_vector_clock inválido: se espera un objeto o una lista de pares [nodo, contador]" },
+        { status: 400 },
+      )
+    }
+    expectedVectorClock = normalized
+  }
+
+  if (body.age_gate !== undefined && !isAgeGate(body.age_gate)) {
+    return NextResponse.json({ error: "age_gate inválido. Valores permitidos: none, 18+, 21+" }, { status: 400 })
+  }
+  const ageGate: AgeGate = isAgeGate(body.age_gate) ? body.age_gate : "none"
+  if (isAge164Enabled() && ageGate !== "none") {
+    const sessionWallet = await resolveSessionWallet(request)
+    if (!sessionWallet) {
+      return NextResponse.json({ error: "SESSION_REQUIRED" }, { status: 401 })
+    }
+    if (sessionWallet !== creatorWallet) {
+      return NextResponse.json({ error: "creator_wallet must match the session wallet" }, { status: 403 })
+    }
+    try {
+      await assertAgeGate(sessionWallet, ageGate)
+    } catch (err) {
+      if (err instanceof AgeGateError) {
+        return NextResponse.json({ error: err.code, required: ageGate }, { status: 451 })
+      }
+      throw err
+    }
+  }
+
+  const existingWorld = await getWorldForCollection(collectionId)
+  const conflict = checkWorldConflict(existingWorld, expectedVersion, expectedVectorClock)
+  if (conflict.conflict) {
+    return NextResponse.json(
+      {
+        error: "WORLD_VERSION_CONFLICT",
+        order: conflict.order,
+        server_version: conflict.serverVersion,
+        client_version: conflict.clientVersion,
+        server_vector_clock: conflict.serverVectorClock,
+        current: conflict.current,
+      },
+      { status: 409 },
+    )
+  }
+
+  if (!existingWorld && isLicense165Enabled()) {
+    const la = body.license_attestation as LicenseAttestationBody | undefined
+    if (!la || typeof la !== "object") {
+      return NextResponse.json({ error: "LICENSE_ATTESTATION_REQUIRED" }, { status: 422 })
+    }
+    if (!creatorWallet || la.wallet !== creatorWallet) {
+      return NextResponse.json({ error: "LICENSE_ATTESTATION_INVALID", detail: "attestation wallet must be the creator" }, { status: 422 })
+    }
+    try {
+      await recordLicenseAttestation({
+        collection_id: collectionId,
+        wallet: creatorWallet,
+        rights_basis: la.rights_basis as RightsBasis,
+        evidence_cid: typeof la.evidence_cid === "string" && la.evidence_cid.trim() ? la.evidence_cid.trim() : null,
+        issued_at: Number(la.issued_at),
+        nonce: typeof la.nonce === "string" ? la.nonce : "",
+        signature: typeof la.signature === "string" ? la.signature : "",
+      })
+    } catch (err) {
+      if (err instanceof LicenseAttestationError) {
+        const status = err.code === "ALREADY_ISSUED" || err.code === "NONCE_REUSED" ? 409 : 422
+        return NextResponse.json({ error: err.code, detail: err.message }, { status })
+      }
+      throw err
+    }
+  }
+
+  const saved = await saveWorldForCollection(collectionId, {
     world_name: body.world_name.trim(),
     world_prompt: body.world_prompt.trim(),
     narrator_tone: isValidTone(body.narrator_tone) ? body.narrator_tone : undefined,
+    creator_wallet: creatorWallet,
   })
 
-  // Achievements: fire-and-forget
-  if (typeof body.creator_wallet === "string" && StrKey.isValidEd25519PublicKey(body.creator_wallet)) {
-    void checkAndUnlock(body.creator_wallet, { has_world: true }).catch(() => { /* silent */ })
+  if (creatorWallet) {
+    // phase-109: the creating wallet becomes the world's owner for role checks.
+    void ensureWorldOwner(collectionId, creatorWallet).catch(() => { /* silent */ })
+    // Achievements: fire-and-forget
+    void checkAndUnlock(creatorWallet, { has_world: true }).catch(() => { /* silent */ })
   }
 
-  return NextResponse.json({ ok: true, collection_id: collectionId })
+  return NextResponse.json({
+    ok: true,
+    collection_id: collectionId,
+    version: saved.version,
+    vector_clock: saved.vector_clock,
+  })
 }

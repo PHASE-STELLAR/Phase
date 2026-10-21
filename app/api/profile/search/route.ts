@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { readFile } from "node:fs/promises"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
+import { isSearchAnalyticsEnabled, recordSearchQuery, searchQueryHash } from "@/lib/search-query-log"
 import type { ProfileData } from "@/lib/profile-store"
 
 export const runtime = "nodejs"
@@ -36,6 +37,7 @@ export async function GET(request: NextRequest) {
   const q = request.nextUrl.searchParams.get("q")?.trim().toLowerCase() ?? ""
   const filter = request.nextUrl.searchParams.get("filter") ?? "all"
   const viewer = request.nextUrl.searchParams.get("viewer")?.trim() ?? ""
+  const cursor = request.nextUrl.searchParams.get("cursor") ?? ""
 
   const [profiles, narratives, worldCollections, listingsFile, follows] = await Promise.all([
     readJson<ProfileStore>(serverDataJsonPath("profileSocials")),
@@ -75,10 +77,16 @@ export async function GET(request: NextRequest) {
   // Total collector count
   const totalCollectors = Object.keys(profiles).length
 
-  // Build results from profiles
+  // Build results from profiles with cursor-based pagination
   const allResults: SearchResult[] = []
+  const sortedWallets = Object.keys(profiles).sort()
+  const cursorIndex = cursor ? Math.max(0, sortedWallets.indexOf(cursor)) : 0
+  const pageSize = 10
 
-  for (const [wallet, data] of Object.entries(profiles)) {
+  for (let i = cursorIndex; i < sortedWallets.length && allResults.length < pageSize; i++) {
+    const wallet = sortedWallets[i]!
+    const data = profiles[wallet]!
+
     const name = (data.display_name ?? "").toLowerCase()
     const twitter = (data.twitter ?? "").toLowerCase()
     const discord = (data.discord ?? "").toLowerCase()
@@ -120,13 +128,49 @@ export async function GET(request: NextRequest) {
   allResults.sort((a, b) => b.artifact_count - a.artifact_count)
 
   const results = allResults.slice(0, 10)
+  const nextCursor = results.length > 0 ? results[results.length - 1]!.wallet : null
 
   // Suggested: top 5 by artifact_count when no query
   const suggested: SearchResult[] = []
-  if (q.length < 2 && filter === "all") {
-    const top = [...allResults].sort((a, b) => b.artifact_count - a.artifact_count).slice(0, 5)
-    suggested.push(...top)
+  if (q.length < 2 && filter === "all" && !cursor) {
+    const sortedByArtifacts = [...sortedWallets]
+      .map((w) => ({
+        wallet: w,
+        artifactCount: walletArtifactCount.get(w) ?? 0,
+      }))
+      .sort((a, b) => b.artifactCount - a.artifactCount)
+      .slice(0, 5)
+
+    for (const { wallet } of sortedByArtifacts) {
+      const data = profiles[wallet]!
+      const worldName = walletWorldName.get(wallet) ?? null
+      suggested.push({
+        wallet,
+        display_name: data.display_name ?? null,
+        twitter: data.twitter ?? null,
+        discord: data.discord ?? null,
+        telegram: data.telegram ?? null,
+        artifact_count: walletArtifactCount.get(wallet) ?? 0,
+        has_world: worldName !== null,
+        world_name: worldName,
+        is_following: viewerFollowing.has(wallet),
+      })
+    }
   }
 
-  return NextResponse.json({ results, suggested, totalCollectors })
+  // Spike 613 (phase-175): non-blocking hashed query log. q<2 chars matches
+  // everything (browse), so only real queries (q>=2) are logged.
+  if (q.length >= 2 && isSearchAnalyticsEnabled()) {
+    const correctedFrom = request.nextUrl.searchParams.get("q0")?.trim() || undefined
+    void recordSearchQuery({
+      surface: "profile",
+      kind: "query",
+      query_hash: searchQueryHash(q),
+      result_count: results.length,
+      session_id: request.nextUrl.searchParams.get("sid")?.trim() || undefined,
+      corrected_from_hash: correctedFrom ? searchQueryHash(correctedFrom) : undefined,
+    }).catch(() => undefined)
+  }
+
+  return NextResponse.json({ results, suggested, totalCollectors, nextCursor })
 }

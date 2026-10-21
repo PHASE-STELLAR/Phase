@@ -15,6 +15,8 @@
  * Uso:
  *   npm run classic:distributor-trust-and-pay
  *   cd scripts && npm run distributor-trust-and-pay
+ * 
+ * Phase-134: Enhanced with balance monitoring and recommendations
  */
 import * as dotenv from "dotenv"
 import * as path from "node:path"
@@ -23,7 +25,10 @@ import {
   Asset,
   BASE_FEE,
   Horizon,
+  getLiquidityPoolId,
   Keypair,
+  LiquidityPoolAsset,
+  LiquidityPoolFeeV18,
   Networks,
   Operation,
   StrKey,
@@ -163,6 +168,49 @@ async function main() {
     console.log(`  ${base}/transactions/${trustRes.hash}\n`)
   }
 
+  // Spike 574 (phase-182): a PHASELQ/XLM pool needs a *second* trustline on the
+  // POOL SHARE asset. Without it the distributor can hold PHASELQ and XLM but
+  // can never receive LP shares, so the seed deposit fails after signing.
+  // Opt-in: LP_POOL_SEED_ENABLED=1.
+  if (process.env.LP_POOL_SEED_ENABLED?.trim() === "1") {
+    console.log("Pool seed enabled — verificando trustline de pool shares…")
+    try {
+      const accountDist = await server.loadAccount(distPub)
+      const poolAsset = new LiquidityPoolAsset(asset, Asset.native(), LiquidityPoolFeeV18)
+      const poolId = Buffer.from(
+        getLiquidityPoolId("constant_product", {
+          assetA: asset,
+          assetB: Asset.native(),
+          fee: LiquidityPoolFeeV18,
+        }),
+      ).toString("hex")
+      const hasShareLine = accountDist.balances.some(
+        (b: any) => b.asset_type === "liquidity_pool_shares" && b.liquidity_pool_id === poolId,
+      )
+      if (hasShareLine) {
+        console.log(`  Pool-share trustline ya activa (${poolId.slice(0, 12)}…).\n`)
+      } else {
+        const txPoolTrust = new TransactionBuilder(accountDist, {
+          fee: BASE_FEE,
+          networkPassphrase: Networks.TESTNET,
+        })
+          .addOperation(Operation.changeTrust({ asset: poolAsset }))
+          .setTimeout(180)
+          .build()
+        txPoolTrust.sign(distributorKp)
+        const poolTrustRes = await server.submitTransaction(txPoolTrust)
+        console.log(`  OK — changeTrust pool shares. Hash: ${poolTrustRes.hash}`)
+        console.log(`  pool_id: ${poolId}`)
+        console.log(
+          `  Siguiente: depositá LP_POOL_SEED_AMOUNT con POST /api/liquidity-pools (action=deposit) y registrá el seed con setPoolSeedReserve.\n`,
+        )
+      }
+    } catch (e) {
+      console.error("  No se pudo preparar la trustline del pool:", e instanceof Error ? e.message : e)
+      process.exit(1)
+    }
+  }
+
   console.log("Enviando payment issuer → distribuidor (firma: issuer)…")
   const accountIssuer = await server.loadAccount(issuerPub)
   const txPay = new TransactionBuilder(accountIssuer, {
@@ -183,6 +231,40 @@ async function main() {
   console.log(`  OK — payment. Hash: ${payRes.hash}`)
   console.log(`  ${base}/transactions/${payRes.hash}`)
   console.log(`  ${base}/accounts/${distPub}`)
+  
+  // Phase-134: Show post-payment balances and recommendations
+  console.log("\n=== Post-Payment Status ===")
+  try {
+    const distAccount = await server.loadAccount(distPub)
+    const phaseLiqBalance = distAccount.balances.find(
+      (b: any) => b.asset_code === code && b.asset_issuer === issuerPub
+    )
+    const xlmBalance = distAccount.balances.find((b: any) => b.asset_type === "native")
+    
+    if (phaseLiqBalance) {
+      console.log(`Distributor PHASELQ: ${phaseLiqBalance.balance} ${code}`)
+    }
+    if (xlmBalance) {
+      console.log(`Distributor XLM: ${xlmBalance.balance} XLM`)
+      const xlm = parseFloat(xlmBalance.balance)
+      if (xlm < 50) {
+        console.log(`\n⚠️  WARNING: Distributor XLM is low (${xlm.toFixed(2)} XLM)`)
+        console.log(`   Recommended: Fund with at least 50 XLM for reliable operations`)
+        console.log(`   Friendbot: https://friendbot.stellar.org/?addr=${distPub}`)
+      }
+    }
+    
+    console.log("\n💡 Next Steps:")
+    console.log("   1. Configure FAUCET_DISTRIBUTOR_SECRET_KEY in production")
+    console.log("   2. Set up cron job: /api/cron/faucet-health (hourly)")
+    console.log("   3. Configure webhooks for alerts (optional):")
+    console.log("      - DISCORD_WEBHOOK_URL")
+    console.log("      - TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID")
+    console.log("      - SLACK_WEBHOOK_URL")
+    console.log("   4. Monitor health: GET /api/faucet/health")
+  } catch (e) {
+    console.log("   (Could not fetch post-payment balances)")
+  }
 }
 
 main().catch((e) => {

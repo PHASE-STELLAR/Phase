@@ -4,6 +4,8 @@ use soroban_sdk::{
     BytesN, Env, Map, String, Symbol, Vec,
 };
 
+mod economy;
+
 /// Errores del protocolo PHASE
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -27,6 +29,29 @@ pub enum PhaseError {
     InvalidApproval = 16,
     /// Lista enumerable del dueño desincronizada (solo debería ocurrir con WASM antiguo sin `OwnerTokenList`).
     InvalidOwnerTokenList = 17,
+    // Spikes 694/697/698/699 (see src/economy.rs). Appended only; never renumber.
+    CoinAlreadyRegistered = 18,
+    CoinNotRegistered = 19,
+    CoinNotVerified = 20,
+    RewardAlreadyClaimed = 21,
+    InvalidSplit = 22,
+    TipBelowMinimum = 23,
+    SelfDeal = 24,
+    TipReplay = 25,
+    EndowmentNotFound = 26,
+    NothingToClaim = 27,
+    EndowmentLocked = 28,
+    EndowmentClosed = 29,
+    DisputeOpen = 30,
+    BondNotFound = 31,
+    BondNotActive = 32,
+    BondChallengeOpen = 33,
+    BondLocked = 34,
+    NotAuthorized = 35,
+    InvalidAmount = 36,
+    BondAlreadyPosted = 37,
+    NoOpenChallenge = 38,
+    InvalidSchedule = 39,
 }
 
 /// Configuración de una colección creada por un usuario (factory).
@@ -94,6 +119,74 @@ pub enum DataKey {
     OperatorForAll(Address, Address),
     /// Orden estable de `token_id` por titular (enumeración estilo ERC-721 `tokenOfOwnerByIndex`).
     OwnerTokenList(Address),
+    /// Rifa commit-reveal por colección (una por `collection_id`).
+    Raffle(u64),
+    /// Participantes en orden de entrada.
+    RaffleEntrants(u64),
+    /// Estado de la entrada: 1 = inscrito, 2 = reclamado (mint), 3 = reembolsado.
+    RaffleEntry(u64, Address),
+    /// Ranking publicado tras el sorteo: `[0, slots)` ganadores, `[slots, 2*slots)` suplentes.
+    RaffleRanking(u64),
+    /// Spike 574 (phase-182): pool leg declarado por el admin. Solo configuración:
+    /// el ruteo real es un path payment clásico firmado por la tesorería, porque
+    /// Soroban no puede emitir operaciones del DEX clásico.
+    PoolLegConfig,
+}
+
+/// Configuración del pool leg (PHASELQ/XLM clásico o router Soroswap).
+#[contracttype]
+#[derive(Clone)]
+pub struct PoolLegConfig {
+    pub enabled: bool,
+    /// `classic` o `soroswap` — Symbol para mantener el ABI pequeño.
+    pub venue: Symbol,
+    /// Pool id (32 bytes) en classic; router contract id en Soroswap.
+    pub pool_id: BytesN<32>,
+    pub asset_code: Symbol,
+    pub asset_issuer: Address,
+}
+
+pub const RAFFLE_STATUS_OPEN: u32 = 0;
+pub const RAFFLE_STATUS_DRAWN: u32 = 1;
+pub const RAFFLE_STATUS_ABORTED: u32 = 2;
+
+const RAFFLE_ENTRY_ENTERED: u32 = 1;
+const RAFFLE_ENTRY_CLAIMED: u32 = 2;
+const RAFFLE_ENTRY_REFUNDED: u32 = 3;
+
+/// Límites para mantener `reveal_and_draw` dentro del presupuesto de CPU de Soroban.
+pub const RAFFLE_MAX_ENTRIES: u32 = 200;
+pub const RAFFLE_MAX_SLOTS: u32 = 20;
+
+/// Sorteo justo commit-reveal:
+/// `draw_seed = sha256(seed || entry_digest || beacon)`,
+/// `entry_digest_{i+1} = sha256(entry_digest_i || strkey(entrant_i))` (inicial = 32 bytes cero),
+/// `score(w) = sha256(draw_seed || strkey(w))`; ranking ascendente por `(score, índice de entrada)`.
+/// Debe coincidir byte a byte con `computeRaffleRanking` en `lib/phase-protocol.ts`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Raffle {
+    pub collection_id: u64,
+    pub creator: Address,
+    pub commit: BytesN<32>,
+    pub slots: u32,
+    /// Escrow por entrada (precio de la colección al abrir).
+    pub price: i128,
+    /// Último ledger que acepta entradas.
+    pub close_ledger: u32,
+    /// Último ledger en que el creador puede revelar; después, reembolso total.
+    pub reveal_deadline: u32,
+    /// Ledgers de ventana de reclamo para ganadores (y otra igual para suplentes).
+    pub claim_window: u32,
+    pub status: u32,
+    pub entry_count: u32,
+    pub entry_digest: BytesN<32>,
+    pub seed: BytesN<32>,
+    /// PRNG de red en el ledger de revelado (no predecible al enviar la tx).
+    pub beacon: BytesN<32>,
+    pub draw_seed: BytesN<32>,
+    pub drawn_ledger: u32,
+    pub primary_claimed: u32,
 }
 
 /// SEP-50: permiso puntual para `transfer_from`.
@@ -256,6 +349,120 @@ fn owner_tokens_remove(env: &Env, owner: Address, token_id: u64) -> Result<(), P
     Ok(())
 }
 
+/// Escribe estado + propiedad de un NFT recién emitido; los eventos los publica cada llamador.
+fn write_minted_phase(
+    env: &Env,
+    user: &Address,
+    collection_id: u64,
+    amount: i128,
+    token_address: &Address,
+) -> u64 {
+    let counter: u64 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::PhaseCounter)
+        .unwrap_or(0);
+    let new_id = counter + 1;
+    let phase_state = PhaseState {
+        token_id: new_id,
+        collection_id,
+        timestamp: env.ledger().timestamp(),
+        amount_locked: amount,
+        token_address: token_address.clone(),
+        energy_level_bp: ENERGY_BP_MAX,
+        phase_level: String::from_str(env, "SOLID"),
+    };
+    env.storage()
+        .persistent()
+        .set(&DataKey::UserPhase(user.clone(), collection_id), &phase_state);
+    env.storage().persistent().set(&DataKey::TokenOwner(new_id), user);
+    env.storage()
+        .persistent()
+        .set(&DataKey::TokenCollection(new_id), &collection_id);
+    env.storage().persistent().set(&DataKey::PhaseCounter, &new_id);
+    adjust_nft_balance_count(env, user.clone(), 1);
+    owner_tokens_push(env, user.clone(), new_id);
+    new_id
+}
+
+/// Codificación canónica de una dirección para el sorteo: strkey ASCII (56 bytes, `G…` / `C…`).
+fn address_strkey_bytes(env: &Env, addr: &Address) -> Bytes {
+    let s = addr.to_string();
+    let n = s.len() as usize;
+    let mut buf = [0u8; 64];
+    s.copy_into_slice(&mut buf[..n]);
+    Bytes::from_slice(env, &buf[..n])
+}
+
+fn sha256_concat(env: &Env, prefix: &BytesN<32>, tail: &Bytes) -> BytesN<32> {
+    let mut b = Bytes::from_array(env, &prefix.to_array());
+    b.append(tail);
+    env.crypto().sha256(&b).to_bytes()
+}
+
+/// Top `min(N, 2*slots)` por `(score, índice)` ascendente; selección parcial O(k·N).
+fn compute_raffle_ranking(env: &Env, draw_seed: &BytesN<32>, entrants: &Vec<Address>, slots: u32) -> Vec<Address> {
+    let n = entrants.len();
+    let mut scores: Vec<BytesN<32>> = Vec::new(env);
+    for e in entrants.iter() {
+        scores.push_back(sha256_concat(env, draw_seed, &address_strkey_bytes(env, &e)));
+    }
+    let take = n.min(slots.saturating_mul(2));
+    let mut chosen = [false; RAFFLE_MAX_ENTRIES as usize];
+    let mut out: Vec<Address> = Vec::new(env);
+    for _ in 0..take {
+        let mut best: Option<(u32, BytesN<32>)> = None;
+        for i in 0..n {
+            if chosen[i as usize] {
+                continue;
+            }
+            let s = scores.get_unchecked(i);
+            let better = match &best {
+                None => true,
+                Some((_, bs)) => s < *bs,
+            };
+            if better {
+                best = Some((i, s));
+            }
+        }
+        if let Some((i, _)) = best {
+            chosen[i as usize] = true;
+            out.push_back(entrants.get_unchecked(i));
+        }
+    }
+    out
+}
+
+fn load_raffle(env: &Env, collection_id: u64) -> Result<Raffle, PhaseError> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Raffle(collection_id))
+        .ok_or(PhaseError::RaffleNotFound)
+}
+
+/// Mientras la rifa esté abierta o dentro de sus ventanas de reclamo, solo se emite vía `claim_raffle_mint`.
+fn raffle_gates_direct_mint(env: &Env, collection_id: u64) -> bool {
+    let r: Raffle = match env.storage().persistent().get(&DataKey::Raffle(collection_id)) {
+        Some(r) => r,
+        None => return false,
+    };
+    match r.status {
+        RAFFLE_STATUS_OPEN => current_ledger(env) <= r.reveal_deadline,
+        RAFFLE_STATUS_DRAWN => {
+            current_ledger(env) <= r.drawn_ledger.saturating_add(r.claim_window.saturating_mul(2))
+        }
+        _ => false,
+    }
+}
+
+fn raffle_rank(env: &Env, collection_id: u64, who: &Address) -> Option<u32> {
+    let ranking: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::RaffleRanking(collection_id))?;
+    ranking.first_index_of(who)
+}
+
 /// Convierte `Bytes` acumulados a `String` acotada (límite típico metadatos JSON).
 fn bytes_to_bounded_string(env: &Env, b: &Bytes, max: usize) -> String {
     let n = b.len() as usize;
@@ -364,6 +571,35 @@ fn resolve_image_to_https(env: &Env, raw: &String) -> String {
     } else {
         raw.clone()
     }
+}
+
+/// SEP-50: construye propiedades del NFT como JSON string.
+/// Incluye: collection, token_id, phase_level, rarity, created_at.
+fn build_metadata_properties(env: &Env, token_id: u64, phase_level: Option<String>) -> String {
+    let mut props = Bytes::from_slice(env, b"{");
+    append_literal_to_bytes(&mut props, b"\"token_id\":");
+    let id_str = u64_to_dec_string(env, token_id);
+    append_soroban_str_to_bytes(&mut props, &id_str);
+
+    if let Some(level) = phase_level {
+        if level.len() > 0 {
+            append_literal_to_bytes(&mut props, b",\"phase_level\":\"");
+            append_soroban_str_to_bytes(&mut props, &level);
+            append_literal_to_bytes(&mut props, b"\"");
+        }
+    }
+
+    let col_id_opt: Option<u64> = env.storage().persistent().get(&DataKey::TokenCollection(token_id));
+    if let Some(cid) = col_id_opt {
+        if cid > 0 {
+            append_literal_to_bytes(&mut props, b",\"collection_id\":");
+            let cid_str = u64_to_dec_string(env, cid);
+            append_soroban_str_to_bytes(&mut props, &cid_str);
+        }
+    }
+
+    append_literal_to_bytes(&mut props, b"}");
+    bytes_to_bounded_string(env, &props, 512)
 }
 
 /// Eventos alineados con OpenZeppelin / borrador SEP-50 para indexadores y wallets que lean por eventos.
@@ -621,6 +857,9 @@ impl PhaseProtocol {
         if env.storage().persistent().has(&user_phase_key) {
             return Err(PhaseError::AlreadyPhased);
         }
+        if raffle_gates_direct_mint(&env, collection_id) {
+            return Err(PhaseError::RaffleMintGated);
+        }
 
         let authorized_token: Address = env
             .storage()
@@ -644,39 +883,7 @@ impl PhaseProtocol {
         let contract_address = env.current_contract_address();
         token_client.transfer(&user, &contract_address, &required_amount);
 
-        let phase_counter: u64 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::PhaseCounter)
-            .unwrap_or(0);
-
-        let new_id = phase_counter + 1;
-
-        let phase_state = PhaseState {
-            token_id: new_id,
-            collection_id,
-            timestamp: env.ledger().timestamp(),
-            amount_locked: required_amount,
-            token_address: token_address.clone(),
-            energy_level_bp: ENERGY_BP_MAX,
-            phase_level: String::from_str(&env, "SOLID"),
-        };
-
-        env.storage()
-            .persistent()
-            .set(&user_phase_key, &phase_state);
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::TokenOwner(new_id), &user);
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::TokenCollection(new_id), &collection_id);
-
-        env.storage().persistent().set(&DataKey::PhaseCounter, &new_id);
-        adjust_nft_balance_count(&env, user.clone(), 1);
-        owner_tokens_push(&env, user.clone(), new_id);
+        let new_id = write_minted_phase(&env, &user, collection_id, required_amount, &token_address);
 
         env.events().publish(
             (Symbol::new(&env, "phase_initiated"), user.clone()),
@@ -719,6 +926,15 @@ impl PhaseProtocol {
         }
 
         user.require_auth();
+
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::UserPhase(user.clone(), collection_id))
+            && raffle_gates_direct_mint(&env, collection_id)
+        {
+            return Err(PhaseError::RaffleMintGated);
+        }
 
         let min_price = Self::required_for_collection(&env, collection_id)?;
         if amount < min_price {
@@ -785,35 +1001,7 @@ impl PhaseProtocol {
             };
             env.storage().persistent().set(&user_phase_key, &state);
         } else {
-            let counter: u64 = env
-                .storage()
-                .persistent()
-                .get(&DataKey::PhaseCounter)
-                .unwrap_or(0);
-            let new_id = counter + 1;
-            let phase_state = PhaseState {
-                token_id: new_id,
-                collection_id,
-                timestamp: env.ledger().timestamp(),
-                amount_locked: amount,
-                token_address: token_address.clone(),
-                energy_level_bp: ENERGY_BP_MAX,
-                phase_level: String::from_str(&env, "SOLID"),
-            };
-            env.storage()
-                .persistent()
-                .set(&user_phase_key, &phase_state);
-            env.storage()
-                .persistent()
-                .set(&DataKey::TokenOwner(new_id), &user);
-            env.storage()
-                .persistent()
-                .set(&DataKey::TokenCollection(new_id), &collection_id);
-            env.storage()
-                .persistent()
-                .set(&DataKey::PhaseCounter, &new_id);
-            adjust_nft_balance_count(&env, user.clone(), 1);
-            owner_tokens_push(&env, user.clone(), new_id);
+            let new_id = write_minted_phase(&env, &user, collection_id, amount, &token_address);
 
             env.events().publish(
                 (Symbol::new(&env, "phase_nft_minted"), user.clone()),
@@ -939,6 +1127,60 @@ impl PhaseProtocol {
 
     pub fn get_facilitator(env: Env) -> Address {
         env.current_contract_address()
+    }
+
+    /// Spike 574 (phase-182): declara el pool leg. Admin-only y aditivo; no
+    /// cambia `settle`. Un `pool_id` todo-cero se rechaza para que un error de
+    /// configuración no se lea como "pool " + 64 ceros.
+    pub fn set_pool_leg(env: Env, admin: Address, config: PoolLegConfig) {
+        let stored: Address = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("Admin"))
+            .expect("Admin not set — call initialize first");
+        if stored != admin {
+            panic!("only admin can set the pool leg");
+        }
+        admin.require_auth();
+        if config.pool_id == BytesN::from_array(&env, &[0u8; 32]) {
+            panic!("pool leg requires a non-zero pool id");
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::PoolLegConfig, &config.clone());
+        env.events().publish(
+            (Symbol::new(&env, "pool_leg_set"), admin),
+            (config.enabled, config.venue, config.pool_id),
+        );
+    }
+
+    /// Lectura del pool leg. `None` cuando la integración está apagada o nunca
+    /// se configuró; los clientes deben tratar `None` como "sin pool leg".
+    pub fn get_pool_leg(env: Env) -> Option<PoolLegConfig> {
+        env.storage().persistent().get(&DataKey::PoolLegConfig)
+    }
+
+    /// Desactiva el pool leg sin borrar la configuración (rollback barato).
+    pub fn clear_pool_leg(env: Env, admin: Address) {
+        let stored: Address = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("Admin"))
+            .expect("Admin not set — call initialize first");
+        if stored != admin {
+            panic!("only admin can clear the pool leg");
+        }
+        admin.require_auth();
+        if let Some(mut config) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, PoolLegConfig>(&DataKey::PoolLegConfig)
+        {
+            config.enabled = false;
+            env.storage()
+                .persistent()
+                .set(&DataKey::PoolLegConfig, &config);
+        }
     }
 
     /// Colección (Freighter / SEP-0050 / SEP-41 metadata): lectura on-chain sin estado.
@@ -1232,6 +1474,7 @@ impl PhaseProtocol {
     }
 
     /// SEP-0050: metadatos como `Map<Symbol, String>`. `image` resuelto a HTTPS (ipfs:// → gateway).
+    /// Incluye campos requeridos: name, description, image, mime_type, properties.
     pub fn token_metadata(env: Env, token_id: u32) -> Map<Symbol, String> {
         if env
             .storage()
@@ -1243,19 +1486,129 @@ impl PhaseProtocol {
         }
         let name = build_token_display_name(&env, token_id as u64);
         let phase_level = Self::get_phase_level(env.clone(), token_id as u64);
-        let description = build_metadata_description_string(&env, phase_level);
+        let description = build_metadata_description_string(&env, phase_level.clone());
         let raw_image = build_token_image_raw_string(&env, token_id as u64);
         let image = resolve_image_to_https(&env, &raw_image);
         let mut m = Map::new(&env);
         m.set(Symbol::new(&env, "name"), name);
         m.set(Symbol::new(&env, "description"), description);
         m.set(Symbol::new(&env, "image"), image);
+        m.set(Symbol::new(&env, "mime_type"), String::from_str(&env, "image/png"));
+        let props = build_metadata_properties(&env, token_id as u64, phase_level);
+        m.set(Symbol::new(&env, "properties"), props);
         m
     }
 
     /// Alias `u64` para backwards compat.
     pub fn token_metadata_u64(env: Env, token_id: u64) -> Map<Symbol, String> {
         Self::token_metadata(env, token_id as u32)
+    }
+
+    /// Spike 673: reserva atómica de la siguiente edición (falla si el cap está agotado).
+    /// Llamar antes de `initiate_phase` para serializar mints concurrentes bajo supply limitada.
+    pub fn mint_next_edition(env: Env, collection_id: u64) -> Result<u64, PhaseError> {
+        let cap: u64 = env.storage().persistent().get(&DataKey::EditionCap(collection_id)).unwrap_or(10_000u64);
+        let cur: u64 = env.storage().persistent().get(&DataKey::EditionCounter(collection_id)).unwrap_or(0);
+        let next = cur.saturating_add(1);
+        if next > cap {
+            return Err(PhaseError::EditionSupplyExhausted);
+        }
+        env.storage().persistent().set(&DataKey::EditionCounter(collection_id), &next);
+        env.events().publish((Symbol::new(&env, "edition_reserved"), collection_id), next);
+        Ok(next)
+    }
+
+    /// Spike 673: fija el cap de ediciones de una colección (solo creador). None = legacy 10_000.
+    pub fn set_edition_cap(env: Env, creator: Address, collection_id: u64, cap: u64) -> Result<(), PhaseError> {
+        creator.require_auth();
+        let settings: CollectionSettings = env.storage().persistent().get(&DataKey::Collection(collection_id)).ok_or(PhaseError::InvalidCollection)?;
+        if settings.creator != creator {
+            return Err(PhaseError::UnauthorizedApprover);
+        }
+        env.storage().persistent().set(&DataKey::EditionCap(collection_id), &cap);
+        Ok(())
+    }
+
+    /// Spike 674: compromete payees N-way (suma bps <= 10000, máx 20). Solo creador.
+    pub fn set_split_payees(env: Env, creator: Address, collection_id: u64, payees: Vec<(Address, u32)>) -> Result<(), PhaseError> {
+        creator.require_auth();
+        let settings: CollectionSettings = env.storage().persistent().get(&DataKey::Collection(collection_id)).ok_or(PhaseError::InvalidCollection)?;
+        if settings.creator != creator {
+            return Err(PhaseError::UnauthorizedApprover);
+        }
+        if payees.len() > 20 {
+            return Err(PhaseError::InvalidSplitPayees);
+        }
+        let mut total: u32 = 0;
+        let mut i: u32 = 0;
+        while i < payees.len() {
+            let (_, bps) = payees.get(i).unwrap();
+            total = total.saturating_add(bps);
+            i += 1;
+        }
+        if total > 10_000 {
+            return Err(PhaseError::InvalidSplitPayees);
+        }
+        env.storage().persistent().set(&DataKey::SplitPayees(collection_id), &payees);
+        Ok(())
+    }
+
+    /// Spike 672: fija la ventana del drop (timestamps ledger). Solo creador.
+    pub fn set_drop_window(env: Env, creator: Address, collection_id: u64, start_at: u64, end_at: u64) -> Result<(), PhaseError> {
+        creator.require_auth();
+        let settings: CollectionSettings = env.storage().persistent().get(&DataKey::Collection(collection_id)).ok_or(PhaseError::InvalidCollection)?;
+        if settings.creator != creator {
+            return Err(PhaseError::UnauthorizedApprover);
+        }
+        if end_at != 0 && end_at < start_at {
+            return Err(PhaseError::InvalidCollectionMetadata);
+        }
+        env.storage().persistent().set(&DataKey::DropWindow(collection_id), &(start_at, end_at));
+        Ok(())
+    }
+
+    /// Spike 672: gate de ventana — revierte con DropNotLive fuera de [start, end].
+    pub fn assert_drop_live(env: Env, collection_id: u64) -> Result<(), PhaseError> {
+        if let Some((start, end)) = env.storage().persistent().get::<DataKey, (u64, u64)>(&DataKey::DropWindow(collection_id)) {
+            let now = env.ledger().timestamp();
+            if now < start || (end != 0 && now > end) {
+                return Err(PhaseError::DropNotLive);
+            }
+        }
+        Ok(())
+    }
+
+    /// Spike 675: fija config Dutch (start >= floor). Solo creador.
+    pub fn set_dutch_config(env: Env, creator: Address, collection_id: u64, start_price: i128, floor_price: i128, end_at: u64) -> Result<(), PhaseError> {
+        creator.require_auth();
+        let settings: CollectionSettings = env.storage().persistent().get(&DataKey::Collection(collection_id)).ok_or(PhaseError::InvalidCollection)?;
+        if settings.creator != creator {
+            return Err(PhaseError::UnauthorizedApprover);
+        }
+        if start_price < floor_price || floor_price <= 0 {
+            return Err(PhaseError::AmountBelowCollectionPrice);
+        }
+        env.storage().persistent().set(&DataKey::DutchConfig(collection_id), &(start_price, floor_price, end_at));
+        Ok(())
+    }
+
+    /// Spike 675: quote determinista price(t) = max(floor, start - tick*elapsed). Tick lineal por tiempo.
+    pub fn dutch_quote(env: Env, collection_id: u64, start_at: u64) -> Result<i128, PhaseError> {
+        if let Some((start, floor, end)) = env.storage().persistent().get::<DataKey, (i128, i128, u64)>(&DataKey::DutchConfig(collection_id)) {
+            let now = env.ledger().timestamp();
+            if now >= end {
+                return Ok(floor);
+            }
+            if now <= start_at || end <= start_at {
+                return Ok(start);
+            }
+            let elapsed = (now - start_at) as i128;
+            let span = (end - start_at) as i128;
+            let drop = (start - floor) * elapsed / span;
+            let q = start - drop;
+            return Ok(if q < floor { floor } else { q });
+        }
+        Self::required_for_collection(&env, collection_id)
     }
 
     pub fn get_energy_level_bp(env: Env, user: Address, collection_id: u64) -> Option<u32> {
@@ -1265,10 +1618,338 @@ impl PhaseProtocol {
             .get::<DataKey, PhaseState>(&key)
             .map(|s| s.energy_level_bp)
     }
+
+    // --- RIFA COMMIT-REVEAL ---
+
+    /// El creador compromete `commit = sha256(seed)` antes de abrir entradas.
+    pub fn open_raffle(
+        env: Env,
+        creator: Address,
+        collection_id: u64,
+        commit: BytesN<32>,
+        slots: u32,
+        close_ledger: u32,
+        reveal_deadline: u32,
+        claim_window: u32,
+    ) -> Result<(), PhaseError> {
+        creator.require_auth();
+        let settings: CollectionSettings = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Collection(collection_id))
+            .ok_or(PhaseError::InvalidCollection)?;
+        if settings.creator != creator {
+            return Err(PhaseError::InvalidCollection);
+        }
+        if env.storage().persistent().has(&DataKey::Raffle(collection_id)) {
+            return Err(PhaseError::RaffleAlreadyExists);
+        }
+        if slots == 0
+            || slots > RAFFLE_MAX_SLOTS
+            || close_ledger <= current_ledger(&env)
+            || reveal_deadline <= close_ledger
+            || claim_window == 0
+        {
+            return Err(PhaseError::RaffleInvalidParams);
+        }
+        let zero = BytesN::from_array(&env, &[0u8; 32]);
+        let raffle = Raffle {
+            collection_id,
+            creator: creator.clone(),
+            commit: commit.clone(),
+            slots,
+            price: settings.price,
+            close_ledger,
+            reveal_deadline,
+            claim_window,
+            status: RAFFLE_STATUS_OPEN,
+            entry_count: 0,
+            entry_digest: zero.clone(),
+            seed: zero.clone(),
+            beacon: zero.clone(),
+            draw_seed: zero,
+            drawn_ledger: 0,
+            primary_claimed: 0,
+        };
+        env.storage().persistent().set(&DataKey::Raffle(collection_id), &raffle);
+        env.storage()
+            .persistent()
+            .set(&DataKey::RaffleEntrants(collection_id), &Vec::<Address>::new(&env));
+        env.events().publish(
+            (Symbol::new(&env, "raffle_opened"), collection_id),
+            (creator, commit, slots, close_ledger, reveal_deadline),
+        );
+        Ok(())
+    }
+
+    /// Una entrada por wallet; el precio queda en escrow del contrato hasta reclamo o reembolso.
+    pub fn enter_raffle(env: Env, entrant: Address, collection_id: u64) -> Result<u32, PhaseError> {
+        entrant.require_auth();
+        let mut r = load_raffle(&env, collection_id)?;
+        if r.status != RAFFLE_STATUS_OPEN || current_ledger(&env) > r.close_ledger {
+            return Err(PhaseError::RaffleClosed);
+        }
+        if entrant == r.creator {
+            return Err(PhaseError::RaffleSelfEntry);
+        }
+        let entry_key = DataKey::RaffleEntry(collection_id, entrant.clone());
+        if env.storage().persistent().has(&entry_key) {
+            return Err(PhaseError::RaffleAlreadyEntered);
+        }
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::UserPhase(entrant.clone(), collection_id))
+        {
+            return Err(PhaseError::AlreadyPhased);
+        }
+        if r.entry_count >= RAFFLE_MAX_ENTRIES {
+            return Err(PhaseError::RaffleFull);
+        }
+
+        let token_address: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AuthorizedToken)
+            .expect("Contract not initialized");
+        let token_client = token::Client::new(&env, &token_address);
+        if token_client.balance(&entrant) < r.price {
+            return Err(PhaseError::InsufficientBalance);
+        }
+        token_client.transfer(&entrant, &env.current_contract_address(), &r.price);
+
+        r.entry_digest = sha256_concat(&env, &r.entry_digest, &address_strkey_bytes(&env, &entrant));
+        r.entry_count += 1;
+        let entrants_key = DataKey::RaffleEntrants(collection_id);
+        let mut entrants: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&entrants_key)
+            .unwrap_or_else(|| Vec::new(&env));
+        entrants.push_back(entrant.clone());
+        env.storage().persistent().set(&entrants_key, &entrants);
+        env.storage().persistent().set(&entry_key, &RAFFLE_ENTRY_ENTERED);
+        env.storage().persistent().set(&DataKey::Raffle(collection_id), &r);
+
+        env.events().publish(
+            (Symbol::new(&env, "raffle_entered"), collection_id),
+            (entrant, r.entry_count),
+        );
+        Ok(r.entry_count)
+    }
+
+    /// Revela `seed` (verificado contra `commit`), mezcla el digest de entradas y el PRNG de red,
+    /// y publica el ranking. Permisionado por conocimiento de la semilla, no por firma.
+    pub fn reveal_and_draw(env: Env, collection_id: u64, seed: BytesN<32>) -> Result<Vec<Address>, PhaseError> {
+        let mut r = load_raffle(&env, collection_id)?;
+        if r.status != RAFFLE_STATUS_OPEN {
+            return Err(PhaseError::RaffleClosed);
+        }
+        let now = current_ledger(&env);
+        if now <= r.close_ledger {
+            return Err(PhaseError::RaffleNotClosed);
+        }
+        if now > r.reveal_deadline {
+            return Err(PhaseError::RaffleRevealExpired);
+        }
+        let seed_bytes = Bytes::from_array(&env, &seed.to_array());
+        if env.crypto().sha256(&seed_bytes).to_bytes() != r.commit {
+            return Err(PhaseError::RaffleCommitMismatch);
+        }
+
+        let beacon: BytesN<32> = env.prng().gen();
+        let mut mix = Bytes::from_array(&env, &r.entry_digest.to_array());
+        mix.append(&Bytes::from_array(&env, &beacon.to_array()));
+        let draw_seed = sha256_concat(&env, &seed, &mix);
+
+        let entrants: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RaffleEntrants(collection_id))
+            .unwrap_or_else(|| Vec::new(&env));
+        let ranking = compute_raffle_ranking(&env, &draw_seed, &entrants, r.slots);
+
+        r.status = RAFFLE_STATUS_DRAWN;
+        r.seed = seed.clone();
+        r.beacon = beacon.clone();
+        r.draw_seed = draw_seed.clone();
+        r.drawn_ledger = now;
+        env.storage().persistent().set(&DataKey::Raffle(collection_id), &r);
+        env.storage()
+            .persistent()
+            .set(&DataKey::RaffleRanking(collection_id), &ranking);
+
+        env.events().publish(
+            (Symbol::new(&env, "raffle_drawn"), collection_id),
+            (seed, beacon, draw_seed, r.entry_count),
+        );
+        Ok(ranking)
+    }
+
+    /// Ganadores (`rank < slots`) reclaman en `(drawn, drawn + claim_window]`; suplentes cubren los cupos
+    /// no reclamados en la segunda ventana, en orden de ranking.
+    pub fn claim_raffle_mint(env: Env, winner: Address, collection_id: u64) -> Result<u64, PhaseError> {
+        winner.require_auth();
+        let mut r = load_raffle(&env, collection_id)?;
+        if r.status != RAFFLE_STATUS_DRAWN {
+            return Err(PhaseError::RaffleNotDrawn);
+        }
+        let entry_key = DataKey::RaffleEntry(collection_id, winner.clone());
+        match env.storage().persistent().get::<DataKey, u32>(&entry_key) {
+            Some(RAFFLE_ENTRY_ENTERED) => {}
+            Some(RAFFLE_ENTRY_CLAIMED) => return Err(PhaseError::RaffleAlreadyClaimed),
+            _ => return Err(PhaseError::RaffleNotAWinner),
+        }
+        let rank = raffle_rank(&env, collection_id, &winner).ok_or(PhaseError::RaffleNotAWinner)?;
+        let now = current_ledger(&env);
+        let primary_end = r.drawn_ledger.saturating_add(r.claim_window);
+        if rank < r.slots {
+            if now > primary_end {
+                return Err(PhaseError::RaffleClaimWindowClosed);
+            }
+            r.primary_claimed += 1;
+        } else {
+            if now <= primary_end || now > primary_end.saturating_add(r.claim_window) {
+                return Err(PhaseError::RaffleClaimWindowClosed);
+            }
+            if rank - r.slots >= r.slots - r.primary_claimed {
+                return Err(PhaseError::RaffleNotAWinner);
+            }
+        }
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::UserPhase(winner.clone(), collection_id))
+        {
+            return Err(PhaseError::AlreadyPhased);
+        }
+
+        let token_address: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AuthorizedToken)
+            .expect("Contract not initialized");
+        let token_client = token::Client::new(&env, &token_address);
+        let treasury: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProtocolTreasury)
+            .expect("Treasury not set");
+        let contract_address = env.current_contract_address();
+        let creator_share = r.price * FEE_CREATOR_BP / FEE_DENOM;
+        let protocol_share = r.price.saturating_sub(creator_share);
+        if creator_share > 0 {
+            token_client.transfer(&contract_address, &r.creator, &creator_share);
+        }
+        if protocol_share > 0 {
+            token_client.transfer(&contract_address, &treasury, &protocol_share);
+        }
+
+        let new_id = write_minted_phase(&env, &winner, collection_id, r.price, &token_address);
+        env.storage().persistent().set(&entry_key, &RAFFLE_ENTRY_CLAIMED);
+        env.storage().persistent().set(&DataKey::Raffle(collection_id), &r);
+
+        env.events().publish(
+            (Symbol::new(&env, "raffle_claimed"), collection_id),
+            (winner.clone(), new_id, rank),
+        );
+        env.events().publish(
+            (Symbol::new(&env, "phase_nft_minted"), winner.clone()),
+            (new_id, r.price),
+        );
+        emit_indexer_mint(&env, winner, new_id);
+        Ok(new_id)
+    }
+
+    /// Devuelve el escrow al participante (permisionless; los fondos solo van al `entrant`):
+    /// no ranqueado tras el sorteo, ranqueado sin reclamar tras ambas ventanas, o rifa abortada
+    /// porque el creador no reveló antes de `reveal_deadline`.
+    pub fn refund_raffle_entry(env: Env, entrant: Address, collection_id: u64) -> Result<(), PhaseError> {
+        let mut r = load_raffle(&env, collection_id)?;
+        let entry_key = DataKey::RaffleEntry(collection_id, entrant.clone());
+        if env.storage().persistent().get::<DataKey, u32>(&entry_key) != Some(RAFFLE_ENTRY_ENTERED) {
+            return Err(PhaseError::RaffleRefundUnavailable);
+        }
+        let now = current_ledger(&env);
+        let eligible = match r.status {
+            RAFFLE_STATUS_OPEN if now > r.reveal_deadline => {
+                r.status = RAFFLE_STATUS_ABORTED;
+                env.storage().persistent().set(&DataKey::Raffle(collection_id), &r);
+                env.events()
+                    .publish((Symbol::new(&env, "raffle_aborted"), collection_id), r.entry_count);
+                true
+            }
+            RAFFLE_STATUS_ABORTED => true,
+            RAFFLE_STATUS_DRAWN => match raffle_rank(&env, collection_id, &entrant) {
+                None => true,
+                Some(_) => now > r.drawn_ledger.saturating_add(r.claim_window.saturating_mul(2)),
+            },
+            _ => false,
+        };
+        if !eligible {
+            return Err(PhaseError::RaffleRefundUnavailable);
+        }
+
+        let token_address: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AuthorizedToken)
+            .expect("Contract not initialized");
+        token::Client::new(&env, &token_address).transfer(
+            &env.current_contract_address(),
+            &entrant,
+            &r.price,
+        );
+        env.storage().persistent().set(&entry_key, &RAFFLE_ENTRY_REFUNDED);
+        env.events().publish(
+            (Symbol::new(&env, "raffle_refunded"), collection_id),
+            (entrant, r.price),
+        );
+        Ok(())
+    }
+
+    pub fn get_raffle(env: Env, collection_id: u64) -> Option<Raffle> {
+        env.storage().persistent().get(&DataKey::Raffle(collection_id))
+    }
+
+    /// Paginado por índice de entrada (orden canónico para recomputar `entry_digest`).
+    pub fn get_raffle_entrants(env: Env, collection_id: u64, start: u32, limit: u32) -> Vec<Address> {
+        let all: Vec<Address> = match env
+            .storage()
+            .persistent()
+            .get(&DataKey::RaffleEntrants(collection_id))
+        {
+            Some(v) => v,
+            None => return Vec::new(&env),
+        };
+        let end = start.saturating_add(limit.min(RAFFLE_MAX_ENTRIES)).min(all.len());
+        if start >= end {
+            return Vec::new(&env);
+        }
+        all.slice(start..end)
+    }
+
+    pub fn get_raffle_ranking(env: Env, collection_id: u64) -> Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::RaffleRanking(collection_id))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// 0 = sin entrada, 1 = inscrito, 2 = reclamado, 3 = reembolsado.
+    pub fn get_raffle_entry_status(env: Env, collection_id: u64, entrant: Address) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::RaffleEntry(collection_id, entrant))
+            .unwrap_or(0)
+    }
+
+    /// Spike 608: Exposes the pinned Soroban SDK / ABI version (`22000` for soroban-sdk 22.0.0)
+    /// so grouped dependency updates and staging dry-runs can verify WASM ABI parity.
+    pub fn soroban_abi_version(_env: Env) -> u32 {
+        22_000
+    }
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
-    use soroban_sdk::testutils::Address as _;
-}
+mod test;

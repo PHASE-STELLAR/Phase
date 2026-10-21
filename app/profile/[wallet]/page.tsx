@@ -6,7 +6,7 @@ import { getFollowCounts } from "@/lib/follow-store"
 import { getSignals } from "@/lib/signal-store"
 import { getAchievements } from "@/lib/achievement-store"
 import { SocialChipsPublic } from "./social-chips-public"
-import { FollowButton } from "./follow-button"
+import { FollowButton, FollowSuggestions } from "./follow-button"
 
 type Props = {
   params: Promise<{ wallet: string }>
@@ -126,6 +126,8 @@ export default async function ProfilePage({ params }: Props) {
             </div>
           )}
         </section>
+
+        <FollowSuggestions profileWallet={wallet} />
 
         {/* Recent activity */}
         {(recentSignals.length > 0 || nfts.length > 0) && (

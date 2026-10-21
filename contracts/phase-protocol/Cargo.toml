@@ -22,3 +22,10 @@ debug-assertions = false
 panic = "abort"
 codegen-units = 1
 lto = true
+
+[package.metadata.phase_cadence]
+wasm_target = "wasm32-unknown-unknown"
+soroban_sdk_major = 22
+soroban_abi_version = 22000
+stellar_cli_version = "23.0.0"
+

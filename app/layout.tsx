@@ -1,10 +1,13 @@
 import type React from "react"
-import type { Metadata } from "next"
+import type { Viewport, Metadata } from "next"
 import { IBM_Plex_Sans, IBM_Plex_Mono, Bebas_Neue, Orbitron } from "next/font/google"
 import { Analytics } from "@vercel/analytics/next"
 import { AppProviders } from "@/components/app-providers"
 import { SmoothScroll } from "@/components/smooth-scroll"
+import { WebVitalsReporter } from "@/components/web-vitals-reporter"
 import "./globals.css"
+
+export const viewport: Viewport = { width: "device-width", initialScale: 1, viewportFit: "cover" }
 
 const PRODUCTION_SITE = "https://www.phasee.xyz"
 
@@ -23,17 +26,29 @@ const ibmPlexSans = IBM_Plex_Sans({
   weight: ["400", "500", "600", "700"],
   subsets: ["latin"],
   variable: "--font-ibm-plex-sans",
+  display: "swap",
+  fallback: ["system-ui", "sans-serif"],
 })
 const ibmPlexMono = IBM_Plex_Mono({
   weight: ["400", "500"],
   subsets: ["latin"],
   variable: "--font-ibm-plex-mono",
+  display: "swap",
+  fallback: ["monospace"],
 })
-const bebasNeue = Bebas_Neue({ weight: "400", subsets: ["latin"], variable: "--font-bebas" })
+const bebasNeue = Bebas_Neue({
+  weight: "400",
+  subsets: ["latin"],
+  variable: "--font-bebas",
+  display: "optional",
+  fallback: ["sans-serif"],
+})
 const orbitron = Orbitron({
   subsets: ["latin"],
   variable: "--font-orbitron",
   weight: ["600", "700", "800"],
+  display: "optional",
+  fallback: ["sans-serif"],
 })
 
 const defaultTitle = "P H A S E   P R O T O C O L"
@@ -126,7 +141,10 @@ export default function RootLayout({
           }}
         />
         <SmoothScroll>
-          <AppProviders>{children}</AppProviders>
+          <AppProviders>
+            <WebVitalsReporter />
+            {children}
+          </AppProviders>
         </SmoothScroll>
         <Analytics />
       </body>

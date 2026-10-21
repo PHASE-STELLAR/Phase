@@ -6,6 +6,13 @@ import {
   phaseProtocolContractIdForServer,
 } from "@/lib/phase-protocol"
 import { mercuryConfigured, fetchTokenIdsOwnedByMercury } from "@/lib/mercury-classic"
+import {
+  getCachedWalletNftIndex,
+  setCachedWalletNftIndex,
+  isWalletNftIndexEntryFresh,
+  isWalletNftIndexCacheEnabled,
+  logWalletNftIndexScan,
+} from "@/lib/wallet-nft-index-cache"
 
 export const dynamic = "force-dynamic"
 
@@ -53,28 +60,101 @@ export async function GET(request: NextRequest) {
   const scanConc = intEnv("PHASE_NFT_WALLET_SCAN_CONCURRENCY", 8, 1, 16)
   const metaConc = intEnv("PHASE_NFT_WALLET_METADATA_CONCURRENCY", 4, 1, 12)
 
-  // Mercury Classic es más rápido que RPC scan — úsalo si está configurado
+  // phase-135: serve from the wallet NFT index cache when fresh, and fall
+  // back to stale cached data (instead of a 503) if every live path fails.
+  const cacheOn = isWalletNftIndexCacheEnabled()
+  const cached = cacheOn ? getCachedWalletNftIndex(contractId, address) : null
+  const scanStart = Date.now()
+
   let tokenIds: number[]
   let indexedVia: string
-  if (mercuryConfigured()) {
-    try {
-      tokenIds = await fetchTokenIdsOwnedByMercury(contractId, address)
-      indexedVia = "mercury-classic"
-    } catch {
-      tokenIds = await fetchOwnedPhaseTokenIdsForWallet(address, {
+  let cacheHit = false
+
+  if (cacheOn && cached && isWalletNftIndexEntryFresh(cached)) {
+    tokenIds = cached.tokenIds
+    indexedVia = cached.indexedVia
+    cacheHit = true
+  } else {
+    const runLiveScan = async (): Promise<{ tokenIds: number[]; indexedVia: string }> => {
+      // Mercury Classic es más rápido que RPC scan — úsalo si está configurado
+      if (mercuryConfigured()) {
+        try {
+          return { tokenIds: await fetchTokenIdsOwnedByMercury(contractId, address), indexedVia: "mercury-classic" }
+        } catch {
+          const ids = await fetchOwnedPhaseTokenIdsForWallet(address, {
+            contractId,
+            maxTokenIdCap: scanCap,
+            concurrency: scanConc,
+          })
+          return { tokenIds: ids, indexedVia: "soroban-rpc-fallback" }
+        }
+      }
+      const ids = await fetchOwnedPhaseTokenIdsForWallet(address, {
         contractId,
         maxTokenIdCap: scanCap,
         concurrency: scanConc,
       })
-      indexedVia = "soroban-rpc-fallback"
+      return { tokenIds: ids, indexedVia: "soroban-rpc" }
     }
-  } else {
-    tokenIds = await fetchOwnedPhaseTokenIdsForWallet(address, {
+
+    if (!cacheOn) {
+      const live = await runLiveScan()
+      tokenIds = live.tokenIds
+      indexedVia = live.indexedVia
+    } else {
+      try {
+        const live = await runLiveScan()
+        tokenIds = live.tokenIds
+        indexedVia = live.indexedVia
+        setCachedWalletNftIndex(contractId, address, tokenIds, indexedVia)
+      } catch (e) {
+        if (cached) {
+          // Every live path failed — degrade to the last-known-good index
+          // instead of surfacing a 503 to the wallet/Explore UI.
+          tokenIds = cached.tokenIds
+          indexedVia = `${cached.indexedVia}-stale`
+          cacheHit = true
+        } else {
+          logWalletNftIndexScan({
+            contractId,
+            address,
+            indexedVia: "unavailable",
+            durationMs: Date.now() - scanStart,
+            tokenCount: 0,
+            cacheHit: false,
+          })
+          return NextResponse.json(
+            {
+              contractId,
+              owner: address,
+              tokenIds: [],
+              items: [],
+              indexedVia: "unavailable",
+              error: e instanceof Error ? e.message : String(e),
+            },
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json; charset=utf-8",
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "private, no-store",
+              },
+            },
+          )
+        }
+      }
+    }
+  }
+
+  if (cacheOn) {
+    logWalletNftIndexScan({
       contractId,
-      maxTokenIdCap: scanCap,
-      concurrency: scanConc,
+      address,
+      indexedVia,
+      durationMs: Date.now() - scanStart,
+      tokenCount: tokenIds.length,
+      cacheHit,
     })
-    indexedVia = "soroban-rpc"
   }
 
   const items = await mapWithConcurrency(tokenIds, metaConc, async (tokenId) => {

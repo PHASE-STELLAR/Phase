@@ -1,6 +1,9 @@
 "use client"
 
 import { albedoImplicitTxAllowed, isAlbedoSelectedInKit } from "@/lib/albedo-intent-client"
+import { albedoRetiredSignMessage, isAlbedoRetired } from "@/lib/albedo-sunset"
+import { useMobileViewport, useMobileDialogFocus } from "@/hooks/use-mobile"
+import { MobileControls } from "@/components/mobile-controls"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react"
@@ -18,6 +21,13 @@ import { fetchArtistAlias } from "@/lib/artist-profile-client"
 import { humanizePhaseHostErrorMessage } from "@/lib/phase-host-error"
 import { pickCopy } from "@/lib/phase-copy"
 import { cn } from "@/lib/utils"
+import { GatewayHealthDashboard } from "@/components/gateway-health-dashboard"
+import { QrScannerModal } from "@/components/qr-scanner-modal"
+import type { ParsedQrPayload } from "@/lib/qr-code"
+import { recordMobileDeepLinkReturn } from "@/lib/walletconnect-resilience"
+import { isFeatureEnabled } from "@/lib/feature-flags"
+import { decodeSorobanTransaction } from "@/lib/ledger-soroban-decoder"
+
 import {
   buildClassicTrustlineTransactionXdr,
   classicLiqAssetConfigFromPublicEnv,
@@ -61,6 +71,10 @@ import {
   stroopsToLiqDisplay,
 } from "@/lib/phase-protocol"
 import { PhaseArtifactVisualizer, type ArtifactVerificationMode } from "@/components/phase-artifact-visualizer"
+import { ChamberLogStream } from "@/components/chamber/log-stream"
+import { ChamberCatalogThumb } from "@/components/chamber/catalog-thumb"
+import { PhaserLiqTokenLink } from "@/components/chamber/phaser-liq-token-link"
+import { chamberChromeNav, chamberChromeNavHere, chamberChromePrimaryBtn, chamberChromeRefreshBtn } from "@/components/chamber/chamber-chrome"
 
 /** Primer `G…` válido en el texto del portapapeles (una línea o varias). */
 function recipientGFromClipboardText(text: string, isValidG: (addr: string) => boolean): string {
@@ -88,104 +102,18 @@ function formatPowerBp(bp: number) {
   return `${Math.round(safeBp / 100)}%`
 }
 
-function ChamberLogStream({
-  lines,
-  endRef,
-}: {
-  lines: { id: number; text: string }[]
-  endRef: RefObject<HTMLDivElement | null>
-}) {
-  return (
-    <>
-      {lines.map((l, i) => {
-        const fault = /FAIL|Failed|ERROR|FAULT|ABORT|REJECT|denied|timeout|sequence|desync/i.test(l.text)
-        return (
-          <div
-            key={l.id}
-            className={cn(
-              !fault &&
-                "tactical-log-line mb-2 border-l-2 border-[#39ff14]/35 pl-2.5 font-mono text-[11px] leading-relaxed tracking-wide text-[#7df5d8] sm:text-xs sm:leading-relaxed",
-              fault && "tactical-log-emergency mb-2 font-mono text-[11px] leading-relaxed sm:text-xs",
-            )}
-            style={!fault ? { animationDelay: `${Math.min(i, 8) * 65}ms` } : undefined}
-          >
-            <span className="break-words whitespace-pre-wrap">{l.text}</span>
-          </div>
-        )
-      })}
-      <div ref={endRef} />
-    </>
-  )
-}
 
-function ChamberCatalogThumb({ collectionId, uri }: { collectionId: number; uri: string }) {
-  const [broken, setBroken] = useState(false)
-  if (!uri.trim() || broken) {
-    return (
-      <span className="px-1 text-center text-[7px] font-bold uppercase leading-tight text-cyan-500/80">
-        #{collectionId}
-      </span>
-    )
-  }
-  return (
-    <IpfsDisplayImg
-      uri={uri}
-      className="h-full w-full object-cover"
-      loading="lazy"
-      onExhausted={() => setBroken(true)}
-    />
-  )
-}
+
+
 
 /** Enlace al asset PHASELQ en Stellar Expert (icono + símbolo). */
-function PhaserLiqTokenLink({
-  href,
-  symbol,
-  iconClassName,
-  className,
-  variant = "default",
-}: {
-  href: string
-  symbol: string
-  iconClassName?: string
-  className?: string
-  variant?: "default" | "violet"
-}) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      title={href}
-      onClick={(e) => {
-        e.stopPropagation()
-        playTacticalUiClick()
-      }}
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-sm border border-transparent font-mono tracking-normal underline-offset-[3px] transition-colors hover:underline focus:outline-none",
-        variant === "violet"
-          ? "text-violet-200/95 hover:border-violet-500/45 hover:bg-violet-950/35 hover:text-violet-50 focus-visible:ring-2 focus-visible:ring-violet-400/55"
-          : "text-cyan-400/95 hover:border-cyan-500/45 hover:bg-cyan-950/35 hover:text-cyan-50 focus-visible:ring-2 focus-visible:ring-cyan-400/60",
-        className,
-      )}
-    >
-      <TokenIcon className={cn("shrink-0", iconClassName ?? "h-4 w-4")} />
-      {symbol}
-    </a>
-  )
-}
+
 
 /** Same zinc / violet chrome as `/dashboard` (Phase Market). */
-const chamberChromeNav =
-  "inline-flex min-h-[36px] items-center rounded-sm border border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-zinc-400 transition-colors hover:border-violet-500/50 hover:text-violet-300"
-const chamberChromeNavHere =
-  "inline-flex min-h-[36px] items-center rounded-sm border border-violet-600/50 bg-violet-950/50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-violet-300"
-const chamberChromePrimaryBtn =
-  "flex min-h-[46px] w-full items-center justify-center bg-gradient-to-r from-violet-600 to-cyan-500 py-3 text-center text-[11px] font-bold uppercase tracking-wide text-white shadow-[0_0_18px_rgba(139,92,246,0.35)] transition-opacity hover:opacity-90 disabled:pointer-events-none"
-const chamberChromeRefreshBtn =
-  "flex items-center gap-1.5 rounded-sm border border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-zinc-400 transition-colors hover:border-violet-500/50 hover:text-violet-300 disabled:opacity-40"
+
 
 export function FusionChamber() {
+  useMobileViewport()
   const router = useRouter()
   const { lang } = useLang()
   const ch = pickCopy(lang).chamber
@@ -208,7 +136,8 @@ export function FusionChamber() {
     return Number.isFinite(n) && n >= 0 ? n : 0
   }, [searchParams])
 
-  const { address, connect, disconnect, connecting, refresh, openWalletPicker, artistAlias } = useWallet()
+  const { address, connect, disconnect, connecting, refresh, openWalletPicker, artistAlias, isHardwareWallet, requestLedgerReview } = useWallet()
+
   const logEndModalRef = useRef<HTMLDivElement>(null)
   const logEndDockRef = useRef<HTMLDivElement>(null)
   const logId = useRef(0)
@@ -232,6 +161,7 @@ export function FusionChamber() {
   const [claimToWalletBusy, setClaimToWalletBusy] = useState(false)
   const [logsOpen, setLogsOpen] = useState(false)
   const [operatorModalOpen, setOperatorModalOpen] = useState(false)
+  useMobileDialogFocus(operatorModalOpen, '[aria-labelledby="chamber-operator-heading"]')
   const [collectionInfo, setCollectionInfo] = useState<CollectionInfo | null>(null)
   const [collectionLoadState, setCollectionLoadState] = useState<"idle" | "loading" | "done">("idle")
   /** `image` parseado de `token_uri` on-chain (colección 0 o refuerzo). */
@@ -247,6 +177,7 @@ export function FusionChamber() {
   const [freighterIndexPingBusy, setFreighterIndexPingBusy] = useState(false)
   const [freighterTransferBusy, setFreighterTransferBusy] = useState(false)
   const [freighterTransferTo, setFreighterTransferTo] = useState("")
+  const [recipientScanOpen, setRecipientScanOpen] = useState(false)
   const [freighterSep50Busy, setFreighterSep50Busy] = useState(false)
   const [freighterSep50Report, setFreighterSep50Report] = useState<string | null>(null)
   const [collectionSupply, setCollectionSupply] = useState<{ minted: number; cap: number } | null>(null)
@@ -263,6 +194,30 @@ export function FusionChamber() {
   const [worldData, setWorldData] = useState<{ world_name: string; world_prompt: string } | null>(null)
   const [narrativeData, setNarrativeData] = useState<string | null>(null)
   const [narrativeLoading, setNarrativeLoading] = useState(false)
+
+  // Spike 612 (phase-174): experiment copy variant for the payment gate. The
+  // chamber's actual price is the on-chain collection price (authoritative);
+  // only the explainer copy varies here — price variants live in the
+  // forge-agent 402 flow where the server resolves and verifies one amount.
+  const [expGateCopy, setExpGateCopy] = useState<{ paymentGateExplainer: string } | null>(null)
+  useEffect(() => {
+    if (!isFeatureEnabled("phase-174")) return
+    let cancelled = false
+    const params = new URLSearchParams({ lang })
+    if (address) params.set("wallet", address)
+    void fetch(`/api/experiments/forge?${params.toString()}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        const explainer = data?.copy?.paymentGateExplainer
+        if (!cancelled && typeof explainer === "string" && data?.variantId !== "control") {
+          setExpGateCopy({ paymentGateExplainer: explainer })
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [address, lang])
 
   const effectivePriceStroops = useMemo(() => {
     if (collectionId > 0 && collectionInfo?.price) return collectionInfo.price
@@ -855,7 +810,17 @@ export function FusionChamber() {
         invoiceId,
         collectionId,
       )
+      if (isHardwareWallet && isFeatureEnabled("phase-169") && requestLedgerReview) {
+        const decoded = decodeSorobanTransaction(txEnvelope, NETWORK_PASSPHRASE)
+        if (decoded) {
+          const approved = await requestLedgerReview(decoded)
+          if (!approved) {
+            throw new Error("Ledger: clear-signing review rejected by user")
+          }
+        }
+      }
       const signResult = await signTransaction(txEnvelope, {
+
         networkPassphrase: NETWORK_PASSPHRASE,
         address: signerAddress,
       })
@@ -1127,6 +1092,13 @@ export function FusionChamber() {
     setClassicBusy(true)
     try {
       const chCopy = pickCopy(lang).chamber
+      // Spike 626: retired Albedo never reaches the implicit-session probe.
+      if (isAlbedoSelectedInKit() && isAlbedoRetired()) {
+        const retiredMsg = albedoRetiredSignMessage()
+        toast.error(retiredMsg)
+        appendLog(retiredMsg)
+        return
+      }
       if (isAlbedoSelectedInKit() && !(await albedoImplicitTxAllowed(address))) {
         toast.error(chCopy.rewardsTrustlineAlbedoImplicitRequired)
         appendLog(chCopy.rewardsTrustlineAlbedoImplicitRequired)
@@ -1392,7 +1364,19 @@ export function FusionChamber() {
       setFreighterTransferBusy(true)
       try {
         const txEnvelope = await buildTransferPhaseNftTransaction(g, toRaw, tid)
+        recordMobileDeepLinkReturn()
+        if (isHardwareWallet && isFeatureEnabled("phase-169") && requestLedgerReview) {
+          const decoded = decodeSorobanTransaction(txEnvelope, NETWORK_PASSPHRASE)
+          if (decoded) {
+            const approved = await requestLedgerReview(decoded)
+            if (!approved) {
+              toast.error("Ledger: clear-signing review rejected")
+              return
+            }
+          }
+        }
         const signResult = await signTransaction(txEnvelope, {
+
           networkPassphrase: NETWORK_PASSPHRASE,
           address: g,
         })
@@ -1515,6 +1499,7 @@ export function FusionChamber() {
 
   return (
     <div
+      data-mobile-layout={isFeatureEnabled("phase-174") || undefined}
       className="tactical-command-root tactical-command-root--chamber tactical-command-root--cockpit tactical-command-root--stable fixed inset-0 z-[100] flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden bg-black font-mono text-foreground"
       suppressHydrationWarning
     >
@@ -1612,7 +1597,7 @@ export function FusionChamber() {
         suppressHydrationWarning
       >
         {/* STATUS_MONITOR */}
-        <aside
+        <MobileControls><aside
           className={cn(
             "tactical-cockpit-aside tactical-chamber-aside relative z-[102] flex h-full min-h-0 flex-col overflow-hidden border-zinc-800/90 bg-zinc-950/25 p-3 sm:p-4",
             "max-md:max-h-[min(36dvh,300px)] max-md:overflow-y-auto max-md:overscroll-contain max-md:border-b max-md:border-zinc-800 md:border-r",
@@ -1888,7 +1873,7 @@ export function FusionChamber() {
               </p>
             </div>
           ) : null}
-        </aside>
+        </aside></MobileControls>
 
         {/* THE_REACTOR */}
         <main className="tactical-cockpit-stage relative z-[102] flex min-h-0 flex-1 flex-col overflow-hidden max-lg:border-b max-lg:border-zinc-800/80">
@@ -2372,7 +2357,7 @@ export function FusionChamber() {
             >
               {!canInitializeGenesisSupply && !processing && (
                 <p className="mb-1.5 text-center text-[9px] leading-relaxed text-zinc-500 sm:text-left">
-                  {ch.paymentGateExplainer.replace("{amount}", stroopsToLiqDisplay(effectivePriceStroops))}
+                  {(expGateCopy?.paymentGateExplainer ?? ch.paymentGateExplainer).replace("{amount}", stroopsToLiqDisplay(effectivePriceStroops))}
                 </p>
               )}
               <button
@@ -2634,22 +2619,25 @@ export function FusionChamber() {
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4 sm:pb-5">
                   {address ? (
-                    <LiquidityFaucetControl
-                      address={address}
-                      tokenBalance={tokenBalance}
-                      onNarrativeLog={appendLog}
-                      onRefreshBalance={refreshStatus}
-                      compact
-                      freighterNftCollect={
-                        phased && phaseId != null && tokenOwnerLookupDone ? { tokenId: phaseId } : null
-                      }
-                      hideInlineMissionToggle={false}
-                      omitHeader={false}
-                      omitMissionChain={false}
-                      omitLiquidityLane={false}
-                      omitFreighterNftBlock={Boolean(issuerCustodyForCollect || isOwnerOnChain)}
-                      className="border-zinc-800/80 bg-zinc-900/30"
-                    />
+                    <>
+                      <LiquidityFaucetControl
+                        address={address}
+                        tokenBalance={tokenBalance}
+                        onNarrativeLog={appendLog}
+                        onRefreshBalance={refreshStatus}
+                        compact
+                        freighterNftCollect={
+                          phased && phaseId != null && tokenOwnerLookupDone ? { tokenId: phaseId } : null
+                        }
+                        hideInlineMissionToggle={false}
+                        omitHeader={false}
+                        omitMissionChain={false}
+                        omitLiquidityLane={false}
+                        omitFreighterNftBlock={Boolean(issuerCustodyForCollect || isOwnerOnChain)}
+                        className="border-zinc-800/80 bg-zinc-900/30"
+                      />
+                      <GatewayHealthDashboard className="mt-3" />
+                    </>
                   ) : (
                     <p className="py-8 text-center text-[12px] text-zinc-500">{ch.linkWallet}</p>
                   )}
@@ -2705,6 +2693,20 @@ export function FusionChamber() {
           </div>
         </>
       ) : null}
+
+      <QrScannerModal
+        open={recipientScanOpen}
+        onOpenChange={setRecipientScanOpen}
+        title="◈ SCAN RECIPIENT STELLAR ADDRESS"
+        onScan={(result: ParsedQrPayload) => {
+          if (result.type === "stellar_address" || result.type === "stellar_pay_uri") {
+            setFreighterTransferTo(result.address)
+            void runNftTransferToRecipient(result.address)
+          } else if (result.type === "raw" && result.text) {
+            setFreighterTransferTo(result.text)
+          }
+        }}
+      />
     </div>
   )
 }

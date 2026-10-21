@@ -1,0 +1,41 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/faucet-health",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/cost-budgets",
+      "schedule": "0 * * * *"
+      "path": "/api/cron/anomaly-detect",
+      "schedule": "5 * * * *"
+    },
+    {
+      "path": "/api/cron/retention-sweep",
+      "schedule": "15 3 * * *"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, PUT, DELETE, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization, X-Requested-With"
+        },
+        {
+          "key": "Access-Control-Allow-Credentials",
+          "value": "false"
+        }
+      ]
+    }
+  ]
+}
