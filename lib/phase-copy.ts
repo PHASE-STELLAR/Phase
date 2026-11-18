@@ -49,6 +49,12 @@ export type ChamberLogsCopy = {
   classicTrustlineConfirmed: string
   classicTrustlineRejected: string
   classicTrustlineAccountMissing: string
+  /** Friendbot bootstrap: request initiated — phase-281. */
+  friendbotFundingInitiated: string
+  /** Friendbot bootstrap: popup fallback message. */
+  friendbotFundingPopup: string
+  /** Friendbot bootstrap: mainnet refusal message. */
+  friendbotMainnetRefusal: string
 }
 
 export type ArtifactLabelsCopy = {
@@ -1385,6 +1391,9 @@ export const phaseCopy: Record<
         classicTrustlineConfirmed: "Trustline active — classic asset ready",
         classicTrustlineRejected: "Trustline signature denied",
         classicTrustlineAccountMissing: "Account not found — add testnet XLM first",
+        friendbotFundingInitiated: "Requesting testnet XLM from Friendbot…",
+        friendbotFundingPopup: "Friendbot opening in popup — check for blocked popups",
+        friendbotMainnetRefusal: "Friendbot bootstrap unavailable on mainnet",
       },
       artifact: {
         registeredDefault: "PHASE utility artifact",
@@ -2143,6 +2152,9 @@ export const phaseCopy: Record<
         classicTrustlineConfirmed: "Trustline activa — asset clásico listo",
         classicTrustlineRejected: "Firma de trustline denegada",
         classicTrustlineAccountMissing: "Cuenta no encontrada — agregá XLM testnet primero",
+        friendbotFundingInitiated: "Solicitando XLM de testnet a Friendbot…",
+        friendbotFundingPopup: "Friendbot abriéndose en popup — revisá ventanas bloqueadas",
+        friendbotMainnetRefusal: "Bootstrap Friendbot no disponible en mainnet",
       },
       artifact: {
         registeredDefault: "Artefacto de utilidad PHASE",
