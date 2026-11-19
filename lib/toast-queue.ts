@@ -1,3 +1,5 @@
+import { pickCopy } from "@/lib/phase-copy"
+
 /**
  * Module #67 — Toaster notification system with queueing and priority.
  *
@@ -44,6 +46,7 @@ export interface QueuedToast {
   priority: number
   /** Epoch ms; used to keep FIFO ordering within the same priority. */
   enqueuedAt: number
+  sequence: number
   duration?: number
 }
 
@@ -73,18 +76,32 @@ export class ToastQueue {
   private readonly emit: ToastEmitTarget
   private readonly maxVisible: number
   private readonly dedupeWindowMs: number
+  private readonly maxQueue: number
+  private sequence = 0
 
   constructor(
     emit: ToastEmitTarget,
-    options?: { maxVisible?: number; dedupeWindowMs?: number },
+    options?: { maxVisible?: number; dedupeWindowMs?: number; maxQueue?: number },
   ) {
     this.emit = emit
     this.maxVisible = options?.maxVisible ?? 1
     this.dedupeWindowMs = options?.dedupeWindowMs ?? DEFAULT_DEDUPE_WINDOW_MS
+    this.maxQueue = options?.maxQueue ?? 100
   }
 
-  private static keyOf(kind: ToastKind, message: string): string {
-    return `${kind}::${message}`
+  private static keyOf(kind: ToastKind, message: string, eventKey?: string): string {
+    return eventKey ? `event:${eventKey}` : `${kind}::${message}`
+  }
+
+  private pruneSeen(now: number): void {
+    for (const [key, seenAt] of this.seen) {
+      if (now - seenAt >= this.dedupeWindowMs) this.seen.delete(key)
+    }
+    while (this.seen.size > 500) {
+      const oldest = this.seen.keys().next().value
+      if (oldest === undefined) break
+      this.seen.delete(oldest)
+    }
   }
 
   get size(): number {
@@ -102,23 +119,35 @@ export class ToastQueue {
   push(
     kind: ToastKind,
     message: string,
-    options?: { title?: string; priority?: number; duration?: number },
+    options?: { title?: string; priority?: number; duration?: number; eventKey?: string },
   ): boolean {
-    const key = ToastQueue.keyOf(kind, message)
     const now = Date.now()
+    this.pruneSeen(now)
+    const key = ToastQueue.keyOf(kind, message, options?.eventKey)
     const lastSeen = this.seen.get(key)
     if (lastSeen !== undefined && now - lastSeen < this.dedupeWindowMs) {
       return false
     }
-    this.seen.set(key, now)
 
+    const priority = options?.priority ?? KIND_TO_KEY[kind] ?? ToastPriority.info
+    if (this.queue.length >= this.maxQueue) {
+      let lowestIndex = 0
+      for (let index = 1; index < this.queue.length; index++) {
+        if (this.queue[index]!.priority < this.queue[lowestIndex]!.priority) lowestIndex = index
+      }
+      if (this.queue.length === 0 || priority <= this.queue[lowestIndex]!.priority) return false
+      this.queue.splice(lowestIndex, 1)
+    }
+
+    this.seen.set(key, now)
     this.queue.push({
       key,
       kind,
       message,
       title: options?.title,
-      priority: options?.priority ?? KIND_TO_KEY[kind] ?? ToastPriority.info,
+      priority,
       enqueuedAt: now,
+      sequence: this.sequence++,
       duration: options?.duration,
     })
     return true
@@ -131,7 +160,7 @@ export class ToastQueue {
    */
   flush(): number {
     if (this.queue.length === 0) return 0
-    this.queue.sort((a, b) => b.priority - a.priority || a.enqueuedAt - b.enqueuedAt)
+    this.queue.sort((a, b) => b.priority - a.priority || a.sequence - b.sequence)
 
     const toEmit = this.queue.splice(0, this.maxVisible)
 
@@ -180,8 +209,15 @@ export class ToastQueue {
 
 /** Shorthand helpers for the common kinds. */
 export type ToastQueueApi = {
-  info(message: string, options?: { title?: string; duration?: number }): void
-  success(message: string, options?: { title?: string; duration?: number }): void
-  warn(message: string, options?: { title?: string; duration?: number }): void
-  error(message: string, options?: { title?: string; duration?: number }): void
+  info(message: string, options?: { title?: string; duration?: number; eventKey?: string }): void
+  success(message: string, options?: { title?: string; duration?: number; eventKey?: string }): void
+  warn(message: string, options?: { title?: string; duration?: number; eventKey?: string }): void
+  error(message: string, options?: { title?: string; duration?: number; eventKey?: string }): void
+}
+
+export function normalizeToastError(message: string, lang: unknown): string {
+  if (/(?:#13\b|BIOMETRIC_TRUST_GATE_CLOSED)/i.test(message)) {
+    return pickCopy(lang).toastQueue.biometricGateClosed
+  }
+  return message
 }
