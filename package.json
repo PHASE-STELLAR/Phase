@@ -11,6 +11,8 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "deps:cadence": "tsx scripts/check-dependency-cadence.ts",
+    "env:check": "tsx scripts/check-env-coverage.cts",
+    "env:docs": "tsx scripts/check-env-coverage.cts --write",
     "diagnose": "tsx diagnose-env.ts",
     "set:issuer-home-domain": "cd scripts && npm run set:issuer-home-domain",
     "classic:issuer-to-distributor": "cd scripts && npm run issuer-to-distributor",
