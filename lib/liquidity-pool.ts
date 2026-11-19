@@ -51,6 +51,7 @@ import { incSecurityCounter } from "@/lib/security-counters"
 import { getDb } from "@/lib/sqlite-db"
 import { readJsonFile, updateJsonFile } from "@/lib/json-store"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
+import { isDecimalAmountParsingEnabled, tryParseDecimalAmount } from "@/lib/decimal-amount"
 
 // ─── flag surface ───────────────────────────────────────────────────────────
 
@@ -231,6 +232,11 @@ export type HorizonPoolRecord = {
 }
 
 export function decimalToStroops(value: unknown): bigint {
+  if (isDecimalAmountParsingEnabled()) {
+    const parsed = tryParseDecimalAmount(typeof value === "number" ? value : String(value ?? ""), { allowZero: true })
+    if (!parsed.ok) throw new PoolError("INVALID_INPUT", `Invalid decimal amount: ${parsed.error.message}`)
+    return parsed.units
+  }
   const text = typeof value === "string" ? value.trim() : String(value ?? "")
   if (!/^\d+(\.\d+)?$/.test(text)) {
     throw new PoolError("INVALID_INPUT", `Invalid decimal amount: ${text || "(empty)"}`)

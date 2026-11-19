@@ -12,6 +12,7 @@ import {
   type PoolAsset,
 } from "@/lib/liquidity-pool"
 import { resolvePhaserLiqClassicAsset } from "@/lib/stellar"
+import { isDecimalAmountParsingEnabled, stroopsToNumber, tryParseDecimalAmount } from "@/lib/decimal-amount"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -71,12 +72,26 @@ export async function POST(
     )
   }
 
-  const amount_phaselq = Number(body.amount_phaselq)
-  if (!Number.isFinite(amount_phaselq) || amount_phaselq <= 0) {
-    return api.json(
-      { error: "amount_phaselq must be positive" },
-      { status: 400, event: "market.offer.validation_failed", metadata: { reason: "amount_phaselq" } },
-    )
+  let amount_phaselq: number
+  let amountStroops: bigint | null = null
+  if (isDecimalAmountParsingEnabled()) {
+    const parsed = tryParseDecimalAmount(body.amount_phaselq)
+    if (!parsed.ok) {
+      return api.json(
+        { error: "amount_phaselq must be a positive amount with at most 7 decimal places", code: parsed.error.code },
+        { status: 400, event: "market.offer.validation_failed", metadata: { reason: "amount_phaselq" } },
+      )
+    }
+    amountStroops = parsed.units
+    amount_phaselq = stroopsToNumber(parsed.units)
+  } else {
+    amount_phaselq = Number(body.amount_phaselq)
+    if (!Number.isFinite(amount_phaselq) || amount_phaselq <= 0) {
+      return api.json(
+        { error: "amount_phaselq must be positive" },
+        { status: 400, event: "market.offer.validation_failed", metadata: { reason: "amount_phaselq" } },
+      )
+    }
   }
 
   try {
@@ -144,7 +159,7 @@ export async function POST(
         const snapshot = await getClassicPoolSnapshot(classicPoolIdForAssets(base, { kind: "native" }))
         const quote = quoteClassicPool(snapshot, {
           assetIn: base,
-          amountInStroops: decimalToStroops(amount_phaselq.toFixed(7)),
+          amountInStroops: amountStroops ?? decimalToStroops(amount_phaselq.toFixed(7)),
           maxPriceImpactBps: 10_000,
         })
         poolPrice = {

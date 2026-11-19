@@ -3,6 +3,7 @@ import { isFeatureEnabled } from "@/lib/feature-flags"
 import { NextRequest, NextResponse } from "next/server"
 import { REQUIRED_AMOUNT, tokenContractIdForServer } from "@/lib/phase-protocol"
 import { resolveForgeRequiredAmountStroops } from "@/lib/experiments"
+import { isDecimalAmountParsingEnabled, meetsRequiredStroops } from "@/lib/decimal-amount"
 
 export const dynamic = 'force-dynamic'
 
@@ -30,6 +31,7 @@ function decodeX402Token(raw: string): LocalX402Token | null {
 
 function isSatisfiedPayment(payload: LocalX402Token | null, requiredStroops: string = REQUIRED_AMOUNT): boolean {
   if (!payload) return false
+  if (isDecimalAmountParsingEnabled()) return Boolean(payload.invoice) && meetsRequiredStroops(payload.amount, requiredStroops)
   const amount = Number(payload.amount)
   const required = Number.parseInt(requiredStroops, 10)
   return Boolean(payload.invoice) && Number.isFinite(amount) && Number.isFinite(required) && amount >= required
@@ -53,10 +55,9 @@ export async function POST(request: NextRequest) {
     const payload = decodeX402Token(token)
     // Spike 612: variant-aware floor for the settling payer; control otherwise.
     const requiredStroops = (await resolveForgeRequiredAmountStroops(user)).amountStroops
-    if (!isSatisfiedPayment(payload, requiredStroops)) {
     const block = await complianceGate(body.user_address ?? "", String(payload?.amount ?? ""), "x402")
     if (block) return block
-    if (!isSatisfiedPayment(payload)) {
+    if (!isSatisfiedPayment(payload, requiredStroops)) {
       return NextResponse.json({ error: "Invalid or insufficient x402 payment token" }, { status: 401 })
     }
 

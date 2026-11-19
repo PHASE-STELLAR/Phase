@@ -101,7 +101,16 @@ import { incSecurityCounter } from "@/lib/security-counters"
  * - phase-282: Secret rotation automation with runbook definition, dry-run mode, audit
  *   events and deployed reference verification (spike 651 / issue #741)
  *
- * phase-182/280/281/282 are default off. Rollback: unset the env keys and restart.
+ * - phase-265: one decimal-amount parser for forge, market and x402 amounts with explicit
+ *   decimal places and rounding modes (issue #723)
+ * - phase-266: Zod env schemas per surface, fail-closed startup validation and preview
+ *   secret isolation (issue #724)
+ * - phase-267: closed security-counter and reason-code registry with emit-time label
+ *   rejection (issue #725)
+ * - phase-268: edge runtime hardening — edge-safe helpers and a degraded in-memory
+ *   fallback for file-backed stores on edge (issue #726)
+ *
+ * phase-182/265/266/267/268/280/281/282 are default off. Rollback: unset the env keys and restart.
  */
 
 export type PhaseFeatureFlag =
@@ -212,6 +221,10 @@ export type PhaseFeatureFlag =
   | "phase-182"
   | "phase-280"
   | "phase-281"
+  | "phase-265"
+  | "phase-266"
+  | "phase-267"
+  | "phase-268"
   | "phase-282";
 
 
@@ -320,6 +333,10 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-280": ["NEXT_PUBLIC_FEATURE_PHASE_280", "FEATURE_PHASE_280"],
   "phase-281": ["NEXT_PUBLIC_FEATURE_PHASE_281", "FEATURE_PHASE_281"],
   "phase-282": ["NEXT_PUBLIC_FEATURE_PHASE_282", "FEATURE_PHASE_282"],
+  "phase-265": ["NEXT_PUBLIC_FEATURE_PHASE_265", "FEATURE_PHASE_265"],
+  "phase-266": ["NEXT_PUBLIC_FEATURE_PHASE_266", "FEATURE_PHASE_266"],
+  "phase-267": ["NEXT_PUBLIC_FEATURE_PHASE_267", "FEATURE_PHASE_267"],
+  "phase-268": ["NEXT_PUBLIC_FEATURE_PHASE_268", "FEATURE_PHASE_268"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -417,6 +434,10 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-280",
   "phase-281",
   "phase-282",
+  "phase-265",
+  "phase-266",
+  "phase-267",
+  "phase-268",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {
@@ -548,6 +569,10 @@ export function getEnabledFeatureFlags(): PhaseFeatureFlag[] {
     "phase-280",
     "phase-281",
     "phase-282",
+    "phase-265",
+    "phase-266",
+    "phase-267",
+    "phase-268",
   ];
 
   // Filtering is evaluated at call time, allowing runtime test overrides.
@@ -651,6 +676,10 @@ function envFlagState(flag: PhaseFeatureFlag): {
     "phase-180": process.env.NEXT_PUBLIC_FEATURE_PHASE_180,
     "phase-181": process.env.NEXT_PUBLIC_FEATURE_PHASE_181,
     "phase-182": process.env.NEXT_PUBLIC_FEATURE_PHASE_182,
+    "phase-265": process.env.NEXT_PUBLIC_FEATURE_PHASE_265,
+    "phase-266": process.env.NEXT_PUBLIC_FEATURE_PHASE_266,
+    "phase-267": process.env.NEXT_PUBLIC_FEATURE_PHASE_267,
+    "phase-268": process.env.NEXT_PUBLIC_FEATURE_PHASE_268,
   }
   const keys = FLAG_ENV_MAP[flag] ?? [
     `NEXT_PUBLIC_FEATURE_${flag.replace(/-/g, "_").toUpperCase()}`,
