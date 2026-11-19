@@ -7,15 +7,21 @@
  * to disk (JSON sidecar) so the next cold start can load recent progress
  * without re-scanning the ledger.
  *
+ * Issue #733: Quest expiry windows with explicit UTC inclusive/exclusive bounds
+ * and snapshot integrity verification at claim time.
+ *
  * Flag: NEXT_PUBLIC_FEATURE_PHASE_130 / FEATURE_PHASE_130
+ *        NEXT_PUBLIC_FEATURE_PHASE_275 / FEATURE_PHASE_275 (expiry + integrity)
  * Rollback: unset the flag. In-memory cache reverts to its previous behavior.
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { isFeatureEnabled } from "@/lib/feature-flags"
+import { createHash } from "node:crypto"
 
 const FLAG: "phase-130" = "phase-130"
+const EXPIRY_FLAG: "phase-275" = "phase-275"
 
 export function isQuestSnapshotEnabled(wallet?: string): boolean {
   return isFeatureEnabled(FLAG, wallet ? { wallet } : undefined)
@@ -125,4 +131,203 @@ export async function pruneStaleSnapshots(maxAgeMs: number = 30 * 60 * 1000): Pr
   }
   if (pruned > 0) await writeSnapshotStore(store)
   return pruned
+}
+
+// ─── Issue #733: Quest expiry windows and snapshot integrity ──────────────
+
+/**
+ * Quest expiry window policy.
+ * Bounds are INCLUSIVE at the start, EXCLUSIVE at the end (standard [start, end) convention).
+ * This means a quest with expiresAt = T is still "active" at T-1ms but "expired" at T.
+ */
+export type QuestExpiryWindow = {
+  /** Quest creation timestamp (UTC, ms) */
+  createdAt: number
+  /** Time-to-live in ms from creation */
+  ttlMs: number
+  /** Grace period after expiry (ms) — INCLUSIVE of the start, EXCLUSIVE of the end */
+  graceMs?: number
+}
+
+export type QuestExpiryState = "active" | "grace" | "expired"
+
+export type QuestExpiryResult = {
+  state: QuestExpiryState
+  expiresAt: number
+  graceUntil: number | null
+  /** Remaining ms before expiry (0 if expired) */
+  msRemaining: number
+}
+
+/**
+ * Typed errors for quest claim validation.
+ */
+export class QuestClaimError extends Error {
+  readonly code: "CLAIM_TOO_EARLY" | "CLAIM_EXPIRED" | "SNAPSHOT_TAMPERED" | "SNAPSHOT_MISSING"
+  readonly detail?: string
+
+  constructor(
+    code: QuestClaimError["code"],
+    message: string,
+    detail?: string,
+  ) {
+    super(message)
+    this.name = "QuestClaimError"
+    this.code = code
+    this.detail = detail
+  }
+}
+
+/**
+ * Issue #733: Compute quest expiry state at a given UTC timestamp.
+ *
+ * Boundaries are INCLUSIVE at the start:
+ * - active:   [createdAt, expiresAt)    — createdAt ≤ now < expiresAt
+ * - grace:    [expiresAt, graceUntil)   — expiresAt ≤ now < graceUntil
+ * - expired:  [graceUntil, ∞)            — now ≥ graceUntil
+ */
+export function computeQuestExpiryWindow(
+  window: QuestExpiryWindow,
+  nowUtcMs: number,
+): QuestExpiryResult {
+  const expiresAt = window.createdAt + window.ttlMs
+  const graceMs = window.graceMs ?? 0
+  const graceUntil = expiresAt + graceMs
+
+  if (nowUtcMs < expiresAt) {
+    return {
+      state: "active",
+      expiresAt,
+      graceUntil: graceMs > 0 ? graceUntil : null,
+      msRemaining: expiresAt - nowUtcMs,
+    }
+  }
+
+  if (graceMs > 0 && nowUtcMs < graceUntil) {
+    return {
+      state: "grace",
+      expiresAt,
+      graceUntil,
+      msRemaining: 0,
+    }
+  }
+
+  return {
+    state: "expired",
+    expiresAt,
+    graceUntil: graceMs > 0 ? graceUntil : null,
+    msRemaining: 0,
+  }
+}
+
+/**
+ * Issue #733: Compute a cryptographic hash of a quest snapshot for integrity verification.
+ * Uses SHA-256 over a canonical JSON encoding of the snapshot entry.
+ */
+export function computeSnapshotHash(entry: Omit<QuestSnapshotEntry, "cohortKey">): string {
+  const canonical = JSON.stringify({
+    wallet: entry.wallet,
+    progress: entry.progress,
+    snapshotAt: entry.snapshotAt,
+  })
+  return createHash("sha256").update(canonical).digest("hex")
+}
+
+/**
+ * Issue #733: Verify a quest snapshot against an expected hash.
+ * Rejects tampered snapshots with a typed error.
+ */
+export function verifySnapshotIntegrity(
+  entry: QuestSnapshotEntry,
+  expectedHash: string,
+): { ok: boolean; error?: QuestClaimError } {
+  const actualHash = computeSnapshotHash(entry)
+  if (actualHash !== expectedHash) {
+    return {
+      ok: false,
+      error: new QuestClaimError(
+        "SNAPSHOT_TAMPERED",
+        "Quest snapshot integrity check failed: hash mismatch.",
+        `Expected ${expectedHash.slice(0, 16)}… but got ${actualHash.slice(0, 16)}…`,
+      ),
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * Issue #733: Validate a quest claim against expiry window and snapshot integrity.
+ *
+ * Rejects:
+ * - Claims before the quest's creation (too early) with CLAIM_TOO_EARLY
+ * - Claims after the expiry window (expired) with CLAIM_EXPIRED
+ * - Claims with a tampered snapshot with SNAPSHOT_TAMPERED
+ * - Claims with no snapshot when one is expected with SNAPSHOT_MISSING
+ *
+ * @param window - The quest expiry window policy
+ * @param nowUtcMs - Current UTC timestamp in ms
+ * @param snapshot - Optional snapshot entry for integrity verification
+ * @param expectedHash - Optional expected hash of the snapshot
+ */
+export function validateQuestClaim(
+  window: QuestExpiryWindow,
+  nowUtcMs: number,
+  snapshot?: QuestSnapshotEntry,
+  expectedHash?: string,
+): { ok: boolean; error?: QuestClaimError; expiryState?: QuestExpiryState } {
+  const flagOn = isFeatureEnabled(EXPIRY_FLAG as any)
+
+  // Flag off: legacy claim validation (no expiry or integrity checks)
+  if (!flagOn) return { ok: true }
+
+  // Check early claims (before creation timestamp)
+  if (nowUtcMs < window.createdAt) {
+    return {
+      ok: false,
+      error: new QuestClaimError(
+        "CLAIM_TOO_EARLY",
+        "Quest claim submitted before quest creation time.",
+        `now (${nowUtcMs}) < createdAt (${window.createdAt})`,
+      ),
+    }
+  }
+
+  // Compute expiry state — INCLUSIVE bounds
+  const expiry = computeQuestExpiryWindow(window, nowUtcMs)
+
+  // A claim one second after expiry is rejected
+  if (expiry.state === "expired") {
+    return {
+      ok: false,
+      expiryState: "expired",
+      error: new QuestClaimError(
+        "CLAIM_EXPIRED",
+        "Quest has expired and can no longer be claimed.",
+        `expired at ${expiry.graceUntil ?? expiry.expiresAt}, now is ${nowUtcMs}`,
+      ),
+    }
+  }
+
+  // Verify snapshot integrity if a snapshot and expected hash are provided
+  if (snapshot && expectedHash) {
+    const integrity = verifySnapshotIntegrity(snapshot, expectedHash)
+    if (!integrity.ok) {
+      return {
+        ok: false,
+        expiryState: expiry.state,
+        error: integrity.error,
+      }
+    }
+  } else if (expectedHash && !snapshot) {
+    return {
+      ok: false,
+      expiryState: expiry.state,
+      error: new QuestClaimError(
+        "SNAPSHOT_MISSING",
+        "Snapshot was expected for integrity verification but none was provided.",
+      ),
+    }
+  }
+
+  return { ok: true, expiryState: expiry.state }
 }
