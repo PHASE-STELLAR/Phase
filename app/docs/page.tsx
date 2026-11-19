@@ -12,6 +12,11 @@ const RECIPES_ENABLED = ["1", "true", "yes", "on"].includes(
   (process.env.NEXT_PUBLIC_FEATURE_PHASE_668 ?? "").trim().toLowerCase(),
 )
 
+// phase-291: In-app documentation system with build-time freshness check
+const PHASE291_ENABLED = ["1", "true", "yes", "on"].includes(
+  (process.env.NEXT_PUBLIC_FEATURE_PHASE_291 ?? "").trim().toLowerCase(),
+)
+
 /** Renders text with every occurrence of "wallet" highlighted in cyan. */
 function W({ children }: { children: string }) {
   const parts = children.split(/(wallet)/gi)
