@@ -497,8 +497,8 @@ export async function scoreQueueItem(id: string, deps: ScoreDeps): Promise<Queue
     now,
   )
   if (wrote) {
-    incSecurityCounter("moderation_scored")
-    incSecurityCounter(`moderation_${outcome.decision}` as "moderation_auto_allow" | "moderation_human_review" | "moderation_auto_hold")
+    incSecurityCounter("moderation_scored", 1, outcome.decision)
+    incSecurityCounter(`moderation_${outcome.decision}`)
   }
   return getQueueItem(id)
 }
