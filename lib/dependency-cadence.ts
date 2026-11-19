@@ -26,22 +26,26 @@ import {
   TransactionBuilder,
   nativeToScVal,
 } from "@stellar/stellar-sdk";
-import { flagRollbackNote, isFeatureEnabled } from "@/lib/feature-flags";
 import { incSecurityCounter } from "@/lib/security-counters";
+import {
+  CANONICAL_SOROBAN_ABI_VERSION,
+  CANONICAL_SOROBAN_SDK_MAJOR,
+  CANONICAL_STELLAR_CLI_VERSION,
+  CANONICAL_STELLAR_SDK_MAJOR,
+  CANONICAL_WASM_TARGET,
+  flag175RollbackNote,
+  isDependencyCadenceEnabled,
+} from "@/lib/dependency-cadence-shared";
 
-export const CANONICAL_WASM_TARGET = "wasm32-unknown-unknown" as const;
-export const CANONICAL_SOROBAN_SDK_MAJOR = 22 as const;
-export const CANONICAL_SOROBAN_ABI_VERSION = 22_000 as const;
-export const CANONICAL_STELLAR_SDK_MAJOR = 15 as const;
-export const CANONICAL_STELLAR_CLI_VERSION = "23.0.0" as const;
-
-export function isDependencyCadenceEnabled(wallet?: string): boolean {
-  return isFeatureEnabled("phase-175", wallet ? { wallet } : undefined);
-}
-
-export function flag175RollbackNote(): string {
-  return flagRollbackNote("phase-175");
-}
+export {
+  CANONICAL_SOROBAN_ABI_VERSION,
+  CANONICAL_SOROBAN_SDK_MAJOR,
+  CANONICAL_STELLAR_CLI_VERSION,
+  CANONICAL_STELLAR_SDK_MAJOR,
+  CANONICAL_WASM_TARGET,
+  flag175RollbackNote,
+  isDependencyCadenceEnabled,
+};
 
 export type PackageManifestLike = {
   name?: string;

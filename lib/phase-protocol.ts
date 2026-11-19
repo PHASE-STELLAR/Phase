@@ -2582,5 +2582,5 @@ export {
   CANONICAL_STELLAR_SDK_MAJOR,
   CANONICAL_WASM_TARGET,
   isDependencyCadenceEnabled,
-} from "@/lib/dependency-cadence"
+} from "@/lib/dependency-cadence-shared"
 
