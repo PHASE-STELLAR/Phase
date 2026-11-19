@@ -22,6 +22,8 @@
     "start": "next start",
     "security:audit": "npm audit --audit-level=high",
     "security:secret-rotation": "tsx scripts/check-secret-rotation.ts",
+    "generate:stellar-toml": "tsx scripts/generate-stellar-toml.ts",
+    "verify:stellar-toml": "tsx scripts/generate-stellar-toml.ts --verify",
     "migrate:sqlite": "tsx scripts/migrate-json-to-sqlite.ts",
     "backup:drill": "tsx scripts/backup-drill.ts",
     "db:parity": "tsx scripts/db-parity.ts"

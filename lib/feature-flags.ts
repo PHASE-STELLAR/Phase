@@ -94,9 +94,14 @@ import { incSecurityCounter } from "@/lib/security-counters"
  * - phase-181: anomaly detection on volume, counters and balances with webhook alert routing (spike 619 / issue #482)
  * - phase-182: liquidity pools — classic PHASELQ/XLM pool + Soroswap router adapter, quotes,
  *   deposits/withdrawals, and pool-aware wash screening (spike 574 / issue #438)
+ * - phase-280: SEP-0001 stellar.toml generation from env at build time with published
+ *   document validation and testnet fencing (spike 648 / issue #739)
+ * - phase-281: Friendbot testnet bootstrap integration with idempotent per-account request,
+ *   same-tab strategy with popup fallback, fail closed on mainnet (spike 650 / issue #740)
+ * - phase-282: Secret rotation automation with runbook definition, dry-run mode, audit
+ *   events and deployed reference verification (spike 651 / issue #741)
  *
- * phase-182 is default off. Rollback: unset the env keys and restart; the LP
- * sidecar (`liquidity-pools.json`) and additive SQLite tables stay inert.
+ * phase-182/280/281/282 are default off. Rollback: unset the env keys and restart.
  */
 
 export type PhaseFeatureFlag =
@@ -204,7 +209,10 @@ export type PhaseFeatureFlag =
   | "phase-179"
   | "phase-180"
   | "phase-181"
-  | "phase-182";
+  | "phase-182"
+  | "phase-280"
+  | "phase-281"
+  | "phase-282";
 
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
@@ -309,6 +317,9 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-171": ["NEXT_PUBLIC_FEATURE_PHASE_171", "FEATURE_PHASE_171"],
   "phase-172": ["NEXT_PUBLIC_FEATURE_PHASE_172", "FEATURE_PHASE_172"],
   "phase-173": ["NEXT_PUBLIC_FEATURE_PHASE_173", "FEATURE_PHASE_173"],
+  "phase-280": ["NEXT_PUBLIC_FEATURE_PHASE_280", "FEATURE_PHASE_280"],
+  "phase-281": ["NEXT_PUBLIC_FEATURE_PHASE_281", "FEATURE_PHASE_281"],
+  "phase-282": ["NEXT_PUBLIC_FEATURE_PHASE_282", "FEATURE_PHASE_282"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -403,6 +414,9 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-180",
   "phase-181",
   "phase-182",
+  "phase-280",
+  "phase-281",
+  "phase-282",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {
@@ -531,6 +545,9 @@ export function getEnabledFeatureFlags(): PhaseFeatureFlag[] {
     "phase-180",
     "phase-181",
     "phase-182",
+    "phase-280",
+    "phase-281",
+    "phase-282",
   ];
 
   // Filtering is evaluated at call time, allowing runtime test overrides.
