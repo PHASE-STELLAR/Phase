@@ -118,6 +118,8 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   timeout, typed failure, and SQLite idempotent recording (issue #700)
  * - phase-259: Forge paint canvas with deterministic seal image, digest-keyed cache,
  *   tamper verification, renderer fallback and closed counters (issue #712)
+ * - phase-257: Lore versioning with explicit append-only rollback, If-Match
+ *   optimistic concurrency guard, author proof and EN/ES copy (issue #710)
  *
  * - phase-265: one decimal-amount parser for forge, market and x402 amounts with explicit
  *   decimal places and rounding modes (issue #723)
@@ -255,6 +257,7 @@ export type PhaseFeatureFlag =
   | "phase-248"
   | "phase-250"
   | "phase-249"
+  | "phase-257"
   | "phase-259";
 
 
@@ -378,6 +381,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-248": ["NEXT_PUBLIC_FEATURE_PHASE_248", "FEATURE_PHASE_248"],
   "phase-250": ["NEXT_PUBLIC_FEATURE_PHASE_250", "FEATURE_PHASE_250"],
   "phase-249": ["NEXT_PUBLIC_FEATURE_PHASE_249", "FEATURE_PHASE_249"],
+  "phase-257": ["NEXT_PUBLIC_FEATURE_PHASE_257", "FEATURE_PHASE_257"],
   "phase-259": ["NEXT_PUBLIC_FEATURE_PHASE_259", "FEATURE_PHASE_259"],
 };
 
@@ -491,6 +495,7 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-248",
   "phase-250",
   "phase-249",
+  "phase-257",
   "phase-259",
 ] as const;
 

@@ -838,6 +838,7 @@ export const phaseCopy: Record<
     featureFlagOps: Record<"title" | "killSwitchActive" | "rolloutLabel" | "drillPassed" | "versionConflict", string>
     dependencyCadence: Record<"title" | "sdkAligned" | "skewDetected" | "bytecodeGateBlocked", string>
     searchAnalytics: Record<"zeroResultsTitle" | "zeroResultsHint" | "didYouMean" | "clickthroughLabel" | "zeroResultRateLabel" | "typoSuccessLabel", string>
+    loreVersioning: Record<"historyTitle" | "versionLabel" | "rollbackAction" | "rolledBackFrom" | "conflictError" | "authorProofLabel", string>
   }
 > = {
   en: {
@@ -1628,6 +1629,14 @@ export const phaseCopy: Record<
       clickthroughLabel: "Clickthrough rate",
       zeroResultRateLabel: "Zero-result rate",
       typoSuccessLabel: "Typo recovery rate",
+    },
+    loreVersioning: {
+      historyTitle: "Narrative Version History",
+      versionLabel: "Version {version}",
+      rollbackAction: "Restore as new version",
+      rolledBackFrom: "Restored from v{version}",
+      conflictError: "Edit conflict: narrative was updated by another collaborator (409).",
+      authorProofLabel: "Author proof",
     },
   },
 
@@ -2422,6 +2431,14 @@ export const phaseCopy: Record<
       clickthroughLabel: "Tasa de clics",
       zeroResultRateLabel: "Tasa sin resultados",
       typoSuccessLabel: "Tasa de corrección tipográfica",
+    },
+    loreVersioning: {
+      historyTitle: "Historial de Versiones Narrativas",
+      versionLabel: "Versión {version}",
+      rollbackAction: "Restaurar como nueva versión",
+      rolledBackFrom: "Restaurada desde v{version}",
+      conflictError: "Conflicto de edición: la narrativa fue actualizada por otro colaborador (409).",
+      authorProofLabel: "Prueba de autoría",
     },
   },
 
