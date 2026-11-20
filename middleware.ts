@@ -63,14 +63,20 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   }
 
   let response = NextResponse.next()
-  if (isFeatureEnabled("phase-175") && request.nextUrl.pathname.startsWith("/link/")) {
+  if ((isFeatureEnabled("phase-248") || isFeatureEnabled("phase-175")) && request.nextUrl.pathname.startsWith("/link/")) {
     const parts = request.nextUrl.pathname.split("/").filter(Boolean)
     const target = parts[1] === "collection" ? "/chamber" : parts[1] === "quest" ? "/forge" : "/dashboard"
     const rewritten = request.nextUrl.clone()
     rewritten.pathname = target
     rewritten.search = ""
     rewritten.searchParams.set("phase_link", request.nextUrl.pathname + request.nextUrl.search)
-    if (parts[1] === "collection" && /^[1-9]\d*$/.test(parts[2] ?? "")) rewritten.searchParams.set("collection", parts[2])
+    if (parts[1] === "collection" && /^[1-9]\d*$/.test(parts[2] ?? "")) {
+      rewritten.searchParams.set("collection", parts[2])
+      const ref = request.nextUrl.searchParams.get("ref")
+      const recipient = request.nextUrl.searchParams.get("recipient")
+      if (ref) rewritten.searchParams.set("ref", ref)
+      if (recipient) rewritten.searchParams.set("recipient", recipient)
+    }
     response = NextResponse.rewrite(rewritten)
     response.headers.set("Cache-Control", "private, no-store")
   }

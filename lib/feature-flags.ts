@@ -110,6 +110,8 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   bounded retries and deterministic fallback (issue #750)
  * - phase-251: Phase NFT custodian release flow with signed authorization,
  *   atomic SQLite nonce consumption, artifact verification and audit events (issue #702)
+ * - phase-248: Inbound deep links with strict same-origin intent schema, 15-minute
+ *   lifetime, review screen, Chamber rewrite and custom scheme fencing (issue #699)
  *
  * - phase-265: one decimal-amount parser for forge, market and x402 amounts with explicit
  *   decimal places and rounding modes (issue #723)
@@ -243,7 +245,8 @@ export type PhaseFeatureFlag =
   | "phase-287"
   | "phase-288"
   | "phase-289"
-  | "phase-251";
+  | "phase-251"
+  | "phase-248";
 
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
@@ -363,6 +366,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-288": ["NEXT_PUBLIC_FEATURE_PHASE_288", "FEATURE_PHASE_288"],
   "phase-289": ["NEXT_PUBLIC_FEATURE_PHASE_289", "FEATURE_PHASE_289"],
   "phase-251": ["NEXT_PUBLIC_FEATURE_PHASE_251", "FEATURE_PHASE_251"],
+  "phase-248": ["NEXT_PUBLIC_FEATURE_PHASE_248", "FEATURE_PHASE_248"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -472,6 +476,7 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-288",
   "phase-289",
   "phase-251",
+  "phase-248",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {
