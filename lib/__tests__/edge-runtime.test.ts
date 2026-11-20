@@ -46,7 +46,8 @@ describe("phase-268 edge bundles", () => {
     assert.equal(runtime.evaluate("typeof require"), "undefined")
     assert.equal(runtime.evaluate("typeof Buffer"), "undefined")
     const [csp, nosniff, frame] = await runtime.evaluate<Promise<(string | null)[]>>(`(async () => {
-      const response = __edgeEntry.middleware(Object.assign(new Request("https://phase.test/forge"), {
+      // middleware is async since the phase-264 body cap; await works for a sync one too.
+      const response = await __edgeEntry.middleware(Object.assign(new Request("https://phase.test/forge"), {
         nextUrl: new URL("https://phase.test/forge"),
       }))
       return [

@@ -225,7 +225,10 @@ export type PhaseFeatureFlag =
   | "phase-266"
   | "phase-267"
   | "phase-268"
-  | "phase-282";
+  | "phase-282"
+  | "phase-262"
+  | "phase-263"
+  | "phase-264";
 
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
@@ -337,6 +340,9 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-266": ["NEXT_PUBLIC_FEATURE_PHASE_266", "FEATURE_PHASE_266"],
   "phase-267": ["NEXT_PUBLIC_FEATURE_PHASE_267", "FEATURE_PHASE_267"],
   "phase-268": ["NEXT_PUBLIC_FEATURE_PHASE_268", "FEATURE_PHASE_268"],
+  "phase-262": ["NEXT_PUBLIC_FEATURE_PHASE_262", "FEATURE_PHASE_262"],
+  "phase-263": ["NEXT_PUBLIC_FEATURE_PHASE_263", "FEATURE_PHASE_263"],
+  "phase-264": ["NEXT_PUBLIC_FEATURE_PHASE_264", "FEATURE_PHASE_264"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -438,6 +444,9 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-266",
   "phase-267",
   "phase-268",
+  "phase-262",
+  "phase-263",
+  "phase-264",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {

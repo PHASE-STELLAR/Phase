@@ -252,6 +252,8 @@ export const SECURITY_COUNTER_REGISTRY = {
   anomaly_counter_breaches: { surface: "operations", reasons: NO_REASONS },
   anomaly_balance_breaches: { surface: "operations", reasons: NO_REASONS },
   anomaly_alerts_routed: { surface: "operations", reasons: NO_REASONS },
+  phase_stream_closed: { surface: "operations", reasons: NO_REASONS },
+  phase_stream_read_timeouts: { surface: "operations", reasons: NO_REASONS },
   collab_split_dust_rounded: { surface: "market", reasons: NO_REASONS },
   collab_split_recorded: { surface: "market", reasons: NO_REASONS },
   drop_queue_ticket_issued: { surface: "market", reasons: NO_REASONS },

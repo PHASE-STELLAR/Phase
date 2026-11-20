@@ -309,20 +309,16 @@ export type WorldExportSnapshot = {
   }>
 }
 
-export async function buildWorldExportSnapshot(collectionId: number): Promise<WorldExportSnapshot | null> {
+export async function buildWorldExportSnapshot(
+  collectionId: number,
+  options: { cursor?: number | null; limit?: number; maxBytes?: number } = {},
+): Promise<WorldExportSnapshot | null> {
   const world = await getWorldForCollection(collectionId)
   if (!world) return null
 
-  const narrativesStore = await readJsonStore<WorldNarrativesStore>(serverDataJsonPath("worldNarratives"))
-  const narratives = Object.entries(narrativesStore)
-    .filter(([_, data]) => data.collection_id === collectionId)
-    .map(([tokenId, data]) => ({
-      token_id: Number(tokenId),
-      narrative: data.narrative,
-      lore_input: data.lore_input,
-      generated_at: data.generated_at,
-    }))
-    .sort((a, b) => a.token_id - b.token_id)
+  const { narratives } = options.limit === undefined
+    ? await readAllWorldExportNarratives(collectionId)
+    : await getWorldNarrativesPage(collectionId, options)
 
   return {
     collection_id: collectionId,
@@ -332,6 +328,22 @@ export async function buildWorldExportSnapshot(collectionId: number): Promise<Wo
     created_at: world.created_at,
     narratives,
   }
+}
+
+async function readAllWorldExportNarratives(
+  collectionId: number,
+): Promise<{ narratives: WorldExportNarrative[] }> {
+  const narrativesStore = await readJsonStore<WorldNarrativesStore>(serverDataJsonPath("worldNarratives"))
+  const narratives = Object.entries(narrativesStore)
+    .filter(([, data]) => data.collection_id === collectionId)
+    .map(([tokenId, data]) => ({
+      token_id: Number(tokenId),
+      narrative: data.narrative,
+      lore_input: data.lore_input,
+      generated_at: data.generated_at,
+    }))
+    .sort((a, b) => a.token_id - b.token_id)
+  return { narratives }
 }
 
 export type WorldExportNarrative = {
@@ -348,6 +360,7 @@ export type WorldExportNarrativePage = {
   items: WorldExportNarrative[]
   /** token_id to resume from, or null when the collection is exhausted. */
   nextCursor: number | null
+  oversized: boolean
 }
 
 /**
@@ -357,7 +370,7 @@ export type WorldExportNarrativePage = {
  */
 export async function getWorldNarrativesPage(
   collectionId: number,
-  opts: { cursor?: number | null; limit?: number } = {},
+  opts: { cursor?: number | null; limit?: number; maxBytes?: number } = {},
 ): Promise<WorldExportNarrativePage> {
   const store = await readJsonStore<WorldNarrativesStore>(serverDataJsonPath("worldNarratives"))
   const limit = Math.min(Math.max(opts.limit ?? WORLD_EXPORT_PAGE_SIZE, 1), WORLD_EXPORT_PAGE_SIZE)
@@ -374,9 +387,26 @@ export async function getWorldNarrativesPage(
     .filter((n) => cursor === null || n.token_id > cursor)
     .sort((a, b) => a.token_id - b.token_id)
 
-  const items = matching.slice(0, limit)
+  const items: WorldExportNarrative[] = []
+  let encodedSize = 2
+  let oversized = false
+  const encoder = new TextEncoder()
+  for (const narrative of matching) {
+    if (items.length >= limit) break
+    const recordSize = encoder.encode(JSON.stringify(narrative)).byteLength
+    if (opts.maxBytes !== undefined && encodedSize + recordSize + (items.length ? 1 : 0) > opts.maxBytes) {
+      oversized = items.length === 0
+      break
+    }
+    items.push(narrative)
+    encodedSize += recordSize + (items.length > 1 ? 1 : 0)
+  }
   const last = items[items.length - 1]
-  return { items, nextCursor: matching.length > items.length && last ? last.token_id : null }
+  return {
+    items,
+    nextCursor: matching.length > items.length && last ? last.token_id : null,
+    oversized,
+  }
 }
 
 /** Total narratives in a collection — counted without holding them in memory. */
@@ -424,18 +454,41 @@ export async function* streamWorldExportNdjson(
   }
 }
 
-export function renderWorldExportMarkdown(snapshot: WorldExportSnapshot): string {
+export function renderWorldExportMarkdown(
+  snapshot: WorldExportSnapshot,
+  labels: {
+    worldId: string
+    worldPrompt: string
+    narratorTone: string
+    createdAt: string
+    narratives: string
+    artifact: string
+    loreInput: string
+    narrative: string
+    generated: string
+  } = {
+    worldId: "Mundo ID",
+    worldPrompt: "Prompt del Mundo",
+    narratorTone: "Tono del Narrador",
+    createdAt: "Creado",
+    narratives: "Narrativas",
+    artifact: "Artefacto",
+    loreInput: "Entrada de Lore",
+    narrative: "Narrativa",
+    generated: "Generado",
+  },
+): string {
   let md = `# ${snapshot.world_name}\n\n`
-  md += `**Mundo ID:** ${snapshot.collection_id}\n\n`
-  md += `**Prompt del Mundo:**\n${snapshot.world_prompt}\n\n`
-  if (snapshot.narrator_tone) md += `**Tono del Narrador:** ${snapshot.narrator_tone}\n\n`
-  md += `**Creado:** ${new Date(snapshot.created_at).toISOString()}\n\n`
-  md += `---\n\n## Narrativas (${snapshot.narratives.length})\n\n`
+  md += `**${labels.worldId}:** ${snapshot.collection_id}\n\n`
+  md += `**${labels.worldPrompt}:**\n${snapshot.world_prompt}\n\n`
+  if (snapshot.narrator_tone) md += `**${labels.narratorTone}:** ${snapshot.narrator_tone}\n\n`
+  md += `**${labels.createdAt}:** ${new Date(snapshot.created_at).toISOString()}\n\n`
+  md += `---\n\n## ${labels.narratives} (${snapshot.narratives.length})\n\n`
   for (const n of snapshot.narratives) {
-    md += `### Artefacto #${n.token_id}\n\n`
-    md += `**Entrada de Lore:** ${n.lore_input}\n\n`
-    md += `**Narrativa:**\n${n.narrative}\n\n`
-    md += `*Generado: ${new Date(n.generated_at).toISOString()}*\n\n`
+    md += `### ${labels.artifact} #${n.token_id}\n\n`
+    md += `**${labels.loreInput}:** ${n.lore_input}\n\n`
+    md += `**${labels.narrative}:**\n${n.narrative}\n\n`
+    md += `*${labels.generated}: ${new Date(n.generated_at).toISOString()}*\n\n`
     md += `---\n\n`
   }
   return md
@@ -484,11 +537,33 @@ export async function getLoreLinksForToken(tokenId: number): Promise<{ outgoing:
   return { outgoing, incoming }
 }
 
+const MAX_LORE_LINKS_PER_TOKEN = 50
+
+export class LoreLinkError extends Error {
+  code: "SELF_LINK" | "DEGREE_EXCEEDED"
+
+  constructor(code: LoreLinkError["code"], message: string) {
+    super(message)
+    this.name = "LoreLinkError"
+    this.code = code
+  }
+}
+
 export async function addLoreLink(fromTokenId: number, toTokenId: number, note?: string): Promise<LoreLink> {
+  if (fromTokenId === toTokenId) {
+    throw new LoreLinkError("SELF_LINK", "A token cannot link to itself")
+  }
+
   return updateJsonStore<LoreLinkStore, LoreLink>(
     serverDataJsonPath("loreLinks"),
     (store) => {
+      const outgoingCount = store.filter((l) => l.from_token_id === fromTokenId).length
       const existingIndex = store.findIndex((l) => l.from_token_id === fromTokenId && l.to_token_id === toTokenId)
+
+      if (existingIndex < 0 && outgoingCount >= MAX_LORE_LINKS_PER_TOKEN) {
+        throw new LoreLinkError("DEGREE_EXCEEDED", `Token already has ${MAX_LORE_LINKS_PER_TOKEN} outgoing links`)
+      }
+
       const link: LoreLink = {
         from_token_id: fromTokenId,
         to_token_id: toTokenId,

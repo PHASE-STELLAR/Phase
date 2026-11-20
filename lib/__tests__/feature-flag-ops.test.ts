@@ -50,7 +50,7 @@ describe("feature-flag ops (Spike 607 / phase-174)", () => {
     else process.env.PHASE_KILL_SWITCH_FLAGS = savedKillEnv;
   });
 
-  it("deduplicates ALL_FEATURE_FLAGS and includes phase-134, phase-135, and phase-170..174", () => {
+  it("deduplicates ALL_FEATURE_FLAGS and includes the active feature rollout flags", () => {
     const set = new Set(ALL_FEATURE_FLAGS);
     expect(set.size).toBe(ALL_FEATURE_FLAGS.length);
     expect(set.has("phase-128")).toBe(true);
@@ -58,6 +58,9 @@ describe("feature-flag ops (Spike 607 / phase-174)", () => {
     expect(set.has("phase-135")).toBe(true);
     expect(set.has("phase-173")).toBe(true);
     expect(set.has("phase-174")).toBe(true);
+    expect(set.has("phase-262")).toBe(true);
+    expect(set.has("phase-263")).toBe(true);
+    expect(set.has("phase-264")).toBe(true);
     expect(getEnabledFeatureFlags()).toContain("phase-174");
     expect(auditFeatureFlagOpsWiring().ok).toBe(true);
   });

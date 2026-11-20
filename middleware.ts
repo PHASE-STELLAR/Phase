@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
 import { isFeatureEnabled } from "@/lib/feature-flags"
+import { BoundedBodyError, readBoundedBody } from "@/lib/bounded-body"
+
+const MAX_API_WRITE_BODY_BYTES = 1024 * 1024
+const API_WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
 function getPhaseEnvironment(): string {
   if (typeof process === "undefined" || !process.env) return "production"
@@ -26,7 +30,37 @@ function buildCSP(): string {
   return cspParts.join("; ")
 }
 
-export function middleware(request: NextRequest): NextResponse {
+export async function middleware(request: NextRequest): Promise<NextResponse> {
+  if (
+    isFeatureEnabled("phase-264") &&
+    request.nextUrl.pathname.startsWith("/api/") &&
+    API_WRITE_METHODS.has(request.method) &&
+    request.body
+  ) {
+    const declaredLength = Number(request.headers.get("content-length"))
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_API_WRITE_BODY_BYTES) {
+      return NextResponse.json(
+        { error: "Request body exceeds the allowed size", code: "BODY_TOO_LARGE" },
+        { status: 413, headers: { "Cache-Control": "no-store" } },
+      )
+    }
+
+    try {
+      await readBoundedBody(request.clone(), MAX_API_WRITE_BODY_BYTES, 10_000)
+    } catch (error) {
+      if (error instanceof BoundedBodyError) {
+        return NextResponse.json(
+          { error: error.message, code: error.code },
+          {
+            status: error.code === "BODY_TOO_LARGE" ? 413 : error.code === "BODY_READ_TIMEOUT" ? 408 : 400,
+            headers: { "Cache-Control": "no-store" },
+          },
+        )
+      }
+      throw error
+    }
+  }
+
   let response = NextResponse.next()
   if (isFeatureEnabled("phase-175") && request.nextUrl.pathname.startsWith("/link/")) {
     const parts = request.nextUrl.pathname.split("/").filter(Boolean)

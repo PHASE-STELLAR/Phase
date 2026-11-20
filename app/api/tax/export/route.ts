@@ -5,6 +5,7 @@ import { resolveStellarNetwork } from "@/lib/stellar-network"
 import { getDb } from "@/lib/sqlite-db"
 import { incSecurityCounter } from "@/lib/security-counters"
 import { readBoundedBody } from "@/lib/bounded-body"
+import { readableStreamFromAsyncIterable } from "@/lib/phase-streaming"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -27,13 +28,22 @@ export async function POST(request: NextRequest) {
   if (!consumed.changes) return NextResponse.json({ code: "REPLAY" }, { status: 409, headers })
   const snapshot = (db.prepare("SELECT COALESCE(MAX(seq),0) AS seq FROM tax_events").get() as { seq: number }).seq
   const iterator = taxCsv(claims, snapshot)
-  const encoder = new TextEncoder()
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      try { const next = iterator.next(); if (next.done) controller.close(); else controller.enqueue(encoder.encode(next.value)) }
-      catch (error) { controller.error(error) }
-    }, cancel() { iterator.return(undefined) },
-  })
+  const stream = isFeatureEnabled("phase-264")
+    ? readableStreamFromAsyncIterable(iterator, { readTimeoutMs: 30_000 })
+    : new ReadableStream<Uint8Array>({
+        pull(controller) {
+          try {
+            const next = iterator.next()
+            if (next.done) controller.close()
+            else controller.enqueue(new TextEncoder().encode(next.value))
+          } catch (error) {
+            controller.error(error)
+          }
+        },
+        cancel() {
+          iterator.return(undefined)
+        },
+      })
   incSecurityCounter("tax_exported")
   return new Response(stream, { headers: { ...headers, "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="phase-testnet-${claims.wallet}-${claims.from.slice(0,10)}-${claims.policy}.csv"`, "X-Tax-Snapshot": String(snapshot), "X-Content-Type-Options": "nosniff" } })
 }
