@@ -4,6 +4,7 @@ import type { ArtifactLabelsCopy } from "@/lib/phase-copy"
 import { ipfsHttpsGatewayUrls } from "@/lib/phase-protocol"
 import { viewerSignatureShort } from "@/lib/viewer-signature"
 import { cn } from "@/lib/utils"
+import { ExplorerMetadataBadge } from "@/components/explorer-metadata-badge"
 import { createPortal } from "react-dom"
 import { useCallback, useEffect, useId, useMemo, useState } from "react"
 
@@ -162,6 +163,8 @@ type Props = {
   collectBusyLabel?: string
   /** Cámara: el padre muestra caption + copias; aquí solo el bloque de imagen (holo). */
   chamberMetaPanelExternal?: boolean
+  explorerCollectionId?: number
+  explorerCommittedDigest?: string
 }
 
 function truncateContractMid(id: string) {
@@ -207,6 +210,8 @@ export function PhaseArtifactVisualizer({
   collectLabel,
   collectBusyLabel,
   chamberMetaPanelExternal = false,
+  explorerCollectionId,
+  explorerCommittedDigest,
 }: Props) {
   void ownerTruncated
 
@@ -728,7 +733,10 @@ export function PhaseArtifactVisualizer({
           chamberDockFrameless ? "mx-0 text-left" : "mx-auto text-center",
         )}
       >
-        <p className="font-mono text-[10px] tracking-wide text-zinc-500">#{Math.max(0, Math.floor(serial))}</p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="font-mono text-[10px] tracking-wide text-zinc-500">#{Math.max(0, Math.floor(serial))}</p>
+          <ExplorerMetadataBadge collectionId={explorerCollectionId} committedDigest={explorerCommittedDigest} />
+        </div>
       </div>
     ) : null
 

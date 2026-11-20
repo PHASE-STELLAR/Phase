@@ -50,12 +50,23 @@ export const LABEL_REJECTION_REASONS = [
   "invalid_increment",
 ] as const
 
+export const CUSTODIAN_RELEASE_REASONS = [
+  "released",
+  "forged_authorization",
+  "nonce_replay",
+  "already_released",
+  "artifact_unverified",
+  "not_custodied",
+  "rpc_failure",
+] as const
+
 /** Every reason code any counter may carry. */
 export const SECURITY_REASON_CODES = [
   ...PREVIEW_VERIFY_REASONS,
   ...WASH_FLAG_REASONS,
   ...MODERATION_DECISIONS,
   ...LABEL_REJECTION_REASONS,
+  ...CUSTODIAN_RELEASE_REASONS,
 ] as const
 
 export type SecurityReasonCode = (typeof SECURITY_REASON_CODES)[number]
@@ -75,6 +86,7 @@ export const SECURITY_SURFACES = [
   "compliance",
   "deployment",
   "operations",
+  "custody",
 ] as const
 
 export type SecuritySurface = (typeof SECURITY_SURFACES)[number]
@@ -286,6 +298,11 @@ export const SECURITY_COUNTER_REGISTRY = {
   nft_verification_success: { surface: "market", reasons: NO_REASONS },
   nft_verification_not_found: { surface: "market", reasons: NO_REASONS },
   nft_verification_rpc_error: { surface: "market", reasons: NO_REASONS },
+  custodian_release_total: { surface: "custody", reasons: CUSTODIAN_RELEASE_REASONS },
+  custodian_release_success: { surface: "custody", reasons: NO_REASONS },
+  custodian_release_forged: { surface: "custody", reasons: NO_REASONS },
+  custodian_release_replay: { surface: "custody", reasons: NO_REASONS },
+  custodian_release_already_released: { surface: "custody", reasons: NO_REASONS },
   collab_split_dust_rounded: { surface: "market", reasons: NO_REASONS },
   collab_split_recorded: { surface: "market", reasons: NO_REASONS },
   drop_queue_ticket_issued: { surface: "market", reasons: NO_REASONS },

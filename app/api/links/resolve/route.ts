@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { isFeatureEnabled } from "@/lib/feature-flags"
-import { parsePhaseLink } from "@/lib/deep-links"
+import { buildChamberCollectionHref, parsePhaseLink } from "@/lib/deep-links"
 import { getListing, getOffers } from "@/lib/market-store"
 import { getQuestRegistry } from "@/lib/quest-registry"
 import { incSecurityCounter } from "@/lib/security-counters"
@@ -8,7 +8,7 @@ import { incSecurityCounter } from "@/lib/security-counters"
 export const runtime = "nodejs"
 export async function GET(request: NextRequest) {
   const headers = { "Cache-Control": "private, no-store" }
-  if (!isFeatureEnabled("phase-175")) return NextResponse.json({ code: "DISABLED" }, { status: 404, headers })
+  if (!isFeatureEnabled("phase-248") && !isFeatureEnabled("phase-175")) return NextResponse.json({ code: "DISABLED" }, { status: 404, headers })
   let intent
   try { intent = parsePhaseLink(request.nextUrl.searchParams.get("link") ?? "", request.nextUrl.origin) }
   catch {
@@ -31,8 +31,13 @@ export async function GET(request: NextRequest) {
       if (!quest) return NextResponse.json({ code: "INTENT_UNAVAILABLE" }, { status: 410, headers })
       href = `/forge?quest=${encodeURIComponent(intent.id)}`
       context = { questId: quest.id }
-    } else href = `/chamber?collection=${intent.id}`
+    } else {
+      href = buildChamberCollectionHref(intent)
+    }
     // Recipient/referral values are review context, never transaction authority.
+    if (intent.recipient) {
+      context = { ...context, recipientAuthority: "untrusted_context" }
+    }
     incSecurityCounter("deep_link_resolved")
     return NextResponse.json({ intent, href, context }, { headers })
   } catch {
