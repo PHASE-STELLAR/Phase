@@ -114,6 +114,8 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   lifetime, review screen, Chamber rewrite and custom scheme fencing (issue #699)
  * - phase-250: Explorer metadata contract integration with typed adapter, digest
  *   comparison, verified badge, and short-TTL stale-on-error fence (issue #701)
+ * - phase-249: Proof-relay contract verification integration with canonical bytes,
+ *   timeout, typed failure, and SQLite idempotent recording (issue #700)
  *
  * - phase-265: one decimal-amount parser for forge, market and x402 amounts with explicit
  *   decimal places and rounding modes (issue #723)
@@ -249,7 +251,8 @@ export type PhaseFeatureFlag =
   | "phase-289"
   | "phase-251"
   | "phase-248"
-  | "phase-250";
+  | "phase-250"
+  | "phase-249";
 
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
@@ -371,6 +374,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-251": ["NEXT_PUBLIC_FEATURE_PHASE_251", "FEATURE_PHASE_251"],
   "phase-248": ["NEXT_PUBLIC_FEATURE_PHASE_248", "FEATURE_PHASE_248"],
   "phase-250": ["NEXT_PUBLIC_FEATURE_PHASE_250", "FEATURE_PHASE_250"],
+  "phase-249": ["NEXT_PUBLIC_FEATURE_PHASE_249", "FEATURE_PHASE_249"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -482,6 +486,7 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-251",
   "phase-248",
   "phase-250",
+  "phase-249",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {
