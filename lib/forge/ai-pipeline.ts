@@ -3,6 +3,7 @@ import { GoogleGenerativeAI, HarmBlockThreshold, HarmCategory } from "@google/ge
 import { generateForgeImageUrlViaNanobananaApi, nanobananaApiKeyConfigured } from "@/lib/forge-nanobanana"
 import { buildLoreSystemInstruction, buildPollinationsImageUrl, composeForgeImagePrompt, type ForgeImageStyleMode } from "@/lib/forge/prompt-builder"
 import type { WorldNarrativeData } from "@/lib/narrative-world-store"
+import { incSecurityCounter } from "@/lib/security-counters"
 
 // ── constants ────────────────────────────────────────────────────────────────
 const FORGE_GEMINI_SAFETY_SETTINGS = (
@@ -282,4 +283,76 @@ export async function generateImageStep(input: GenerateImageStepInput): Promise<
     return { imageUrl: buildPollinationsImageUrl(input.prompt, input.styleMode), image_source: "pollinations_fallback" }
   }
   throw new Error("GEMINI_IMAGE_FAILED: no provider available and fallback disabled")
+}
+
+// ── step contract with closed error taxonomy (phase-289) ──────────────────
+export class AiStepError extends Error {
+  constructor(
+    public code: "SCHEMA_VALIDATION" | "RETRY_EXHAUSTED" | "PROVIDER_UNAVAILABLE" | "SAFETY_BLOCKED" | "TIMEOUT" | "PARSE_ERROR",
+    message: string,
+    public retryable: boolean = false,
+  ) {
+    super(message)
+    this.name = "AiStepError"
+  }
+}
+
+export interface AiStepContract {
+  schema?: { validate: (data: unknown) => boolean }
+  maxRetries?: number
+  timeoutMs?: number
+  fallbackTemplate?: unknown
+}
+
+export async function executeAiStepWithContract<T>(
+  step: () => Promise<T>,
+  contract: AiStepContract,
+): Promise<T> {
+  const maxRetries = contract.maxRetries ?? 2
+  const timeoutMs = contract.timeoutMs ?? 20_000
+  let lastError: Error | null = null
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await withTimeout(step(), timeoutMs, `AI_STEP_ATTEMPT_${attempt}`)
+      if (contract.schema && !contract.schema.validate(result)) {
+        const msg = `Schema validation failed for step result`
+        incSecurityCounter("ai_step_validation_failure")
+        if (attempt < maxRetries) continue
+        throw new AiStepError("SCHEMA_VALIDATION", msg, true)
+      }
+      incSecurityCounter("ai_step_success")
+      return result
+    } catch (e) {
+      const isTimeout = e instanceof Error && e.message.includes("TIMEOUT")
+      const isSafetyBlock = e instanceof Error && e.message.includes("BLOCK")
+      lastError = e instanceof Error ? e : new Error(String(e))
+
+      if (isSafetyBlock) {
+        incSecurityCounter("ai_step_safety_block")
+        throw new AiStepError("SAFETY_BLOCKED", `Content policy violation: ${lastError.message}`, false)
+      }
+      if (isTimeout) {
+        incSecurityCounter("ai_step_timeout")
+        if (attempt >= maxRetries) {
+          throw new AiStepError("TIMEOUT", `Timeout after ${maxRetries + 1} attempts`, false)
+        }
+        continue
+      }
+
+      incSecurityCounter("ai_step_error")
+      if (attempt >= maxRetries) break
+    }
+  }
+
+  if (contract.fallbackTemplate) {
+    incSecurityCounter("ai_step_fallback")
+    return contract.fallbackTemplate as T
+  }
+
+  throw new AiStepError(
+    "RETRY_EXHAUSTED",
+    `Step failed after ${maxRetries + 1} attempts: ${lastError?.message}`,
+    true,
+  )
 }

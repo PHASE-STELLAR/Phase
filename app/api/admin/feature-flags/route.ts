@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { checkAdminKey } from "@/lib/admin-key";
 import {
@@ -21,6 +22,8 @@ import {
 } from "@/lib/feature-flags";
 import { readJsonFile, updateStore } from "@/lib/json-store";
 import { serverDataJsonPath } from "@/lib/server-data-paths";
+import { auditAdminAction, requiresConfirmation, validateAdminAction, getAuditLog } from "@/lib/admin-console";
+import { incSecurityCounter } from "@/lib/security-counters";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +41,10 @@ function isAuthorizedAdmin(req: NextRequest): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+function getOperatorIdentity(req: NextRequest): string {
+  return req.headers.get("x-operator-id") || req.headers.get("x-admin-key")?.slice(0, 8) || "unknown";
+}
+
 async function hydrateFromSidecar() {
   return refreshFeatureFlagOpsCache(() =>
     readJsonFile<FlagOpsStore>(serverDataJsonPath("featureFlagOps"), {}),
@@ -52,6 +59,7 @@ export async function GET(req: NextRequest) {
     );
   }
   if (!isAuthorizedAdmin(req)) {
+    incSecurityCounter("admin_unauthorized_access")
     return NextResponse.json(
       { error: "Unauthorized — valid admin key or token required", code: "UNAUTHORIZED" },
       { status: 401 },
@@ -64,12 +72,17 @@ export async function GET(req: NextRequest) {
     evaluateFeatureFlag(flag, { wallet, runtimeOnly: true }),
   );
 
+  const operator = getOperatorIdentity(req);
+  incSecurityCounter("admin_feature_flags_accessed")
+
   return NextResponse.json({
     ok: true,
+    operator,
     cacheState: featureFlagOpsCacheState(),
     rules: listFeatureFlagRules(),
     evaluations,
     drills: getKillSwitchDrillHistory(),
+    auditLog: getAuditLog(50),
   });
 }
 
@@ -81,6 +94,7 @@ export async function POST(req: NextRequest) {
     );
   }
   if (!isAuthorizedAdmin(req)) {
+    incSecurityCounter("admin_unauthorized_access")
     return NextResponse.json(
       { error: "Unauthorized — valid admin key or token required", code: "UNAUTHORIZED" },
       { status: 401 },
@@ -91,20 +105,58 @@ export async function POST(req: NextRequest) {
   try {
     body = (await req.json()) as Record<string, unknown>;
   } catch {
+    incSecurityCounter("admin_bad_json")
     return NextResponse.json({ error: "Invalid JSON body", code: "BAD_JSON" }, { status: 400 });
   }
 
+  const operator = getOperatorIdentity(req);
+  const reason = typeof body.reason === "string" ? body.reason : undefined;
+  const confirmed = body.confirmed === true || body.confirmed === "true";
+
   await hydrateFromSidecar();
   const action = typeof body.action === "string" ? body.action.trim() : "set_rule";
+  const flag = body.flag as string | undefined;
+
+  if (action === "kill_switch" && requiresConfirmation("feature_flag_kill_switch")) {
+    if (!confirmed) {
+      incSecurityCounter("admin_destructive_action_unconfirmed")
+      return NextResponse.json(
+        { error: "Destructive action requires confirmation. Set confirmed: true", code: "CONFIRMATION_REQUIRED" },
+        { status: 409 },
+      );
+    }
+  }
 
   try {
     if (action === "run_drill") {
+      auditAdminAction({
+        id: randomUUID(),
+        action: "feature_flag_kill_switch",
+        operator,
+        timestamp: Date.now(),
+        resourceId: "kill_switch",
+        resourceType: "drill",
+        reason,
+        confirmed,
+        success: true,
+      })
       const report = await runKillSwitchDrill();
       return NextResponse.json({ ok: report.passed, drill: report }, { status: report.passed ? 200 : 500 });
     }
 
-    const flag = body.flag;
     if (!isValidPhaseFeatureFlag(flag)) {
+      auditAdminAction({
+        id: randomUUID(),
+        action: "feature_flag_toggle",
+        operator,
+        timestamp: Date.now(),
+        resourceId: String(flag),
+        resourceType: "feature_flag",
+        reason,
+        confirmed,
+        success: false,
+        error: "Invalid flag",
+      })
       return NextResponse.json(
         { error: "Valid PhaseFeatureFlag required", code: "INVALID_FLAG" },
         { status: 400 },
@@ -124,6 +176,17 @@ export async function POST(req: NextRequest) {
         delete store[flag];
         return removeFeatureFlagRule(flag);
       });
+      auditAdminAction({
+        id: randomUUID(),
+        action: "feature_flag_toggle",
+        operator,
+        timestamp: Date.now(),
+        resourceId: flag,
+        resourceType: "feature_flag",
+        reason,
+        confirmed,
+        success: true,
+      })
       return NextResponse.json({ ok: true, flag, removed: true });
     }
 
@@ -188,14 +251,42 @@ export async function POST(req: NextRequest) {
       return updated;
     });
 
+    auditAdminAction({
+      id: randomUUID(),
+      action: action === "kill_switch" ? "feature_flag_kill_switch" : "feature_flag_toggle",
+      operator,
+      timestamp: Date.now(),
+      resourceId: flag,
+      resourceType: "feature_flag",
+      reason,
+      confirmed,
+      success: true,
+    })
+
     const res = NextResponse.json({
       ok: true,
       rule,
       evaluation: evaluateFeatureFlag(flag, { runtimeOnly: true }),
+      operator,
+      auditLog: getAuditLog(50),
     });
     res.headers.set("ETag", `"${rule.version}"`);
     return res;
   } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : "Feature flag operation failed";
+    auditAdminAction({
+      id: randomUUID(),
+      action: action === "kill_switch" ? "feature_flag_kill_switch" : "feature_flag_toggle",
+      operator,
+      timestamp: Date.now(),
+      resourceId: flag || "unknown",
+      resourceType: "feature_flag",
+      reason,
+      confirmed,
+      success: false,
+      error: errorMsg,
+    })
+
     if (err instanceof FeatureFlagOpsError) {
       const status =
         err.code === "VERSION_CONFLICT"
@@ -209,7 +300,7 @@ export async function POST(req: NextRequest) {
       );
     }
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Feature flag operation failed" },
+      { error: errorMsg },
       { status: 500 },
     );
   }

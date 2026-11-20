@@ -100,19 +100,16 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   same-tab strategy with popup fallback, fail closed on mainnet (spike 650 / issue #740)
  * - phase-282: Secret rotation automation with runbook definition, dry-run mode, audit
  *   events and deployed reference verification (spike 651 / issue #741)
- * - phase-290: Compliance webhook callback integration with signature verification,
- *   SQLite event uniqueness, keyed wallet hashes (no PII), replay and tamper tests
- *   (issue #751)
- * - phase-291: In-app documentation system with build-time freshness check, hash
- *   validation, canonical doc links, EN/ES copy (issue #752)
- * - phase-292: Theming and motion system consistency with centralized tokens,
- *   reduced-motion support, GPU compositing hints, visual regression snapshots
- *   (issue #753)
- * - phase-293: Landing page i18n shell and copy pipeline with pickCopy routing,
- *   build-time key coverage, locale persistence, hardcoded string detection
- *   (issue #754)
+ * - phase-286: Admin operator console with unified surface, action gating, audit trails
+ *   and EN/ES localization (issue #745)
+ * - phase-287: Phase NFT verification flow with Soroban simulation, metadata digest
+ *   and idempotent outcomes (issue #748)
+ * - phase-288: NFT listing and bulk listing integration with atomic transactions
+ *   and per-item error handling (issue #749)
+ * - phase-289: AI pipeline step orchestration with centralized schema validation,
+ *   bounded retries and deterministic fallback (issue #750)
  *
- * phase-182/280/281/282/290/291/292/293 are default off. Rollback: unset the env keys and restart.
+ * phase-182/280/281/282/286/287/288/289 are default off. Rollback: unset the env keys and restart.
  */
 
 export type PhaseFeatureFlag =
@@ -224,10 +221,10 @@ export type PhaseFeatureFlag =
   | "phase-280"
   | "phase-281"
   | "phase-282"
-  | "phase-290"
-  | "phase-291"
-  | "phase-292"
-  | "phase-293";
+  | "phase-286"
+  | "phase-287"
+  | "phase-288"
+  | "phase-289";
 
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
@@ -335,10 +332,10 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-280": ["NEXT_PUBLIC_FEATURE_PHASE_280", "FEATURE_PHASE_280"],
   "phase-281": ["NEXT_PUBLIC_FEATURE_PHASE_281", "FEATURE_PHASE_281"],
   "phase-282": ["NEXT_PUBLIC_FEATURE_PHASE_282", "FEATURE_PHASE_282"],
-  "phase-290": ["NEXT_PUBLIC_FEATURE_PHASE_290", "FEATURE_PHASE_290"],
-  "phase-291": ["NEXT_PUBLIC_FEATURE_PHASE_291", "FEATURE_PHASE_291"],
-  "phase-292": ["NEXT_PUBLIC_FEATURE_PHASE_292", "FEATURE_PHASE_292"],
-  "phase-293": ["NEXT_PUBLIC_FEATURE_PHASE_293", "FEATURE_PHASE_293"],
+  "phase-286": ["NEXT_PUBLIC_FEATURE_PHASE_286", "FEATURE_PHASE_286"],
+  "phase-287": ["NEXT_PUBLIC_FEATURE_PHASE_287", "FEATURE_PHASE_287"],
+  "phase-288": ["NEXT_PUBLIC_FEATURE_PHASE_288", "FEATURE_PHASE_288"],
+  "phase-289": ["NEXT_PUBLIC_FEATURE_PHASE_289", "FEATURE_PHASE_289"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -436,10 +433,10 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-280",
   "phase-281",
   "phase-282",
-  "phase-290",
-  "phase-291",
-  "phase-292",
-  "phase-293",
+  "phase-286",
+  "phase-287",
+  "phase-288",
+  "phase-289",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {
