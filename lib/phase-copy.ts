@@ -307,6 +307,12 @@ export type IntegrationCopy = {
 export const phaseCopy: Record<
   AppLang,
   {
+    worldExport: Record<
+      "disabled" | "invalidCollection" | "notFound" | "invalidFormat" | "invalidCursor" | "tooLarge" | "worldId" | "worldPrompt" | "narratorTone" | "createdAt" | "narratives" | "artifact" | "loreInput" | "narrative" | "generated",
+      string
+    >
+    profileCompleteness: Record<"progressHint" | "staleProfile" | "invalidAvatar", string>
+    toastQueue: Record<"biometricGateClosed", string>
     integrations: IntegrationCopy
     /** Spike 574 (phase-182): classic PHASELQ/XLM pool + Soroswap surface. */
     liquidityPools: Record<
@@ -834,6 +840,31 @@ export const phaseCopy: Record<
   }
 > = {
   en: {
+    worldExport: {
+      disabled: "World export is disabled.",
+      invalidCollection: "collection_id must be a positive integer.",
+      notFound: "World not found.",
+      invalidFormat: "format must be 'json', 'markdown', or 'ndjson'.",
+      invalidCursor: "cursor must be a non-negative integer.",
+      tooLarge: "An individual narrative is too large to export in a bounded page.",
+      worldId: "World ID",
+      worldPrompt: "World Prompt",
+      narratorTone: "Narrator Tone",
+      createdAt: "Created",
+      narratives: "Narratives",
+      artifact: "Artifact",
+      loreInput: "Lore Input",
+      narrative: "Narrative",
+      generated: "Generated",
+    },
+    profileCompleteness: {
+      progressHint: "Profile completeness: {score}%",
+      staleProfile: "This profile changed elsewhere. Refresh and retry.",
+      invalidAvatar: "Avatar must be a supported image under 5 MB.",
+    },
+    toastQueue: {
+      biometricGateClosed: "[ ERROR: BIOMETRIC_TRUST_GATE_CLOSED ]",
+    },
     liquidityPools: {
       title: "Liquidity pools",
       subtitle: "Provide PHASELQ and XLM, or swap between them through the classic pool.",
@@ -1593,6 +1624,31 @@ export const phaseCopy: Record<
 
 
   es: {
+    worldExport: {
+      disabled: "La exportación de mundos está deshabilitada.",
+      invalidCollection: "collection_id debe ser un entero positivo.",
+      notFound: "No se encontró el mundo.",
+      invalidFormat: "format debe ser 'json', 'markdown' o 'ndjson'.",
+      invalidCursor: "cursor debe ser un entero no negativo.",
+      tooLarge: "Una narrativa supera el tamaño máximo de una página de exportación.",
+      worldId: "ID del mundo",
+      worldPrompt: "Descripción del mundo",
+      narratorTone: "Tono del narrador",
+      createdAt: "Creado",
+      narratives: "Narrativas",
+      artifact: "Artefacto",
+      loreInput: "Entrada de lore",
+      narrative: "Narrativa",
+      generated: "Generado",
+    },
+    profileCompleteness: {
+      progressHint: "Perfil completado: {score}%",
+      staleProfile: "Este perfil cambió en otro lugar. Actualizá y reintentá.",
+      invalidAvatar: "El avatar debe ser una imagen compatible de menos de 5 MB.",
+    },
+    toastQueue: {
+      biometricGateClosed: "[ ERROR: BIOMETRIC_TRUST_GATE_CLOSED ]",
+    },
     liquidityPools: {
       title: "Pools de liquidez",
       subtitle: "Aportá PHASELQ y XLM, o cambiá entre ambos por el pool clásico.",

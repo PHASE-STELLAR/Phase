@@ -15,6 +15,8 @@ export type ProfileData = {
   privacy_version?: string;
   accepted_at?: number;
   updated_at: number;
+  version?: number;
+  completeness?: { score: number; completedFields: number; totalFields: number };
 };
 
 type ProfileStore = Record<string, ProfileData>;
@@ -31,7 +33,42 @@ export async function getProfile(wallet: string): Promise<ProfileData | null> {
 export async function saveProfile(
   wallet: string,
   data: Omit<ProfileData, "updated_at">,
+  options: { expectedVersion?: number | null } = {},
 ): Promise<ProfileData> {
+  if (isFeatureEnabled("phase-262")) {
+    if (await getProfile(wallet)) {
+      const { assertNoLegalHold } = await import("@/lib/legal-hold")
+      await assertNoLegalHold("wallet", wallet, "save_profile")
+    }
+    const saved = await updateStore<ProfileStore, ProfileData>("profileSocials", (store) => {
+      const existing = store[wallet]
+      const currentVersion = existing?.version ?? 0
+      if (options.expectedVersion === undefined || options.expectedVersion !== currentVersion) {
+        throw new ProfileVersionConflictError(currentVersion)
+      }
+
+      const changed = PROFILE_MUTABLE_FIELDS.some((field) => existing?.[field] !== data[field])
+      if (!changed && existing) {
+        return {
+          ...existing,
+          version: existing.version ?? currentVersion,
+          completeness: existing.completeness ?? computeProfileCompleteness(existing),
+        }
+      }
+
+      const profileFields = { ...data }
+      const entry: ProfileData = {
+        ...profileFields,
+        version: currentVersion + 1,
+        updated_at: Date.now(),
+        completeness: computeProfileCompleteness(profileFields),
+      }
+      store[wallet] = entry
+      return entry
+    })
+    return saved
+  }
+
   const existing = await getProfile(wallet);
   if (existing) {
     const { assertNoLegalHold } = await import("@/lib/legal-hold");
@@ -45,6 +82,46 @@ export async function saveProfile(
     store[wallet] = entry;
   });
   return entry;
+}
+
+export class ProfileVersionConflictError extends Error {
+  constructor(readonly currentVersion: number) {
+    super("Profile version conflict")
+    this.name = "ProfileVersionConflictError"
+  }
+}
+
+const PROFILE_MUTABLE_FIELDS = [
+  "display_name",
+  "twitter",
+  "discord",
+  "telegram",
+  "avatar_token_id",
+  "avatar_image_url",
+  "locale",
+  "tos_version",
+  "privacy_version",
+  "accepted_at",
+] as const satisfies readonly (keyof ProfileData)[]
+
+const PROFILE_COMPLETENESS_FIELDS = [
+  (profile: Pick<ProfileData, "display_name">) => Boolean(profile.display_name?.trim()),
+  (profile: Pick<ProfileData, "avatar_token_id" | "avatar_image_url">) =>
+    profile.avatar_token_id !== undefined || Boolean(profile.avatar_image_url?.trim()),
+  (profile: Pick<ProfileData, "twitter">) => Boolean(profile.twitter?.trim()),
+  (profile: Pick<ProfileData, "discord">) => Boolean(profile.discord?.trim()),
+  (profile: Pick<ProfileData, "telegram">) => Boolean(profile.telegram?.trim()),
+] as const
+
+export function computeProfileCompleteness(
+  profile: Pick<ProfileData, "display_name" | "avatar_token_id" | "avatar_image_url" | "twitter" | "discord" | "telegram">,
+) {
+  const completedFields = PROFILE_COMPLETENESS_FIELDS.filter((field) => field(profile)).length
+  return {
+    score: Math.round((completedFields / PROFILE_COMPLETENESS_FIELDS.length) * 100),
+    completedFields,
+    totalFields: PROFILE_COMPLETENESS_FIELDS.length,
+  }
 }
 
 // phase-102: locale preference support for profile localization.
@@ -152,7 +229,7 @@ export async function saveProfileLocalePreference(
   await saveProfile(wallet, {
     ...(profile ?? {}),
     locale: resolved.locale,
-  });
+  }, { expectedVersion: profile?.version ?? 0 });
   return resolved;
 }
 // phase-96: human-readable profile handle resolution.
