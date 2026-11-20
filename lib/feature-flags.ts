@@ -112,6 +112,8 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   atomic SQLite nonce consumption, artifact verification and audit events (issue #702)
  * - phase-248: Inbound deep links with strict same-origin intent schema, 15-minute
  *   lifetime, review screen, Chamber rewrite and custom scheme fencing (issue #699)
+ * - phase-250: Explorer metadata contract integration with typed adapter, digest
+ *   comparison, verified badge, and short-TTL stale-on-error fence (issue #701)
  *
  * - phase-265: one decimal-amount parser for forge, market and x402 amounts with explicit
  *   decimal places and rounding modes (issue #723)
@@ -246,7 +248,8 @@ export type PhaseFeatureFlag =
   | "phase-288"
   | "phase-289"
   | "phase-251"
-  | "phase-248";
+  | "phase-248"
+  | "phase-250";
 
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
@@ -367,6 +370,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-289": ["NEXT_PUBLIC_FEATURE_PHASE_289", "FEATURE_PHASE_289"],
   "phase-251": ["NEXT_PUBLIC_FEATURE_PHASE_251", "FEATURE_PHASE_251"],
   "phase-248": ["NEXT_PUBLIC_FEATURE_PHASE_248", "FEATURE_PHASE_248"],
+  "phase-250": ["NEXT_PUBLIC_FEATURE_PHASE_250", "FEATURE_PHASE_250"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -477,6 +481,7 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-289",
   "phase-251",
   "phase-248",
+  "phase-250",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {
