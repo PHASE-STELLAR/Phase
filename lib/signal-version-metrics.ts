@@ -19,11 +19,21 @@
  */
 
 /** Where a stale version was detected. Mirrors the CAS guards in `lib/signal-store.ts`. */
-export const SIGNAL_CONFLICT_SURFACES = ["upvote", "edit", "reply", "put", "vote"] as const;
+export const SIGNAL_CONFLICT_SURFACES = [
+  "upvote",
+  "edit",
+  "reply",
+  "put",
+  "vote",
+] as const;
 export type SignalConflictSurface = (typeof SIGNAL_CONFLICT_SURFACES)[number];
 
 /** Outcome of a CRDT draft commit, which still has to clear the CAS guard. */
-export const SIGNAL_CRDT_OUTCOMES = ["committed", "conflicted", "rejected"] as const;
+export const SIGNAL_CRDT_OUTCOMES = [
+  "committed",
+  "conflicted",
+  "rejected",
+] as const;
 export type SignalCrdtOutcome = (typeof SIGNAL_CRDT_OUTCOMES)[number];
 
 export type SignalVersionMetricName =
@@ -61,7 +71,10 @@ const counters = new Map<SignalVersionMetricName, number>();
 const bySurface = new Map<SignalConflictSurface, number>();
 const crdtCommitsByOutcome = new Map<SignalCrdtOutcome, number>();
 
-export function incSignalVersionMetric(name: SignalVersionMetricName, by = 1): void {
+export function incSignalVersionMetric(
+  name: SignalVersionMetricName,
+  by = 1,
+): void {
   counters.set(name, (counters.get(name) ?? 0) + by);
 }
 
@@ -75,13 +88,33 @@ export function getSignalVersionMetric(name: SignalVersionMetricName): number {
  * internal CAS attempt lost the race and recomputed" — only the first kind is
  * user-visible contention, and the two mean different things operationally.
  */
+/**
+ * Records a rejected stale write. `retried` separates "the client offered a
+ * version it had actually read, so a peer really did land first" from "an
+ * internal CAS attempt lost the race and recomputed" — only the first kind is
+ * user-visible contention, and the two mean different things operationally.
+ *
+ * Every call emits a structured log line so conflicts are searchable in any
+ * log aggregator without needing to parse free-form text (#734).
+ */
 export function recordSignalVersionConflict(
   surface: SignalConflictSurface,
-  opts: { retried?: boolean } = {},
+  opts: { retried?: boolean; route?: string } = {},
 ): void {
   incSignalVersionMetric("signal_version_conflicts");
   bySurface.set(surface, (bySurface.get(surface) ?? 0) + 1);
   if (opts.retried) incSignalVersionMetric("signal_version_conflict_retries");
+
+  // Structured log — labels are closed sets so cardinality stays bounded (#734).
+  console.log(
+    JSON.stringify({
+      event: "signal_version_conflict",
+      surface,
+      route: opts.route ?? null,
+      retried: opts.retried ?? false,
+      total: counters.get("signal_version_conflicts") ?? 0,
+    }),
+  );
 }
 
 export function recordSignalCrdtMerge(concurrency: boolean): void {
@@ -95,8 +128,12 @@ export function recordSignalCrdtDivergence(): void {
 
 export function recordSignalCrdtCommit(outcome: SignalCrdtOutcome): void {
   incSignalVersionMetric("signal_crdt_commits");
-  crdtCommitsByOutcome.set(outcome, (crdtCommitsByOutcome.get(outcome) ?? 0) + 1);
-  if (outcome === "conflicted") incSignalVersionMetric("signal_crdt_commits_conflicted");
+  crdtCommitsByOutcome.set(
+    outcome,
+    (crdtCommitsByOutcome.get(outcome) ?? 0) + 1,
+  );
+  if (outcome === "conflicted")
+    incSignalVersionMetric("signal_crdt_commits_conflicted");
 }
 
 export function snapshotSignalVersionMetrics(): SignalVersionMetrics {
@@ -105,8 +142,10 @@ export function snapshotSignalVersionMetrics(): SignalVersionMetrics {
     crdtCommitsByOutcome: {} as Record<SignalCrdtOutcome, number>,
   } as SignalVersionMetrics;
   for (const name of METRIC_NAMES) out[name] = counters.get(name) ?? 0;
-  for (const surface of SIGNAL_CONFLICT_SURFACES) out.bySurface[surface] = bySurface.get(surface) ?? 0;
-  for (const outcome of SIGNAL_CRDT_OUTCOMES) out.crdtCommitsByOutcome[outcome] = crdtCommitsByOutcome.get(outcome) ?? 0;
+  for (const surface of SIGNAL_CONFLICT_SURFACES)
+    out.bySurface[surface] = bySurface.get(surface) ?? 0;
+  for (const outcome of SIGNAL_CRDT_OUTCOMES)
+    out.crdtCommitsByOutcome[outcome] = crdtCommitsByOutcome.get(outcome) ?? 0;
   return out;
 }
 

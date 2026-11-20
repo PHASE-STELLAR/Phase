@@ -181,7 +181,9 @@ export type SecurityCounterName =
   | "anomaly_volume_breaches"
   | "anomaly_counter_breaches"
   | "anomaly_balance_breaches"
-  | "anomaly_alerts_routed";
+  | "anomaly_alerts_routed"
+  | "phase_stream_closed"
+  | "phase_stream_read_timeouts";
 
 
 const counters = new Map<SecurityCounterName, number>()
