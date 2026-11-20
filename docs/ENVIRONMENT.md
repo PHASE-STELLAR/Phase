@@ -49,6 +49,7 @@ Feature flags follow the pattern `NEXT_PUBLIC_FEATURE_*` / `FEATURE_*` and accep
 | `SOROSWAP_FACTORY_CONTRACT_ID` |  | Soroswap factory contract. |
 | `SOROSWAP_EXPECTED_ROUTER_ID` |  | Pinned router ID; drift from it is flagged. |
 | `PHASE_PROD_CONTRACT_IDS` |  | Production contract IDs a preview must never point at. |
+| `PHASE_CONTRACT_CODE_HASH` |  | Expected WASM code hash of the PHASE protocol contract, checked at startup outside testnet when phase-271 is on (#729). |
 | `PHASE_PROD_ISSUER` |  | Production issuer account a preview must never resolve to. |
 
 ## signing

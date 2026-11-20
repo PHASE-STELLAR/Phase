@@ -153,6 +153,7 @@ export const ENV_SURFACES = {
     SOROSWAP_FACTORY_CONTRACT_ID: contractId("Soroswap factory contract."),
     SOROSWAP_EXPECTED_ROUTER_ID: contractId("Pinned router ID; drift from it is flagged."),
     PHASE_PROD_CONTRACT_IDS: contractList("Production contract IDs a preview must never point at."),
+    PHASE_CONTRACT_CODE_HASH: sha256Hex("Expected WASM code hash of the PHASE protocol contract, checked at startup outside testnet when phase-271 is on (#729)."),
     PHASE_PROD_ISSUER: accountId("Production issuer account a preview must never resolve to."),
   },
   signing: {
