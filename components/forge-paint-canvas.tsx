@@ -2,6 +2,12 @@
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
+import {
+  composeImageWithPhaseForgeSeal,
+  deriveSealDigest,
+  isDeterministicSealEnabled,
+  type ForgeSealMetadata,
+} from "@/lib/forge-seal-image"
 
 const STROKE = "#00ff00"
 const BG = "#000000"
@@ -17,6 +23,7 @@ type Segment =
 
 export type ForgePaintCanvasHandle = {
   exportPngBlob: () => Promise<Blob | null>
+  getSealDigest: () => Promise<string | null>
   clear: () => void
 }
 
@@ -31,6 +38,8 @@ type Props = {
   /** Modo controlado: obligatorio si `toolRail="none"`. */
   tool?: PaintTool
   onToolChange?: (t: PaintTool) => void
+  /** Metadatos canónicos del artefacto para derivar el sello determinista (phase-259). */
+  sealMetadata?: ForgeSealMetadata
 }
 
 function snapCoord(n: number, grid = FORGE_GRID_PX) {
@@ -125,7 +134,7 @@ function drawAll(
 }
 
 export const ForgePaintCanvas = forwardRef<ForgePaintCanvasHandle, Props>(function ForgePaintCanvas(
-  { className, width = 400, height = 280, toolRail = "internal", tool: toolProp, onToolChange },
+  { className, width = 400, height = 280, toolRail = "internal", tool: toolProp, onToolChange, sealMetadata },
   ref,
 ) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -229,21 +238,39 @@ export const ForgePaintCanvas = forwardRef<ForgePaintCanvasHandle, Props>(functi
   }
 
   useImperativeHandle(ref, () => ({
-    exportPngBlob: () =>
-      new Promise((resolve) => {
+    exportPngBlob: async () => {
+      const raw = await new Promise<Blob | null>((resolve) => {
         const c = canvasRef.current
         if (!c) {
           resolve(null)
           return
         }
         c.toBlob((b) => resolve(b), "image/png")
-      }),
+      })
+      if (!raw) return null
+      if (!isDeterministicSealEnabled()) return raw
+      return composeImageWithPhaseForgeSeal(raw, { metadata: sealMetadata })
+    },
+    getSealDigest: async () => {
+      if (!isDeterministicSealEnabled()) return null
+      const raw = await new Promise<Blob | null>((resolve) => {
+        const c = canvasRef.current
+        if (!c) {
+          resolve(null)
+          return
+        }
+        c.toBlob((b) => resolve(b), "image/png")
+      })
+      if (!raw) return null
+      const bytes = new Uint8Array(await raw.arrayBuffer())
+      return deriveSealDigest(bytes, sealMetadata)
+    },
     clear: () => {
       setSegments([])
       draftRef.current = null
       bump((n) => n + 1)
     },
-  }))
+  }), [sealMetadata])
 
   return (
     <div className={cn("space-y-3", className)}>
