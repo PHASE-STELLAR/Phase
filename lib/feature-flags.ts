@@ -108,6 +108,8 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   and per-item error handling (issue #749)
  * - phase-289: AI pipeline step orchestration with centralized schema validation,
  *   bounded retries and deterministic fallback (issue #750)
+ * - phase-251: Phase NFT custodian release flow with signed authorization,
+ *   atomic SQLite nonce consumption, artifact verification and audit events (issue #702)
  *
  * - phase-265: one decimal-amount parser for forge, market and x402 amounts with explicit
  *   decimal places and rounding modes (issue #723)
@@ -240,7 +242,8 @@ export type PhaseFeatureFlag =
   | "phase-286"
   | "phase-287"
   | "phase-288"
-  | "phase-289";
+  | "phase-289"
+  | "phase-251";
 
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
@@ -359,6 +362,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-287": ["NEXT_PUBLIC_FEATURE_PHASE_287", "FEATURE_PHASE_287"],
   "phase-288": ["NEXT_PUBLIC_FEATURE_PHASE_288", "FEATURE_PHASE_288"],
   "phase-289": ["NEXT_PUBLIC_FEATURE_PHASE_289", "FEATURE_PHASE_289"],
+  "phase-251": ["NEXT_PUBLIC_FEATURE_PHASE_251", "FEATURE_PHASE_251"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -467,6 +471,7 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-287",
   "phase-288",
   "phase-289",
+  "phase-251",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {
