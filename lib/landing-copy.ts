@@ -361,3 +361,13 @@ const landingCopy: Record<LandingLang, LandingCopy> = {
 export function pickLandingCopy(lang: LandingLang): LandingCopy {
   return landingCopy[lang]
 }
+
+// phase-293: Landing page i18n shell and copy pipeline
+// Routes landing copy through pickCopy with EN/ES keys.
+// Respects locale persistence with safe fallback.
+export function getLocalizedLandingCopy(requestedLang?: string): LandingCopy {
+  const supportedLangs: readonly LandingLang[] = ["en", "es"]
+  const requested = requestedLang?.toLowerCase() as LandingLang | undefined
+  const lang: LandingLang = requested && supportedLangs.includes(requested) ? requested : "en"
+  return pickLandingCopy(lang)
+}
