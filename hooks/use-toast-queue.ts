@@ -2,7 +2,9 @@
 
 import { useCallback, useMemo } from "react"
 import { toast } from "sonner"
-import { ToastQueue, type ToastKind, type ToastQueueApi } from "@/lib/toast-queue"
+import { ToastQueue, normalizeToastError, type ToastKind, type ToastQueueApi } from "@/lib/toast-queue"
+import { isFeatureEnabled } from "@/lib/feature-flags"
+import { useLang } from "@/components/lang-context"
 
 const emitTarget = {
   success: (m: string, o?: Record<string, unknown>) => toast.success(m, o),
@@ -21,7 +23,7 @@ const RELEASE_MS = 400
  * routes through ONE queue, so concurrent toasts are deduplicated and
  * priority-sorted globally instead of clobbering each other on the viewport.
  */
-const sharedQueue = new ToastQueue(emitTarget, { maxVisible: MAX_VISIBLE })
+const sharedQueue = new ToastQueue(emitTarget, { maxVisible: MAX_VISIBLE, maxQueue: 100 })
 
 let flushPending = false
 let releaseTimer: ReturnType<typeof setTimeout> | null = null
@@ -55,12 +57,21 @@ function scheduleRelease(): void {
  * (pagination + retry + world-filter) never overwrite one another.
  */
 export function useToastQueue(): ToastQueueApi {
+  const { lang } = useLang()
   const push = useCallback(
-    (kind: ToastKind, message: string, o?: { title?: string; duration?: number }) => {
+    (kind: ToastKind, input: string, o?: { title?: string; duration?: number; eventKey?: string }) => {
+      const message = kind === "error" ? normalizeToastError(input, lang) : input
+      if (!isFeatureEnabled("phase-263")) {
+        const options: Record<string, unknown> = {}
+        if (o?.title) options.description = o.title
+        if (o?.duration != null) options.duration = o.duration
+        emitTarget[kind](message, options)
+        return
+      }
       sharedQueue.push(kind, message, o)
       scheduleRelease()
     },
-    [],
+    [lang],
   )
 
   return useMemo<ToastQueueApi>(

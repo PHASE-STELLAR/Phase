@@ -1,9 +1,12 @@
 import { NextRequest } from "next/server"
-import { DEFAULT_PROFILE_LOCALE, getProfile, isProfilePinningRedundancyEnabled, isPhase137Enabled, localizeAvatarName, normalizeProfileLocale, ProfileError, resolveAvatarWithFallback, toProfileErrorResponse, BatchAvatarQuerySchema, getAvatarsForWallets } from "@/lib/profile-store"
+import { DEFAULT_PROFILE_LOCALE, getProfile, isProfilePinningRedundancyEnabled, isPhase137Enabled, localizeAvatarName, normalizeProfileLocale, ProfileError, ProfileVersionConflictError, saveProfile, resolveAvatarWithFallback, toProfileErrorResponse, BatchAvatarQuerySchema, getAvatarsForWallets } from "@/lib/profile-store"
 import { isNftGridVirtualizationEnabled } from "@/lib/nft-grid-virtualization"
 import { StrKey } from "@stellar/stellar-sdk"
 import { createApiRequestContext } from "@/lib/api-observability"
 import { z } from "zod"
+import { isFeatureEnabled } from "@/lib/feature-flags"
+import { BoundedBodyError, readBoundedBody, readBoundedBytes } from "@/lib/bounded-body"
+import { pickCopy } from "@/lib/phase-copy"
 
 /** phase-137: emit a structured error body when the taxonomy flag is on, else the legacy generic 500. */
 function respondWithProfileError(
@@ -20,6 +23,23 @@ function respondWithProfileError(
 }
 
 export const dynamic = "force-dynamic"
+
+function matchesAvatarMime(bytes: Uint8Array, mime: string): boolean {
+  if (mime === "image/png") {
+    return bytes.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((value, index) => bytes[index] === value)
+  }
+  if (mime === "image/jpeg") return bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255
+  if (mime === "image/gif") {
+    const signature = new TextDecoder().decode(bytes.subarray(0, 6))
+    return signature === "GIF87a" || signature === "GIF89a"
+  }
+  if (mime === "image/webp") {
+    return bytes.length >= 12 &&
+      new TextDecoder().decode(bytes.subarray(0, 4)) === "RIFF" &&
+      new TextDecoder().decode(bytes.subarray(8, 12)) === "WEBP"
+  }
+  return false
+}
 
 // ??? phase-117: multi-gateway redundancy ????????????????????????????????????
 // Single gateway outage previously dropped metadata. When flag enabled, avatar
@@ -147,18 +167,43 @@ export async function GET(request: NextRequest) {
 // Preserves existing GET; adds opt-in pin path for clients that want quorum
 export async function POST(request: NextRequest) {
   const api = createApiRequestContext(request, "/api/profile/avatar")
-  if (!isProfilePinningRedundancyEnabled()) {
+  const phase262Enabled = isFeatureEnabled("phase-262")
+  if (!isProfilePinningRedundancyEnabled() && !phase262Enabled) {
     return api.json({ error: "Multi-gateway pinning disabled (phase-117 flag off)" }, { status: 404, event: "profile.avatar.redundancy_disabled" })
   }
-  let body: { wallet?: unknown; imageUrl?: unknown; imageBlob?: unknown; quorum?: unknown; signature?: unknown }
+  let body: { wallet?: unknown; imageUrl?: unknown; imageBlob?: unknown; quorum?: unknown; signature?: unknown; expected_version?: unknown }
   try {
-    body = (await request.json()) as typeof body
-  } catch {
+    const parsed: unknown = JSON.parse(
+      phase262Enabled ? await readBoundedBody(request, 16 * 1024, 5_000) : await request.text(),
+    )
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return api.json({ error: "JSON object body required" }, { status: 400, event: "profile.avatar.invalid_body" })
+    }
+    body = parsed as typeof body
+  } catch (error) {
+    if (error instanceof BoundedBodyError && error.code === "BODY_TOO_LARGE") {
+      return api.json({ error: "Request body exceeds the allowed size", code: error.code }, { status: 413, event: "profile.avatar.body_too_large" })
+    }
+    if (error instanceof BoundedBodyError && error.code === "BODY_READ_TIMEOUT") {
+      return api.json({ error: "Request body read timed out", code: error.code }, { status: 408, event: "profile.avatar.body_timeout" })
+    }
     return api.json({ error: "Invalid JSON" }, { status: 400, event: "profile.avatar.invalid_json" })
   }
   const wallet = typeof body.wallet === "string" ? body.wallet.trim() : ""
   if (!wallet || !StrKey.isValidEd25519PublicKey(wallet)) {
     return api.json({ error: "Invalid wallet" }, { status: 400, event: "profile.avatar.validation_failed", metadata: { reason: "wallet" } })
+  }
+  const language = request.headers.get("accept-language")?.split(",")[0]?.split("-")[0]
+  const expectedVersion = typeof body.expected_version === "number" ? body.expected_version : undefined
+  if (phase262Enabled && (
+    typeof body.expected_version !== "number" ||
+    !Number.isSafeInteger(body.expected_version) ||
+    body.expected_version < 0
+  )) {
+    return api.json(
+      { error: pickCopy(language).profileCompleteness.staleProfile, code: "PROFILE_VERSION_CONFLICT" },
+      { status: 409, event: "profile.avatar.version_conflict" },
+    )
   }
 
   // Issue #226: proving wallet ownership. Without this, anyone can POST
@@ -200,11 +245,52 @@ export async function POST(request: NextRequest) {
       }
       return api.json({ error: `Failed to fetch image (${imgRes.status})` }, { status: 502, event: "profile.avatar.fetch_failed" })
     }
-    const ab = await imgRes.arrayBuffer()
-    const blob = new Blob([ab], { type: imgRes.headers.get("content-type") ?? "image/png" })
+    const contentType = imgRes.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? ""
+    const maxAvatarBytes = 5 * 1024 * 1024
+    const declaredImageSize = Number(imgRes.headers.get("content-length"))
+    const avatarMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"])
+    if (phase262Enabled && (
+      !avatarMimeTypes.has(contentType) ||
+      (Number.isFinite(declaredImageSize) && declaredImageSize > maxAvatarBytes)
+    )) {
+      return api.json(
+        { error: pickCopy(language).profileCompleteness.invalidAvatar, code: "INVALID_AVATAR" },
+        { status: Number.isFinite(declaredImageSize) && declaredImageSize > maxAvatarBytes ? 413 : 415, event: "profile.avatar.validation_failed" },
+      )
+    }
+
+    let imageBytes: Uint8Array
+    try {
+      imageBytes = phase262Enabled
+        ? await readBoundedBytes(imgRes, maxAvatarBytes, 8_000)
+        : new Uint8Array(await imgRes.arrayBuffer())
+    } catch (error) {
+      if (error instanceof BoundedBodyError && error.code === "BODY_TOO_LARGE") {
+        return api.json(
+          { error: pickCopy(language).profileCompleteness.invalidAvatar, code: "AVATAR_TOO_LARGE" },
+          { status: 413, event: "profile.avatar.validation_failed" },
+        )
+      }
+      if (error instanceof BoundedBodyError && error.code === "BODY_READ_TIMEOUT") {
+        return api.json({ error: "Avatar download timed out", code: error.code }, { status: 408, event: "profile.avatar.download_timeout" })
+      }
+      throw error
+    }
+    if (phase262Enabled && !matchesAvatarMime(imageBytes, contentType)) {
+      return api.json(
+        { error: pickCopy(language).profileCompleteness.invalidAvatar, code: "INVALID_AVATAR" },
+        { status: 415, event: "profile.avatar.validation_failed" },
+      )
+    }
+    const imageBuffer = imageBytes.buffer.slice(imageBytes.byteOffset, imageBytes.byteOffset + imageBytes.byteLength)
+    const blob = new Blob([imageBuffer], { type: phase262Enabled ? contentType : contentType || "image/png" })
 
     const { pinAvatarWithRedundancy } = await import("@/lib/profile-store")
-    const result = await pinAvatarWithRedundancy(blob, { quorum, fileName: `avatar-${wallet.slice(0, 6)}.png` })
+    const imageExtension = contentType === "image/jpeg" ? "jpg" : contentType.split("/")[1] || "png"
+    const fileName = phase262Enabled
+      ? `avatar-${wallet.slice(0, 6)}.${imageExtension}`
+      : `avatar-${wallet.slice(0, 6)}.png`
+    const result = await pinAvatarWithRedundancy(blob, { quorum, fileName })
     if (!result.ok) {
       if (isPhase137Enabled()) {
         const err = new ProfileError(result.code === "NOT_CONFIGURED" ? "NOT_CONFIGURED" : "PIN_QUORUM_FAILED", result.error, { pinCode: result.code, quorum: result.quorum, achieved: result.achieved })
@@ -220,7 +306,7 @@ export async function POST(request: NextRequest) {
       const expectedSha = typeof result.checksum === "string" && /^[a-f0-9]{64}$/i.test(result.checksum)
         ? result.checksum
         : undefined
-      verifyCID(new Uint8Array(ab), result.cid, expectedSha)
+      verifyCID(imageBytes, result.cid, expectedSha)
     } catch (e) {
       if (e instanceof Error && e.name === "CidIntegrityError") {
         api.log("warn", "avatar_cid_mismatch", { wallet, cid: result.cid, code: (e as { code?: string }).code })
@@ -234,9 +320,30 @@ export async function POST(request: NextRequest) {
 
     // Persist new avatar_image_url as verified gateway URL
     const profile = await getProfile(wallet)
-    if (profile) {
-      const { saveProfile } = await import("@/lib/profile-store")
-      await saveProfile(wallet, { ...profile, avatar_image_url: result.uri })
+    try {
+      if (phase262Enabled || profile) {
+        await saveProfile(
+          wallet,
+          { ...(profile ?? {}), avatar_image_url: result.uri },
+          {
+            expectedVersion: phase262Enabled
+              ? expectedVersion
+              : profile?.version ?? 0,
+          },
+        )
+      }
+    } catch (error) {
+      if (error instanceof ProfileVersionConflictError) {
+        return api.json(
+          {
+            error: pickCopy(language).profileCompleteness.staleProfile,
+            code: "PROFILE_VERSION_CONFLICT",
+            current_version: error.currentVersion,
+          },
+          { status: 409, event: "profile.avatar.version_conflict" },
+        )
+      }
+      throw error
     }
     return api.json(
       { ok: true, cid: result.cid, uri: result.uri, checksum: result.checksum, quorum: result.quorum, achieved: result.achieved },
