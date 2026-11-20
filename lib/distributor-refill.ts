@@ -18,6 +18,7 @@ import {
 import { NETWORK_PASSPHRASE, RPC_URL } from "@/lib/phase-protocol"
 import { evaluateFeatureFlag } from "@/lib/feature-flags"
 import { incSecurityCounter } from "@/lib/security-counters"
+import { isDecimalAmountParsingEnabled, tryParseDecimalAmount } from "@/lib/decimal-amount"
 
 export interface RefillResult {
   ok: boolean
@@ -199,6 +200,11 @@ export async function executeClassicDistributorRefill(
   amount: string,
   assetCode: string
 ): Promise<RefillResult> {
+  // phase-265: validate before anything is signed, so a bad amount never reaches Horizon.
+  const exactStroops = isDecimalAmountParsingEnabled() ? tryParseDecimalAmount(amount) : null
+  if (exactStroops && !exactStroops.ok) {
+    return { ok: false, code: "INVALID_AMOUNT", error: `Invalid refill amount: ${exactStroops.error.message}` }
+  }
   try {
     const { Horizon, Asset, Operation, Networks } = await import("@stellar/stellar-sdk")
     const { HORIZON_URL } = await import("@/lib/phase-protocol")
@@ -241,7 +247,9 @@ export async function executeClassicDistributorRefill(
     
     return {
       ok: true,
-      amountStroops: (parseFloat(amount) * 10_000_000).toString(),
+      amountStroops: exactStroops?.ok
+        ? exactStroops.units.toString()
+        : (parseFloat(amount) * 10_000_000).toString(),
       hash: result.hash,
     }
   } catch (e) {

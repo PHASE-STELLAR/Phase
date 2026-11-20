@@ -5,6 +5,7 @@
  */
 
 import { z } from "zod"
+import { bpsShare, isDecimalAmountParsingEnabled, numberToStroops, stroopsToNumber } from "@/lib/decimal-amount"
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -498,6 +499,15 @@ export function auditEscrowSettlementWiring(): { ok: boolean; note: string } {
 export function previewEscrowFanOut(amount: number, payees: Array<{ wallet: string; bps: number }>): Array<{ wallet: string; amount: number }> {
   const total = payees.reduce((a, p) => a + p.bps, 0);
   if (total > 10000) throw new Error("INVALID_SPLIT_PAYEES");
+  if (isDecimalAmountParsingEnabled()) {
+    const units = numberToStroops(amount);
+    let assignedUnits = 0n;
+    return payees.map((p, i) => {
+      const share = i < payees.length - 1 ? bpsShare(units, p.bps, "half-up") : units - assignedUnits;
+      assignedUnits += share;
+      return { wallet: p.wallet, amount: stroopsToNumber(share) };
+    });
+  }
   let assigned = 0;
   return payees.map((p, i) => {
     if (i < payees.length - 1) {

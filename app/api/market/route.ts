@@ -10,6 +10,7 @@ import {
   type PoolAsset,
 } from "@/lib/liquidity-pool"
 import { resolvePhaserLiqClassicAsset } from "@/lib/stellar"
+import { isDecimalAmountParsingEnabled, stroopsToNumber, tryParseDecimalAmount } from "@/lib/decimal-amount"
 import {
   getSuggestionBand,
   isPricingOracleEnabled,
@@ -47,12 +48,21 @@ export async function GET(request: NextRequest) {
       const resolved = resolvePhaserLiqClassicAsset()
       const base: PoolAsset = { kind: "credit", code: resolved.code, issuer: resolved.issuer }
       const counter: PoolAsset = { kind: "native" }
-      const size = Number(searchParams.get("pool_size") ?? "10")
-      const safeSize = Number.isFinite(size) && size > 0 && size <= 1_000_000 ? size : 10
+      let safeSize: number
+      let sizeStroops: bigint
+      if (isDecimalAmountParsingEnabled()) {
+        const parsed = tryParseDecimalAmount(searchParams.get("pool_size") ?? "10", { max: 1_000_000n * 10_000_000n })
+        sizeStroops = parsed.ok ? parsed.units : 10n * 10_000_000n
+        safeSize = stroopsToNumber(sizeStroops)
+      } else {
+        const size = Number(searchParams.get("pool_size") ?? "10")
+        safeSize = Number.isFinite(size) && size > 0 && size <= 1_000_000 ? size : 10
+        sizeStroops = decimalToStroops(safeSize.toFixed(7))
+      }
       const snapshot = await getClassicPoolSnapshot(classicPoolIdForAssets(base, counter))
       const quote = quoteClassicPool(snapshot, {
         assetIn: base,
-        amountInStroops: decimalToStroops(safeSize.toFixed(7)),
+        amountInStroops: sizeStroops,
       })
       poolStale = quote.stale
       poolPrice = denoteListingInPool(1, quote, safeSize)
@@ -94,7 +104,28 @@ export async function POST(request: NextRequest) {
 
   const token_id = Number(body.token_id)
   const collection_id = Number(body.collection_id)
-  const price_phaselq = Number(body.price_phaselq)
+  let price_phaselq = Number(body.price_phaselq)
+  let min_offer = typeof body.min_offer === "number" ? body.min_offer : undefined
+  if (isDecimalAmountParsingEnabled()) {
+    const price = tryParseDecimalAmount(body.price_phaselq)
+    if (!price.ok) {
+      return NextResponse.json(
+        { error: "price_phaselq must be a positive amount with at most 7 decimal places", code: price.error.code },
+        { status: 400 },
+      )
+    }
+    price_phaselq = stroopsToNumber(price.units)
+    if (body.min_offer !== undefined && body.min_offer !== null) {
+      const min = tryParseDecimalAmount(body.min_offer)
+      if (!min.ok) {
+        return NextResponse.json(
+          { error: "min_offer must be a positive amount with at most 7 decimal places", code: min.error.code },
+          { status: 400 },
+        )
+      }
+      min_offer = stroopsToNumber(min.units)
+    }
+  }
 
   if (!Number.isInteger(token_id) || token_id <= 0)
     return NextResponse.json({ error: "invalid token_id" }, { status: 400 })
@@ -103,7 +134,6 @@ export async function POST(request: NextRequest) {
   if (!Number.isFinite(price_phaselq) || price_phaselq <= 0)
     return NextResponse.json({ error: "price_phaselq must be positive" }, { status: 400 })
 
-  const min_offer = typeof body.min_offer === "number" ? body.min_offer : undefined
 
   // phase-140: creator/royalty on a listing are additive and only take
   // effect once the flag is on; a listing created with the flag off simply

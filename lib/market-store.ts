@@ -8,7 +8,7 @@ import { serverDataJsonPath } from "@/lib/server-data-paths";
 import { getDb } from "@/lib/sqlite-db";
 import { incSecurityCounter } from "@/lib/security-counters";
 import { recordTaxEvent } from "@/lib/tax-report";
-import { decimalToStroops } from "@/lib/decimal-amount";
+import { bpsShare, isDecimalAmountParsingEnabled, numberToStroops, phaselqToStroopString, stroopsToNumber } from "@/lib/decimal-amount";
 import { phaseProtocolContractIdForServer } from "@/lib/phase-protocol";
 
 export type ListingStatus = "active" | "sold" | "cancelled";
@@ -372,6 +372,17 @@ export type CollabPayee = { wallet: string; bps: number };
 export function computeCollabSplits(sale_amount_phaselq: number, payees: CollabPayee[]): Array<CollabPayee & { amount_phaselq: number }> {
   const total = payees.reduce((a, p) => a + p.bps, 0);
   if (total > 10000) throw new MarketStoreValidationError('VALIDATION_FAILED', 'split bps exceed 10000');
+  if (isDecimalAmountParsingEnabled()) {
+    const saleUnits = numberToStroops(sale_amount_phaselq);
+    let assignedUnits = 0n;
+    const exact = payees.map((p, i) => {
+      const units = i < payees.length - 1 ? bpsShare(saleUnits, p.bps, "half-up") : saleUnits - assignedUnits;
+      assignedUnits += units;
+      return { ...p, amount_phaselq: stroopsToNumber(units) };
+    });
+    try { void incSecurityCounter('collab_split_dust_rounded'); } catch {}
+    return exact;
+  }
   let assigned = 0;
   const out = payees.map((p, i) => {
     if (i < payees.length - 1) {
@@ -729,9 +740,9 @@ export function decideOfferAtomic(listingId: string, offerId: string, wallet: st
         const asset = `${listing.contract_id ?? `unknown-contract:${listing.id}`}:${listing.token_id}`
         // Offer acceptance is an agreement, not a chain receipt. Never report it as verified proceeds.
         const common = { asset, occurredAt: now, verified: false, washFlagged: !!offerRow.wash_flagged }
-        taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:seller`, wallet, kind: "disposal", amountStroops: decimalToStroops(split.seller_amount_phaselq.toFixed(7)) }, false))
-        taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:buyer`, wallet: offerRow.buyer_wallet, kind: "acquisition", amountStroops: decimalToStroops(offerRow.amount_phaselq.toFixed(7)) }, false))
-        if (listing.creator_wallet && split.royalty_amount_phaselq > 0) taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:royalty`, wallet: listing.creator_wallet, kind: "royalty", amountStroops: decimalToStroops(split.royalty_amount_phaselq.toFixed(7)) }, false))
+        taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:seller`, wallet, kind: "disposal", amountStroops: phaselqToStroopString(split.seller_amount_phaselq) }, false))
+        taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:buyer`, wallet: offerRow.buyer_wallet, kind: "acquisition", amountStroops: phaselqToStroopString(offerRow.amount_phaselq) }, false))
+        if (listing.creator_wallet && split.royalty_amount_phaselq > 0) taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:royalty`, wallet: listing.creator_wallet, kind: "royalty", amountStroops: phaselqToStroopString(split.royalty_amount_phaselq) }, false))
       }
     }
     db.exec("COMMIT")
@@ -959,6 +970,16 @@ export function computeRoyaltySplit(
   const isSecondary =
     !!listing.creator_wallet && listing.creator_wallet !== listing.seller_wallet;
   const royaltyBps = isSecondary ? (listing.royalty_bps ?? 0) : 0;
+  if (isDecimalAmountParsingEnabled()) {
+    const saleUnits = numberToStroops(sale_amount_phaselq);
+    const royaltyUnits = bpsShare(saleUnits, royaltyBps, "half-up");
+    return {
+      is_secondary_sale: isSecondary,
+      royalty_bps: royaltyBps,
+      royalty_amount_phaselq: stroopsToNumber(royaltyUnits),
+      seller_amount_phaselq: stroopsToNumber(saleUnits - royaltyUnits),
+    };
+  }
   const royaltyAmount = Math.round(sale_amount_phaselq * (royaltyBps / 10_000) * 1e7) / 1e7;
   return {
     is_secondary_sale: isSecondary,

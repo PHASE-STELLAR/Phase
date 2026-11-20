@@ -26,6 +26,7 @@ import {
 } from "@/lib/phase-contract-defaults"
 import { getGatewayHealthSnapshot as _getGatewayHealthSnapshot, recordGatewayLatency as _recordGatewayLatency } from "@/lib/gateway-health"
 import { withHorizonBulkhead } from "@/lib/horizon-bulkhead"
+import { formatDecimalAmount, isDecimalAmountParsingEnabled, tryParseDecimalAmount } from "@/lib/decimal-amount"
 
 // ── phase-121: gateway health dashboard (isolated, flag-gated) ──
 // Operators cannot see which gateway is slow. Scoring lives in @/lib/gateway-health;
@@ -708,12 +709,20 @@ export type CollectionInfo = {
 
 /** Convierte cantidad LIQ humana (ej. 1 o 1.5) a stroops (7 decimales). */
 export function liqToStroops(liq: string): string {
+  if (isDecimalAmountParsingEnabled()) {
+    const parsed = tryParseDecimalAmount(liq, { acceptComma: true, rounding: "half-up" })
+    return parsed.ok ? parsed.units.toString() : "0"
+  }
   const n = parseFloat(liq.replace(",", "."))
   if (Number.isNaN(n) || n <= 0) return "0"
   return Math.round(n * 10_000_000).toString()
 }
 
 export function stroopsToLiqDisplay(stroops: string): string {
+  if (isDecimalAmountParsingEnabled()) {
+    const parsed = tryParseDecimalAmount(stroops, { decimals: 0, allowZero: true, allowNegative: true, max: 2n ** 127n })
+    return parsed.ok ? formatDecimalAmount(parsed.units, { fractionDigits: 2 }) : "0.00"
+  }
   const v = parseInt(stroops, 10)
   if (Number.isNaN(v)) return "0.00"
   return (v / 10_000_000).toFixed(2)
@@ -2573,5 +2582,5 @@ export {
   CANONICAL_STELLAR_SDK_MAJOR,
   CANONICAL_WASM_TARGET,
   isDependencyCadenceEnabled,
-} from "@/lib/dependency-cadence"
+} from "@/lib/dependency-cadence-shared"
 

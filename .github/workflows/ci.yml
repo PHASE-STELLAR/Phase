@@ -53,6 +53,10 @@ jobs:
         run: npm ci
       - name: Verify dependency cadence and Soroban/Stellar parity
         run: npm run deps:cadence
+      - name: Verify every environment variable is declared and documented
+        run: npm run env:check
+      - name: Verify edge entries bundle and boot without Node-only APIs
+        run: npm run edge:check
       - name: Lint
         continue-on-error: true
         run: npm run lint

@@ -73,7 +73,7 @@ export function screenOfferForWash(input: {
     },
   ])
   if (self.flaggedIds.length > 0) {
-    incSecurityCounter("wash_trades_flagged")
+    incSecurityCounter("wash_trades_flagged", 1, "self_trade")
     return { washFlagged: true, washReason: self.details[0] ?? "self_trade" }
   }
 
@@ -123,7 +123,7 @@ export function screenOfferForWash(input: {
       WASH_WINDOW_MS,
     )
     if (circular.flaggedIds.length > 0) {
-      incSecurityCounter("wash_trades_flagged")
+      incSecurityCounter("wash_trades_flagged", 1, "circular")
       return { washFlagged: true, washReason: circular.details[0] ?? "circular_trade" }
     }
   }
