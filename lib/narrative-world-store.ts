@@ -484,11 +484,33 @@ export async function getLoreLinksForToken(tokenId: number): Promise<{ outgoing:
   return { outgoing, incoming }
 }
 
+const MAX_LORE_LINKS_PER_TOKEN = 50
+
+export class LoreLinkError extends Error {
+  code: "SELF_LINK" | "DEGREE_EXCEEDED"
+
+  constructor(code: LoreLinkError["code"], message: string) {
+    super(message)
+    this.name = "LoreLinkError"
+    this.code = code
+  }
+}
+
 export async function addLoreLink(fromTokenId: number, toTokenId: number, note?: string): Promise<LoreLink> {
+  if (fromTokenId === toTokenId) {
+    throw new LoreLinkError("SELF_LINK", "A token cannot link to itself")
+  }
+
   return updateJsonStore<LoreLinkStore, LoreLink>(
     serverDataJsonPath("loreLinks"),
     (store) => {
+      const outgoingCount = store.filter((l) => l.from_token_id === fromTokenId).length
       const existingIndex = store.findIndex((l) => l.from_token_id === fromTokenId && l.to_token_id === toTokenId)
+
+      if (existingIndex < 0 && outgoingCount >= MAX_LORE_LINKS_PER_TOKEN) {
+        throw new LoreLinkError("DEGREE_EXCEEDED", `Token already has ${MAX_LORE_LINKS_PER_TOKEN} outgoing links`)
+      }
+
       const link: LoreLink = {
         from_token_id: fromTokenId,
         to_token_id: toTokenId,
