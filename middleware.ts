@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { isFeatureEnabled } from "@/lib/feature-flags"
+import { legalGuardMiddleware } from "@/lib/legal-middleware-guard"
 import { BoundedBodyError, readBoundedBody } from "@/lib/bounded-body"
 
 const MAX_API_WRITE_BODY_BYTES = 1024 * 1024
@@ -79,6 +80,16 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   response.headers.set("X-Content-Type-Options", "nosniff")
   response.headers.set("X-Frame-Options", "DENY")
   response.headers.set("X-XSS-Protection", "1; mode=block")
+
+  // Issue #730: Apply centralized legal consent guard to protected routes
+  if (isFeatureEnabled("phase-272" as any) && request.nextUrl.pathname.startsWith("/api/")) {
+    const wallet = request.headers.get("x-wallet-address") ?? null
+    const locale = request.nextUrl.locale ?? "en"
+    const guardResult = await legalGuardMiddleware(request.nextUrl.pathname, wallet, locale)
+    if (!guardResult.ok) {
+      return guardResult.response
+    }
+  }
 
   return response
 }
