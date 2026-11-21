@@ -31,6 +31,90 @@ import {
 } from "@/lib/wash-trading"
 import { incSecurityCounter } from "@/lib/security-counters"
 
+import { randomUUID } from "node:crypto"
+import { isFeatureEnabled } from "@/lib/feature-flags"
+
+export const WASH_REASON_CODES = [
+  "self_trade",
+  "circular_trade",
+  "rapid_flip",
+  "self_provision",
+  "self_swap",
+  "wash_loop",
+] as const
+
+export type WashReasonCode = (typeof WASH_REASON_CODES)[number]
+
+export function isPhase233Enabled(): boolean {
+  return isFeatureEnabled("phase-233")
+}
+
+export function persistWashDecision(input: {
+  entityType: "listing" | "offer" | "pool"
+  entityId: string
+  actorWallet: string
+  targetWallet?: string | null
+  decision: "allow" | "reject" | "flag"
+  reason?: string | null
+}): void {
+  try {
+    const db = getDb()
+    db.prepare(
+      `INSERT INTO wash_decisions (id, entity_type, entity_id, actor_wallet, target_wallet, decision, reason, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      randomUUID(),
+      input.entityType,
+      input.entityId,
+      input.actorWallet,
+      input.targetWallet ?? null,
+      input.decision,
+      input.reason ?? null,
+      Date.now()
+    )
+  } catch (error) {
+    console.warn("[phase-233] failed to persist wash decision:", error)
+  }
+}
+
+export function detectWashLoop(trades: Array<{ sellerWallet: string; buyerWallet: string }>): boolean {
+  if (trades.length < 3) return false
+  const graph = new Map<string, Set<string>>()
+  for (const t of trades) {
+    const s = t.sellerWallet.toLowerCase()
+    const b = t.buyerWallet.toLowerCase()
+    if (!graph.has(s)) graph.set(s, new Set())
+    graph.get(s)!.add(b)
+  }
+  
+  // Detect cycle in directed graph
+  const visited = new Set<string>()
+  const recStack = new Set<string>()
+
+  function hasCycle(node: string): boolean {
+    visited.add(node)
+    recStack.add(node)
+    const neighbors = graph.get(node) ?? new Set()
+    for (const neighbor of neighbors) {
+      if (!visited.has(neighbor)) {
+        if (hasCycle(neighbor)) return true
+      } else if (recStack.has(neighbor)) {
+        return true
+      }
+    }
+    recStack.delete(node)
+    return false
+  }
+
+  for (const node of graph.keys()) {
+    if (!visited.has(node)) {
+      if (hasCycle(node)) return true
+    }
+  }
+  return false
+}
+
+
 export type WashScreenResult = {
   washFlagged: boolean
   washReason: string | null
@@ -99,6 +183,17 @@ export function screenOfferForWash(input: {
   }>
 
   if (rows.length > 0) {
+    // Coordinated wash loop detection across multiple hops
+    const tradeHistory = [
+      ...rows.map(r => ({ sellerWallet: r.seller_wallet, buyerWallet: r.buyer_wallet })),
+      { sellerWallet: input.sellerWallet, buyerWallet: input.buyerWallet }
+    ]
+    if (detectWashLoop(tradeHistory)) {
+      incSecurityCounter("wash_trades_flagged", 1, "wash_loop")
+      incSecurityCounter("wash_loop_detected")
+      return { washFlagged: true, washReason: "wash_loop" }
+    }
+
     const circular = detectCircularTrades(
       [
         ...rows.map((row) => ({

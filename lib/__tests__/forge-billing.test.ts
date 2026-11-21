@@ -88,6 +88,20 @@ describe("forge billing (spike 615 / phase-177)", () => {
     expect(forgeBillingRetryAfterSeconds(quota)).toBeGreaterThanOrEqual(60)
   })
 
+  it("retry proof: retried job with same jobId is charged once", async () => {
+    const job = { wallet: WALLET, jobId: "retry-proof-job-99", settlementTxHash: "tx-retry-99" }
+    const first = await recordForgeBillingEvent(job, { now: NOW })
+    expect(first.recorded).toBe(true)
+
+    // Simulate network retry
+    const retry = await recordForgeBillingEvent(job, { now: NOW + 1000 })
+    expect(retry.recorded).toBe(false)
+    expect(retry.duplicate).toBe(true)
+
+    const usage = await getForgeBillingUsage(WALLET, { now: NOW })
+    expect(usage.count).toBe(1)
+  })
+
   it("is idempotent by jobId (serverless retry safe)", async () => {
     const first = await recordForgeBillingEvent({ wallet: WALLET, jobId: "job-1" }, { now: NOW })
     const second = await recordForgeBillingEvent({ wallet: WALLET, jobId: "job-1" }, { now: NOW })
