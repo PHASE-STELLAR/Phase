@@ -61,6 +61,7 @@ const FILES = {
   referralQuests: "referral-quests.json",
   liquidityPoolIntents: "liquidity-pool-intents.json",
   artifactMetadataDrafts: "artifact-metadata-drafts.json",
+  bountyClaimLedger: "bounty-claim-ledger.json",
 } as const
 
 

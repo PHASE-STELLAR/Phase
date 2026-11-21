@@ -438,6 +438,16 @@ export const phaseCopy: Record<
       validationFailed: string
       versionLabel: string
     }
+    bountyClaim: {
+      unauthorized: string
+      walletMismatch: string
+      snapshotMissing: string
+      staleSnapshot: string
+      notEligible: string
+      alreadyClaimed: string
+      versionConflict: string
+      claimSuccess: string
+    }
     studioEditor: {
       tools: string
       pencil: string
@@ -1054,6 +1064,16 @@ export const phaseCopy: Record<
       staleConflict: "Draft is stale (409). Reload latest version before saving.",
       validationFailed: "Metadata schema validation failed",
       versionLabel: "Version",
+    },
+    bountyClaim: {
+      unauthorized: "Signed wallet session is required to claim a bounty.",
+      walletMismatch: "Claim wallet does not match the signed session wallet.",
+      snapshotMissing: "No active quest snapshot found for this wallet.",
+      staleSnapshot: "Quest snapshot is stale or tampered. Refresh quest progress and try again.",
+      notEligible: "Quest eligibility requirements are not met in the current snapshot.",
+      alreadyClaimed: "Bounty reward has already been claimed for this wallet.",
+      versionConflict: "Concurrent claim conflict. Please retry.",
+      claimSuccess: "Bounty reward claimed successfully.",
     },
     studioEditor: {
       tools: "Tools",
@@ -1875,6 +1895,16 @@ export const phaseCopy: Record<
       staleConflict: "Borrador desactualizado (409). Recargá la última versión antes de guardar.",
       validationFailed: "Falló la validación del esquema de metadatos",
       versionLabel: "Versión",
+    },
+    bountyClaim: {
+      unauthorized: "Se requiere una sesión de wallet firmada para reclamar la recompensa.",
+      walletMismatch: "La wallet del reclamo no coincide con la sesión firmada.",
+      snapshotMissing: "No se encontró un snapshot de misiones activo para esta wallet.",
+      staleSnapshot: "El snapshot de misiones está desactualizado o alterado. Actualizá el progreso e intentá de nuevo.",
+      notEligible: "Los requisitos de la misión no se cumplen en el snapshot actual.",
+      alreadyClaimed: "La recompensa de esta misión ya fue reclamada por esta wallet.",
+      versionConflict: "Conflicto de reclamo concurrente. Por favor intentá de nuevo.",
+      claimSuccess: "Recompensa de misión reclamada con éxito.",
     },
     studioEditor: {
       tools: "Herramientas",

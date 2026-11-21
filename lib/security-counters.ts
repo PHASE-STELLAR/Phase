@@ -308,6 +308,10 @@ export const SECURITY_COUNTER_REGISTRY = {
   drop_queue_ticket_issued: { surface: "market", reasons: NO_REASONS },
   market_accept_conflict: { surface: "market", reasons: NO_REASONS },
   edge_store_degraded: { surface: "operations", reasons: NO_REASONS },
+  bounty_claim_succeeded: { surface: "faucet", reasons: NO_REASONS },
+  bounty_claim_rejected: { surface: "faucet", reasons: NO_REASONS },
+  bounty_claim_duplicate: { surface: "faucet", reasons: NO_REASONS },
+  bounty_claim_stale_snapshot: { surface: "faucet", reasons: NO_REASONS },
   security_counter_label_rejected: { surface: "operations", reasons: LABEL_REJECTION_REASONS },
 } as const satisfies Record<string, CounterSpec>
 

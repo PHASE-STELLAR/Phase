@@ -122,6 +122,8 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   optimistic concurrency guard, author proof and EN/ES copy (issue #710)
  * - phase-253: Analytics warehouse export integration with signed one-use
  *   grants, closed-label sanitization, paginated streaming and audit events (issue #704)
+ * - phase-254: Bounty claim and quest reward integration bound to versioned
+ *   quest snapshots, signed session wallet, idempotent version-guarded ledger (issue #705)
  * - phase-258: Design Studio editor for artifact metadata with Zod schema
  *   validation, preview before commit, If-Match 409 draft guard and EN/ES copy (issue #711)
  *
@@ -262,6 +264,7 @@ export type PhaseFeatureFlag =
   | "phase-250"
   | "phase-249"
   | "phase-253"
+  | "phase-254"
   | "phase-257"
   | "phase-258"
   | "phase-259";
@@ -388,6 +391,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-250": ["NEXT_PUBLIC_FEATURE_PHASE_250", "FEATURE_PHASE_250"],
   "phase-249": ["NEXT_PUBLIC_FEATURE_PHASE_249", "FEATURE_PHASE_249"],
   "phase-253": ["NEXT_PUBLIC_FEATURE_PHASE_253", "FEATURE_PHASE_253"],
+  "phase-254": ["NEXT_PUBLIC_FEATURE_PHASE_254", "FEATURE_PHASE_254"],
   "phase-257": ["NEXT_PUBLIC_FEATURE_PHASE_257", "FEATURE_PHASE_257"],
   "phase-258": ["NEXT_PUBLIC_FEATURE_PHASE_258", "FEATURE_PHASE_258"],
   "phase-259": ["NEXT_PUBLIC_FEATURE_PHASE_259", "FEATURE_PHASE_259"],
@@ -504,6 +508,7 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-250",
   "phase-249",
   "phase-253",
+  "phase-254",
   "phase-257",
   "phase-258",
   "phase-259",
