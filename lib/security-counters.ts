@@ -68,6 +68,16 @@ export const SYBIL_DECISION_REASONS = [
   "invalid_wallet",
 ] as const
 
+export const PRE_CREDIT_GATE_REASONS = [
+  "admitted",
+  "wallet_denied",
+  "turnstile_required",
+  "turnstile_failed",
+  "sybil_blocked",
+  "compliance_blocked",
+  "provider_outage",
+] as const
+
 /** Every reason code any counter may carry. */
 export const SECURITY_REASON_CODES = [
   ...PREVIEW_VERIFY_REASONS,
@@ -76,6 +86,7 @@ export const SECURITY_REASON_CODES = [
   ...LABEL_REJECTION_REASONS,
   ...CUSTODIAN_RELEASE_REASONS,
   ...SYBIL_DECISION_REASONS,
+  ...PRE_CREDIT_GATE_REASONS,
 ] as const
 
 export type SecurityReasonCode = (typeof SECURITY_REASON_CODES)[number]
@@ -318,6 +329,7 @@ export const SECURITY_COUNTER_REGISTRY = {
   market_accept_conflict: { surface: "market", reasons: NO_REASONS },
   edge_store_degraded: { surface: "operations", reasons: NO_REASONS },
   sybil_decision_recorded: { surface: "governance", reasons: SYBIL_DECISION_REASONS },
+  pre_credit_gate_decision: { surface: "faucet", reasons: PRE_CREDIT_GATE_REASONS },
   security_counter_label_rejected: { surface: "operations", reasons: LABEL_REJECTION_REASONS },
 } as const satisfies Record<string, CounterSpec>
 

@@ -387,6 +387,18 @@ CREATE TABLE IF NOT EXISTS sybil_decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_sybil_decisions_wallet_hash_time
   ON sybil_decisions (wallet_hash, created_at DESC);
+CREATE TABLE IF NOT EXISTS pre_credit_gate_decisions (
+  decision_id TEXT PRIMARY KEY,
+  wallet_hash TEXT NOT NULL,
+  ip_hash TEXT,
+  allowed INTEGER NOT NULL CHECK(allowed IN (0, 1)),
+  blocking_gate TEXT NOT NULL CHECK(blocking_gate IN ('none', 'deny_list', 'turnstile', 'sybil', 'compliance')),
+  reason_code TEXT NOT NULL,
+  http_status INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pre_credit_gate_wallet_time
+  ON pre_credit_gate_decisions (wallet_hash, created_at DESC);
 `;
 
 // Issue #89 (phase-140): `listings` predates the creator/royalty concept, so
