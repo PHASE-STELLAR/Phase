@@ -837,6 +837,8 @@ export const phaseCopy: Record<
     ledgerClearSigning: Record<"title" | "description" | "targetContract" | "hostFunction" | "verificationCode" | "matchCodePrompt" | "acknowledgePrompt" | "approveButton" | "cancelButton" | "blindSigningDisabled" | "gate13RiskAlert", string>
     featureFlagOps: Record<"title" | "killSwitchActive" | "rolloutLabel" | "drillPassed" | "versionConflict", string>
     dependencyCadence: Record<"title" | "sdkAligned" | "skewDetected" | "bytecodeGateBlocked", string>
+    searchAnalytics: Record<"zeroResultsTitle" | "zeroResultsHint" | "didYouMean" | "clickthroughLabel" | "zeroResultRateLabel" | "typoSuccessLabel", string>
+    loreVersioning: Record<"historyTitle" | "versionLabel" | "rollbackAction" | "rolledBackFrom" | "conflictError" | "authorProofLabel", string>
   }
 > = {
   en: {
@@ -1619,6 +1621,22 @@ export const phaseCopy: Record<
       sdkAligned: "Stellar SDK v15 and Soroban ABI 22000 aligned across app and scripts",
       skewDetected: "Dependency or WASM target skew detected ({code})",
       bytecodeGateBlocked: "WASM bytecode changed without a verified staging dry-run",
+    },
+    searchAnalytics: {
+      zeroResultsTitle: "No matching results found",
+      zeroResultsHint: "Try fewer keywords or check spelling.",
+      didYouMean: "Did you mean \"{suggestion}\"?",
+      clickthroughLabel: "Clickthrough rate",
+      zeroResultRateLabel: "Zero-result rate",
+      typoSuccessLabel: "Typo recovery rate",
+    },
+    loreVersioning: {
+      historyTitle: "Narrative Version History",
+      versionLabel: "Version {version}",
+      rollbackAction: "Restore as new version",
+      rolledBackFrom: "Restored from v{version}",
+      conflictError: "Edit conflict: narrative was updated by another collaborator (409).",
+      authorProofLabel: "Author proof",
     },
   },
 
@@ -2405,6 +2423,22 @@ export const phaseCopy: Record<
       sdkAligned: "Stellar SDK v15 y Soroban ABI 22000 alineados entre app y scripts",
       skewDetected: "Desfase de dependencias o target WASM detectado ({code})",
       bytecodeGateBlocked: "El bytecode WASM cambió sin una prueba previa en staging verificada",
+    },
+    searchAnalytics: {
+      zeroResultsTitle: "No se encontraron resultados",
+      zeroResultsHint: "Probá con menos palabras o revisá la ortografía.",
+      didYouMean: "¿Quisiste decir \"{suggestion}\"?",
+      clickthroughLabel: "Tasa de clics",
+      zeroResultRateLabel: "Tasa sin resultados",
+      typoSuccessLabel: "Tasa de corrección tipográfica",
+    },
+    loreVersioning: {
+      historyTitle: "Historial de Versiones Narrativas",
+      versionLabel: "Versión {version}",
+      rollbackAction: "Restaurar como nueva versión",
+      rolledBackFrom: "Restaurada desde v{version}",
+      conflictError: "Conflicto de edición: la narrativa fue actualizada por otro colaborador (409).",
+      authorProofLabel: "Prueba de autoría",
     },
   },
 
