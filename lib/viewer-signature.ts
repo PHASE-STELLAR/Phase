@@ -1,4 +1,12 @@
 // @ts-nocheck
+import { isFeatureEnabled } from "@/lib/feature-flags"
+
+export function isPhase242Enabled(): boolean {
+  return isFeatureEnabled("phase-242")
+}
+
+export const MAX_SIGNAL_PAYLOAD_BYTES = 64 * 1024 // 64 KB
+
 /**
  * Community-signal proof of wallet ownership (SEP-53 Ed25519 message signing).
  *
@@ -86,6 +94,9 @@ export async function verifySignalSignature(
   payload: SignalProofPayload,
   signatureBase64: string,
 ): Promise<boolean> {
+  if (!signatureBase64 || typeof signatureBase64 !== "string") return false
+  const canonical = canonicalSignalPayload(payload)
+  if (Buffer.byteLength(canonical) > MAX_SIGNAL_PAYLOAD_BYTES) return false
   return verifySep53Signature(wallet, await signalProofMessage(payload), signatureBase64)
 }
 

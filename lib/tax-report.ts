@@ -99,3 +99,54 @@ export function* taxCsv(input: TaxExportRequest, snapshot: number): Generator<st
     }
   }
 }
+
+
+export function isPhase243Enabled(): boolean {
+  return isFeatureEnabled("phase-243")
+}
+
+export type TaxExportAudit = {
+  id: string
+  wallet: string
+  exported_at: number
+  snapshot: number
+  policy: string
+  nonce: string
+}
+
+export function recordTaxExportAudit(entry: {
+  wallet: string
+  snapshot: number
+  policy: string
+  nonce: string
+}): TaxExportAudit {
+  const db = getDb()
+  const id = createHash("sha256")
+    .update(`${entry.wallet}:${entry.nonce}:${Date.now()}`)
+    .digest("hex")
+    .slice(0, 16)
+  const audit: TaxExportAudit = {
+    id,
+    wallet: entry.wallet,
+    exported_at: Date.now(),
+    snapshot: entry.snapshot,
+    policy: entry.policy,
+    nonce: entry.nonce,
+  }
+  db.prepare(
+    "INSERT INTO tax_export_audit (id, wallet, exported_at, snapshot, policy, nonce) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(audit.id, audit.wallet, audit.exported_at, audit.snapshot, audit.policy, audit.nonce)
+  return audit
+}
+
+export function getTaxExportAudits(wallet?: string): TaxExportAudit[] {
+  const db = getDb()
+  if (wallet) {
+    return db
+      .prepare("SELECT * FROM tax_export_audit WHERE wallet = ? ORDER BY exported_at DESC")
+      .all(wallet) as TaxExportAudit[]
+  }
+  return db
+    .prepare("SELECT * FROM tax_export_audit ORDER BY exported_at DESC")
+    .all() as TaxExportAudit[]
+}

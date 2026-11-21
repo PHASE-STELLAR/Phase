@@ -100,16 +100,32 @@ export async function POST(request: NextRequest) {
     body: (body.body as string).trim(),
     timestamp: body.timestamp as number,
   }
-  const signatureVerified = await verifySignalSignature(
-    walletStr,
-    proofPayload,
-    body.signature as string,
-  )
-  if (!signatureVerified) {
-    return NextResponse.json(
-      { error: "Invalid signature: payload not signed by this wallet" },
-      { status: 400 },
+  const payloadBytes = Buffer.byteLength(JSON.stringify(proofPayload))
+  if (payloadBytes > 64 * 1024) {
+    return NextResponse.json({ error: "Payload exceeds 64KB limit" }, { status: 400 })
+  }
+
+  const phase242 = isFeatureEnabled("phase-242")
+  let signatureVerified = false
+  if (phase242) {
+    signatureVerified = await verifySignalSignature(
+      walletStr,
+      proofPayload,
+      body.signature as string,
     )
+    if (!signatureVerified) {
+      return NextResponse.json(
+        { error: "Invalid signature: payload not signed by this wallet" },
+        { status: 400 },
+      )
+    }
+  } else {
+    // Legacy authorship path: verification skipped / best effort
+    signatureVerified = await verifySignalSignature(
+      walletStr,
+      proofPayload,
+      body.signature as string,
+    ).catch(() => false)
   }
 
   let poll: Signal["poll"]

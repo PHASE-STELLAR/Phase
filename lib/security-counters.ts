@@ -331,6 +331,11 @@ export const SECURITY_COUNTER_REGISTRY = {
   sybil_decision_recorded: { surface: "governance", reasons: SYBIL_DECISION_REASONS },
   pre_credit_gate_decision: { surface: "faucet", reasons: PRE_CREDIT_GATE_REASONS },
   security_counter_label_rejected: { surface: "operations", reasons: LABEL_REJECTION_REASONS },
+  x402_dead_letter_enqueued: { surface: "operations", reasons: NO_REASONS },
+  x402_replay_attempted: { surface: "operations", reasons: NO_REASONS },
+  x402_replay_rejected: { surface: "operations", reasons: NO_REASONS },
+  nft_index_invalidated: { surface: "operations", reasons: NO_REASONS },
+  nft_index_event_malformed: { surface: "operations", reasons: NO_REASONS },
 } as const satisfies Record<string, CounterSpec>
 
 export type SecurityCounterName = keyof typeof SECURITY_COUNTER_REGISTRY

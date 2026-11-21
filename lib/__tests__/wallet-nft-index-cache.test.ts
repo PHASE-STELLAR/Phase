@@ -6,7 +6,10 @@ import {
   isWalletNftIndexEntryFresh,
   clearWalletNftIndexCache,
   walletNftIndexCacheStats,
+  invalidateCachedWalletNftIndex,
+  processNftIndexSubscriptionEvent,
 } from "@/lib/wallet-nft-index-cache"
+import { getSecurityCounter, resetSecurityCounters } from "@/lib/security-counters"
 
 const CONTRACT = "CAZKRXQWXKM4UNDB5FY4XVMWDKKZJ2EFKMNFCFH3WC7SHE7RCO7HOR6L"
 const WALLET_A = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
@@ -56,5 +59,53 @@ describe("phase-135 wallet NFT index cache", () => {
     setCachedWalletNftIndex(CONTRACT, WALLET_B, [3], "soroban-rpc")
     assert.deepEqual(getCachedWalletNftIndex(CONTRACT, WALLET_A)!.tokenIds, [1, 2])
     assert.deepEqual(getCachedWalletNftIndex(CONTRACT, WALLET_B)!.tokenIds, [3])
+  })
+
+  it("invalidates the correct wallet entry and updates security counter", () => {
+    resetSecurityCounters()
+    setCachedWalletNftIndex(CONTRACT, WALLET_A, [1, 2], "mercury-classic")
+    setCachedWalletNftIndex(CONTRACT, WALLET_B, [3], "soroban-rpc")
+
+    const removed = invalidateCachedWalletNftIndex(CONTRACT, WALLET_A)
+    assert.equal(removed, true)
+    assert.equal(getCachedWalletNftIndex(CONTRACT, WALLET_A), null)
+    assert.ok(getCachedWalletNftIndex(CONTRACT, WALLET_B))
+    assert.equal(getSecurityCounter("nft_index_invalidated"), 1)
+  })
+
+  it("processes subscription events, invalidating affected entries or rejecting malformed events", () => {
+    process.env.FEATURE_PHASE_241 = "1"
+    resetSecurityCounters()
+    setCachedWalletNftIndex(CONTRACT, WALLET_A, [10], "mercury-classic")
+    setCachedWalletNftIndex(CONTRACT, WALLET_B, [20], "mercury-classic")
+
+    // Valid transfer event: affects WALLET_A and WALLET_B
+    const res = processNftIndexSubscriptionEvent({
+      contractId: CONTRACT,
+      type: "transfer",
+      from: WALLET_A,
+      to: WALLET_B,
+      tokenId: 10,
+    })
+    assert.equal(res.ok, true)
+    assert.equal(res.invalidatedCount, 2)
+    assert.equal(getCachedWalletNftIndex(CONTRACT, WALLET_A), null)
+    assert.equal(getCachedWalletNftIndex(CONTRACT, WALLET_B), null)
+
+    // Malformed event: fails closed, increments nft_index_event_malformed
+    const malformed = processNftIndexSubscriptionEvent({ contractId: "", type: "invalid_type" })
+    assert.equal(malformed.ok, false)
+    assert.equal(getSecurityCounter("nft_index_event_malformed"), 1)
+
+    // Flag off = no subscription processing
+    delete process.env.FEATURE_PHASE_241
+    setCachedWalletNftIndex(CONTRACT, WALLET_A, [10], "mercury-classic")
+    const disabled = processNftIndexSubscriptionEvent({
+      contractId: CONTRACT,
+      type: "mint",
+      recipient: WALLET_A,
+    })
+    assert.equal(disabled.ok, false)
+    assert.ok(getCachedWalletNftIndex(CONTRACT, WALLET_A))
   })
 })

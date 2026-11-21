@@ -42,6 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_tax_wallet_time ON tax_events(wallet, occurred_at
 CREATE INDEX IF NOT EXISTS idx_tax_wallet_asset ON tax_events(wallet, asset, occurred_at, seq);
 CREATE TABLE IF NOT EXISTS tax_export_nonces (nonce TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS tax_export_rate (wallet TEXT NOT NULL, minute INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(wallet, minute));
+CREATE TABLE IF NOT EXISTS tax_export_audit (id TEXT PRIMARY KEY, wallet TEXT NOT NULL, exported_at INTEGER NOT NULL, snapshot INTEGER NOT NULL, policy TEXT NOT NULL, nonce TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS listings (
   id              TEXT PRIMARY KEY,
   token_id        INTEGER NOT NULL,
