@@ -427,6 +427,26 @@ CREATE TABLE IF NOT EXISTS profile_2fa_audit (
 );
 CREATE INDEX IF NOT EXISTS idx_profile_2fa_audit_wallet_time
   ON profile_2fa_audit (wallet_hash, created_at DESC);
+CREATE TABLE IF NOT EXISTS artist_aliases (
+  wallet TEXT PRIMARY KEY,
+  alias TEXT NOT NULL,
+  alias_normalized TEXT NOT NULL UNIQUE,
+  version INTEGER NOT NULL DEFAULT 1,
+  attested INTEGER NOT NULL DEFAULT 0,
+  signature TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS artist_alias_audit (
+  id TEXT PRIMARY KEY,
+  wallet TEXT NOT NULL,
+  action TEXT NOT NULL,
+  alias TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  nonce TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_artist_alias_audit_wallet_time
+  ON artist_alias_audit (wallet, created_at DESC);
 `;
 
 // Issue #89 (phase-140): `listings` predates the creator/royalty concept, so

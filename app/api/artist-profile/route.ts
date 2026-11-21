@@ -9,6 +9,13 @@ import {
   isFaucetRateLimitRedisEnabled,
   auditFaucetRateLimitWiring,
 } from "@/lib/profile-store"
+import {
+  getArtistAliasAudit,
+  getSignedArtistAlias,
+  isArtistAttestationV2Enabled,
+  resolveSignedArtistAlias,
+  saveSignedArtistAlias,
+} from "@/lib/artist-attestation"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -17,6 +24,11 @@ type ArtistProfileBody = {
   walletAddress?: unknown
   alias?: unknown
   handle?: unknown
+  expectedVersion?: unknown
+  issuedAt?: unknown
+  nonce?: unknown
+  signature?: unknown
+  attested?: unknown
 }
 
 function handleResponseStatus(code: string) {
@@ -28,6 +40,40 @@ function handleResponseStatus(code: string) {
 export async function GET(req: NextRequest) {
   const wallet = req.nextUrl.searchParams.get("walletAddress")?.trim() ?? ""
   const handle = req.nextUrl.searchParams.get("handle")?.trim() ?? ""
+  const includeAudit = req.nextUrl.searchParams.get("audit") === "1"
+
+  if (isArtistAttestationV2Enabled(wallet || undefined)) {
+    if (handle) {
+      const resolved = resolveSignedArtistAlias(handle)
+      if (!resolved) {
+        return NextResponse.json({ error: "Alias not found", code: "NOT_FOUND", feature_enabled: true }, { status: 404 })
+      }
+      return NextResponse.json({
+        walletAddress: resolved.wallet,
+        alias: resolved.alias,
+        handle: resolved.alias,
+        version: resolved.version,
+        attested: resolved.attested,
+        updatedAt: resolved.updatedAt,
+        feature_enabled: true,
+      })
+    }
+
+    if (!wallet || !StrKey.isValidEd25519PublicKey(wallet)) {
+      return NextResponse.json({ error: "walletAddress invalida." }, { status: 400 })
+    }
+
+    const record = getSignedArtistAlias(wallet)
+    return NextResponse.json({
+      walletAddress: wallet,
+      alias: record?.alias ?? null,
+      handle: record?.alias ?? null,
+      version: record?.version ?? 0,
+      attested: record?.attested ?? false,
+      updatedAt: record?.updatedAt ?? null,
+      ...(includeAudit ? { audit: getArtistAliasAudit(wallet) } : {}),
+    })
+  }
 
   if (handle) {
     const resolved = await resolveProfileHandle(handle)
@@ -76,6 +122,45 @@ export async function POST(req: NextRequest) {
   }
 
   const handle = typeof body.handle === "string" ? body.handle : typeof body.alias === "string" ? body.alias : ""
+
+  if (isArtistAttestationV2Enabled(wallet)) {
+    const lang = req.headers.get("accept-language")?.split(",")[0]?.split("-")[0]
+    const saved = saveSignedArtistAlias(
+      {
+        wallet,
+        alias: handle,
+        expectedVersion: body.expectedVersion,
+        issuedAt: body.issuedAt,
+        nonce: body.nonce,
+        signature: body.signature,
+        attested: body.attested,
+      },
+      lang,
+    )
+    if (!saved.ok) {
+      return NextResponse.json(
+        {
+          error: saved.error,
+          code: saved.code,
+          currentVersion: saved.currentVersion,
+          feature_enabled: true,
+        },
+        { status: saved.status },
+      )
+    }
+
+    return NextResponse.json({
+      ok: true,
+      walletAddress: saved.record.wallet,
+      alias: saved.record.alias,
+      handle: saved.record.alias,
+      version: saved.record.version,
+      attested: saved.record.attested,
+      updatedAt: saved.record.updatedAt,
+      feature_enabled: true,
+    })
+  }
+
   const saved = await saveProfileHandle(wallet, handle)
   if (!saved.ok) {
     return NextResponse.json(
