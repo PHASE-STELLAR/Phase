@@ -122,6 +122,8 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   optimistic concurrency guard, author proof and EN/ES copy (issue #710)
  * - phase-253: Analytics warehouse export integration with signed one-use
  *   grants, closed-label sanitization, paginated streaming and audit events (issue #704)
+ * - phase-258: Design Studio editor for artifact metadata with Zod schema
+ *   validation, preview before commit, If-Match 409 draft guard and EN/ES copy (issue #711)
  *
  * - phase-265: one decimal-amount parser for forge, market and x402 amounts with explicit
  *   decimal places and rounding modes (issue #723)
@@ -261,6 +263,7 @@ export type PhaseFeatureFlag =
   | "phase-249"
   | "phase-253"
   | "phase-257"
+  | "phase-258"
   | "phase-259";
 
 
@@ -386,6 +389,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-249": ["NEXT_PUBLIC_FEATURE_PHASE_249", "FEATURE_PHASE_249"],
   "phase-253": ["NEXT_PUBLIC_FEATURE_PHASE_253", "FEATURE_PHASE_253"],
   "phase-257": ["NEXT_PUBLIC_FEATURE_PHASE_257", "FEATURE_PHASE_257"],
+  "phase-258": ["NEXT_PUBLIC_FEATURE_PHASE_258", "FEATURE_PHASE_258"],
   "phase-259": ["NEXT_PUBLIC_FEATURE_PHASE_259", "FEATURE_PHASE_259"],
 };
 
@@ -501,6 +505,7 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-249",
   "phase-253",
   "phase-257",
+  "phase-258",
   "phase-259",
 ] as const;
 

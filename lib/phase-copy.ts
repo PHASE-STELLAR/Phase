@@ -417,6 +417,27 @@ export const phaseCopy: Record<
       clear: string
       seal: string
     }
+    studioMetadata: {
+      panelTitle: string
+      nameLabel: string
+      descriptionLabel: string
+      imageLabel: string
+      externalUrlLabel: string
+      collectionIdLabel: string
+      attributesLabel: string
+      addAttribute: string
+      traitTypePlaceholder: string
+      traitValuePlaceholder: string
+      previewTitle: string
+      previewToggle: string
+      saveDraft: string
+      commitMetadata: string
+      draftSaved: string
+      committed: string
+      staleConflict: string
+      validationFailed: string
+      versionLabel: string
+    }
     studioEditor: {
       tools: string
       pencil: string
@@ -1012,6 +1033,27 @@ export const phaseCopy: Record<
       cancel: "Cancel",
       clear: "Clear",
       seal: "Seal",
+    },
+    studioMetadata: {
+      panelTitle: "Artifact Metadata",
+      nameLabel: "Name",
+      descriptionLabel: "Description",
+      imageLabel: "Image URI (https:// or ipfs://)",
+      externalUrlLabel: "External URL (https://)",
+      collectionIdLabel: "Collection ID (optional)",
+      attributesLabel: "Attributes",
+      addAttribute: "Add attribute",
+      traitTypePlaceholder: "Trait type",
+      traitValuePlaceholder: "Value",
+      previewTitle: "Metadata Preview (SEP-50)",
+      previewToggle: "Preview JSON",
+      saveDraft: "Save Draft",
+      commitMetadata: "Commit Metadata",
+      draftSaved: "Draft saved",
+      committed: "Metadata committed",
+      staleConflict: "Draft is stale (409). Reload latest version before saving.",
+      validationFailed: "Metadata schema validation failed",
+      versionLabel: "Version",
     },
     studioEditor: {
       tools: "Tools",
@@ -1812,6 +1854,27 @@ export const phaseCopy: Record<
       cancel: "Cancelar",
       clear: "Borrar",
       seal: "Sellar",
+    },
+    studioMetadata: {
+      panelTitle: "Metadatos del artefacto",
+      nameLabel: "Nombre",
+      descriptionLabel: "Descripción",
+      imageLabel: "URI de imagen (https:// o ipfs://)",
+      externalUrlLabel: "URL externa (https://)",
+      collectionIdLabel: "ID de colección (opcional)",
+      attributesLabel: "Atributos",
+      addAttribute: "Agregar atributo",
+      traitTypePlaceholder: "Tipo de rasgo",
+      traitValuePlaceholder: "Valor",
+      previewTitle: "Vista previa de metadatos (SEP-50)",
+      previewToggle: "Previsualizar JSON",
+      saveDraft: "Guardar borrador",
+      commitMetadata: "Confirmar metadatos",
+      draftSaved: "Borrador guardado",
+      committed: "Metadatos confirmados",
+      staleConflict: "Borrador desactualizado (409). Recargá la última versión antes de guardar.",
+      validationFailed: "Falló la validación del esquema de metadatos",
+      versionLabel: "Versión",
     },
     studioEditor: {
       tools: "Herramientas",
