@@ -47,9 +47,15 @@ import {
   isValidQuestId,
   type QuestEvaluationResult
 } from "@/lib/quest-registry"
-import { assessWalletSybilRisk, isSybilResistanceEnabled } from "@/lib/sybil-resistance"
+import {
+  assessWalletSybilRisk,
+  evaluateAndRecordSybilDecision,
+  isSybilGatingEnabled,
+  isSybilResistanceEnabled,
+} from "@/lib/sybil-resistance"
 import { isWalletDenied } from "@/lib/faucet-deny-list"
 import { verifyTurnstileToken, turnstileSiteKeyConfigured } from "@/lib/faucet-turnstile"
+import { evaluatePreCreditGate, isPreCreditGateEnabled } from "@/lib/faucet-pre-credit-gate"
 import {
   abortStepClaim,
   beginStepClaim,
@@ -575,62 +581,109 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // Triple check #1: Check deny-list (governance veto)
-  if (await isWalletDenied(userAddress)) {
-    return NextResponse.json(
-      {
-        error: "Esta wallet ha sido excluida del faucet por gobernanza.",
-        code: "WALLET_DENIED",
-        detail: "Contacta al equipo PHASE si crees que esto es un error.",
-      },
-      { status: 403 },
-    )
-  }
-
-  // Triple check #2: Turnstile bot check (client-side Cloudflare challenge)
-  if (turnstileSiteKeyConfigured()) {
-    if (!body.turnstileToken) {
+  const preCreditUnified = isPreCreditGateEnabled(userAddress)
+  if (preCreditUnified) {
+    const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || undefined
+    const preliminaryReward = await parseRewardType(body.reward)
+    const preliminaryAmount = await rewardAmountStroops(preliminaryReward)
+    const preCredit = await evaluatePreCreditGate({
+      wallet: userAddress,
+      amountStroops: preliminaryAmount,
+      turnstileToken: body.turnstileToken,
+      clientIp,
+    })
+    if (preCredit && !preCredit.allowed) {
       return NextResponse.json(
         {
-          error: "Turnstile token requerido.",
-          code: "TURNSTILE_REQUIRED",
-          detail: "Ejecuta el desafío Cloudflare Turnstile en el cliente antes de enviar.",
+          error: preCredit.error ?? "Pre-credit gate blocked.",
+          code: preCredit.code,
+          gate: preCredit.blockingGate,
+          reasonCode: preCredit.reasonCode,
+          decisionId: preCredit.decisionId,
         },
-        { status: 400 },
+        {
+          status: preCredit.status,
+          headers: preCredit.retryAfterSeconds
+            ? { "Retry-After": String(preCredit.retryAfterSeconds) }
+            : undefined,
+        },
       )
     }
-    try {
-      const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || undefined
-      const turnstileOk = await verifyTurnstileToken(body.turnstileToken, clientIp)
-      if (!turnstileOk) {
+  } else {
+    // Legacy gate order (phase-247 off)
+    // Triple check #1: Check deny-list (governance veto)
+    if (await isWalletDenied(userAddress)) {
+      return NextResponse.json(
+        {
+          error: "Esta wallet ha sido excluida del faucet por gobernanza.",
+          code: "WALLET_DENIED",
+          detail: "Contacta al equipo PHASE si crees que esto es un error.",
+        },
+        { status: 403 },
+      )
+    }
+
+    // Triple check #2: Turnstile bot check (client-side Cloudflare challenge)
+    if (turnstileSiteKeyConfigured()) {
+      if (!body.turnstileToken) {
         return NextResponse.json(
-          { error: "Turnstile check failed.", code: "TURNSTILE_FAILED" },
+          {
+            error: "Turnstile token requerido.",
+            code: "TURNSTILE_REQUIRED",
+            detail: "Ejecuta el desafío Cloudflare Turnstile en el cliente antes de enviar.",
+          },
+          { status: 400 },
+        )
+      }
+      try {
+        const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || undefined
+        const turnstileOk = await verifyTurnstileToken(body.turnstileToken, clientIp)
+        if (!turnstileOk) {
+          return NextResponse.json(
+            { error: "Turnstile check failed.", code: "TURNSTILE_FAILED" },
+            { status: 403 },
+          )
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Unknown error"
+        return NextResponse.json(
+          { error: `Turnstile verification failed: ${msg}`, code: "TURNSTILE_ERROR" },
+          { status: 500 },
+        )
+      }
+    }
+
+    // Triple check #3: Sybil resistance score (on-chain wallet history)
+    if (isSybilGatingEnabled(userAddress)) {
+      const sybilDecision = await evaluateAndRecordSybilDecision(userAddress, "reward_credit")
+      if (sybilDecision && !sybilDecision.allowed) {
+        return NextResponse.json(
+          {
+            error: "Wallet does not meet the minimum sybil score required for reward credit.",
+            code: "SYBIL_BELOW_THRESHOLD",
+            reasonCode: sybilDecision.reasonCode,
+            decisionId: sybilDecision.decisionId,
+            score: sybilDecision.score,
+            minThreshold: sybilDecision.minThreshold,
+            suspectBand: sybilDecision.band,
+          },
           { status: 403 },
         )
       }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Unknown error"
-      return NextResponse.json(
-        { error: `Turnstile verification failed: ${msg}`, code: "TURNSTILE_ERROR" },
-        { status: 500 },
-      )
-    }
-  }
-
-  // Triple check #3: Sybil resistance score (on-chain wallet history)
-  if (isSybilResistanceEnabled(userAddress)) {
-    const sybilScore = await assessWalletSybilRisk(userAddress)
-    if (sybilScore && sybilScore.suspect) {
-      return NextResponse.json(
-        {
-          error: "Wallet appears to be new or suspicious. Try again after building more on-chain history.",
-          code: "SYBIL_SUSPECT",
-          suspectBand: sybilScore.band,
-          signals: sybilScore.signals.slice(0, 3),
-          detail: "Sybil resistance active: fresh or dormant accounts are rate-limited.",
-        },
-        { status: 429 },
-      )
+    } else if (isSybilResistanceEnabled(userAddress)) {
+      const sybilScore = await assessWalletSybilRisk(userAddress)
+      if (sybilScore && sybilScore.suspect) {
+        return NextResponse.json(
+          {
+            error: "Wallet appears to be new or suspicious. Try again after building more on-chain history.",
+            code: "SYBIL_SUSPECT",
+            suspectBand: sybilScore.band,
+            signals: sybilScore.signals.slice(0, 3),
+            detail: "Sybil resistance active: fresh or dormant accounts are rate-limited.",
+          },
+          { status: 429 },
+        )
+      }
     }
   }
 
@@ -708,8 +761,10 @@ export async function POST(req: NextRequest) {
     const streak = await getStreakInfo(userAddress)
     if (streak.multiplier > 1) approvedAmountStroops = applyStreakMultiplier(approvedAmountStroops, streak.multiplier)
   }
-  const complianceBlock = await complianceGate(userAddress, approvedAmountStroops, "faucet")
-  if (complianceBlock) return complianceBlock
+  if (!preCreditUnified) {
+    const complianceBlock = await complianceGate(userAddress, approvedAmountStroops, "faucet")
+    if (complianceBlock) return complianceBlock
+  }
 
   const trustlineBlock = await preflightClassicTrustlineForMint(userAddress)
   if (trustlineBlock) return trustlineBlock

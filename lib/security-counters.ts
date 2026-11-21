@@ -60,6 +60,24 @@ export const CUSTODIAN_RELEASE_REASONS = [
   "rpc_failure",
 ] as const
 
+export const SYBIL_DECISION_REASONS = [
+  "allowed_trusted",
+  "allowed_caution",
+  "below_threshold",
+  "signal_unavailable",
+  "invalid_wallet",
+] as const
+
+export const PRE_CREDIT_GATE_REASONS = [
+  "admitted",
+  "wallet_denied",
+  "turnstile_required",
+  "turnstile_failed",
+  "sybil_blocked",
+  "compliance_blocked",
+  "provider_outage",
+] as const
+
 /** Every reason code any counter may carry. */
 export const SECURITY_REASON_CODES = [
   ...PREVIEW_VERIFY_REASONS,
@@ -67,6 +85,8 @@ export const SECURITY_REASON_CODES = [
   ...MODERATION_DECISIONS,
   ...LABEL_REJECTION_REASONS,
   ...CUSTODIAN_RELEASE_REASONS,
+  ...SYBIL_DECISION_REASONS,
+  ...PRE_CREDIT_GATE_REASONS,
 ] as const
 
 export type SecurityReasonCode = (typeof SECURITY_REASON_CODES)[number]
@@ -308,22 +328,8 @@ export const SECURITY_COUNTER_REGISTRY = {
   drop_queue_ticket_issued: { surface: "market", reasons: NO_REASONS },
   market_accept_conflict: { surface: "market", reasons: NO_REASONS },
   edge_store_degraded: { surface: "operations", reasons: NO_REASONS },
-  bounty_claim_succeeded: { surface: "faucet", reasons: NO_REASONS },
-  bounty_claim_rejected: { surface: "faucet", reasons: NO_REASONS },
-  bounty_claim_duplicate: { surface: "faucet", reasons: NO_REASONS },
-  bounty_claim_stale_snapshot: { surface: "faucet", reasons: NO_REASONS },
-  push_notifications_dispatched: { surface: "notifications", reasons: NO_REASONS },
-  push_notifications_deduped: { surface: "notifications", reasons: NO_REASONS },
-  push_notifications_failed: { surface: "notifications", reasons: NO_REASONS },
-  push_circuit_breaker_opened: { surface: "notifications", reasons: NO_REASONS },
-  push_subscriptions_pruned: { surface: "notifications", reasons: NO_REASONS },
-  webhook_alerts_dispatched: { surface: "notifications", reasons: NO_REASONS },
-  webhook_alerts_deduped: { surface: "notifications", reasons: NO_REASONS },
-  webhook_alerts_circuit_broken: { surface: "notifications", reasons: NO_REASONS },
-  experiment_assignment_created: { surface: "operations", reasons: NO_REASONS },
-  experiment_assignment_sticky_hit: { surface: "operations", reasons: NO_REASONS },
-  experiment_challenge_locked: { surface: "operations", reasons: NO_REASONS },
-  experiment_challenge_verified: { surface: "operations", reasons: NO_REASONS },
+  sybil_decision_recorded: { surface: "governance", reasons: SYBIL_DECISION_REASONS },
+  pre_credit_gate_decision: { surface: "faucet", reasons: PRE_CREDIT_GATE_REASONS },
   security_counter_label_rejected: { surface: "operations", reasons: LABEL_REJECTION_REASONS },
 } as const satisfies Record<string, CounterSpec>
 

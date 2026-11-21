@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { isFeatureEnabled } from "@/lib/feature-flags";
+import { evaluateAndRecordSybilDecision, isSybilGatingEnabled } from "@/lib/sybil-resistance";
 import {
   castGaugeVote,
   readWalletGaugeVotes,
@@ -95,6 +96,22 @@ export async function POST(request: NextRequest) {
     const wallet = body.wallet?.trim();
     if (!wallet) {
       return NextResponse.json({ error: "Missing wallet field in body" }, { status: 400, headers: CORS });
+    }
+    if (isSybilGatingEnabled(wallet)) {
+      const sybilDecision = await evaluateAndRecordSybilDecision(wallet, "governance_vote");
+      if (sybilDecision && !sybilDecision.allowed) {
+        return NextResponse.json(
+          {
+            error: "Wallet does not meet the minimum sybil score required for governance voting.",
+            code: "SYBIL_BELOW_THRESHOLD",
+            reasonCode: sybilDecision.reasonCode,
+            decisionId: sybilDecision.decisionId,
+            score: sybilDecision.score,
+            minThreshold: sybilDecision.minThreshold,
+          },
+          { status: 403, headers: CORS },
+        );
+      }
     }
     const votes = Array.isArray(body.votes) ? body.votes : [];
     const res = castGaugeVote(wallet, votes);
