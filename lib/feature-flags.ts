@@ -118,6 +118,14 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   timeout, typed failure, and SQLite idempotent recording (issue #700)
  * - phase-259: Forge paint canvas with deterministic seal image, digest-keyed cache,
  *   tamper verification, renderer fallback and closed counters (issue #712)
+ * - phase-246: Sybil resistance for rewards and governance with bounded score,
+ *   persisted decisions, closed reason codes, and admin inspect route (issue #697)
+ * - phase-247: Unified Turnstile, deny-list, sybil, and compliance pre-credit gate
+ *   with fail-closed 503 + Retry-After and keyed-hash persistence (issue #698)
+ * - phase-244: Profile 2FA bound to SEP-10 session with lockout cooldown,
+ *   auditable recovery, hashed secrets, and EN/ES copy (issue #695)
+ * - phase-245: Artist attestation and alias control with wallet signatures,
+ *   version-guarded primary alias uniqueness, audit trail, and EN/ES copy (issue #696)
  * - phase-257: Lore versioning with explicit append-only rollback, If-Match
  *   optimistic concurrency guard, author proof and EN/ES copy (issue #710)
  * - phase-253: Analytics warehouse export integration with signed one-use
@@ -261,7 +269,11 @@ export type PhaseFeatureFlag =
   | "phase-249"
   | "phase-253"
   | "phase-257"
-  | "phase-259";
+  | "phase-259"
+  | "phase-246"
+  | "phase-247"
+  | "phase-244"
+  | "phase-245";
 
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
@@ -387,6 +399,10 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-253": ["NEXT_PUBLIC_FEATURE_PHASE_253", "FEATURE_PHASE_253"],
   "phase-257": ["NEXT_PUBLIC_FEATURE_PHASE_257", "FEATURE_PHASE_257"],
   "phase-259": ["NEXT_PUBLIC_FEATURE_PHASE_259", "FEATURE_PHASE_259"],
+  "phase-246": ["NEXT_PUBLIC_FEATURE_PHASE_246", "FEATURE_PHASE_246"],
+  "phase-247": ["NEXT_PUBLIC_FEATURE_PHASE_247", "FEATURE_PHASE_247"],
+  "phase-244": ["NEXT_PUBLIC_FEATURE_PHASE_244", "FEATURE_PHASE_244"],
+  "phase-245": ["NEXT_PUBLIC_FEATURE_PHASE_245", "FEATURE_PHASE_245"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -502,6 +518,10 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-253",
   "phase-257",
   "phase-259",
+  "phase-246",
+  "phase-247",
+  "phase-244",
+  "phase-245",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {

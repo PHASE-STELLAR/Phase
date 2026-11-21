@@ -373,6 +373,80 @@ CREATE TABLE IF NOT EXISTS quest_arcs (
 );
 CREATE INDEX IF NOT EXISTS idx_quest_arcs_wallet_status
   ON quest_arcs (wallet, status, created_at DESC);
+CREATE TABLE IF NOT EXISTS sybil_decisions (
+  decision_id TEXT PRIMARY KEY,
+  wallet_hash TEXT NOT NULL,
+  surface TEXT NOT NULL CHECK(surface IN ('reward_credit', 'governance_vote')),
+  score INTEGER NOT NULL,
+  min_threshold INTEGER NOT NULL,
+  band TEXT NOT NULL CHECK(band IN ('trusted', 'caution', 'suspect')),
+  allowed INTEGER NOT NULL CHECK(allowed IN (0, 1)),
+  reason_code TEXT NOT NULL,
+  signals_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sybil_decisions_wallet_hash_time
+  ON sybil_decisions (wallet_hash, created_at DESC);
+CREATE TABLE IF NOT EXISTS pre_credit_gate_decisions (
+  decision_id TEXT PRIMARY KEY,
+  wallet_hash TEXT NOT NULL,
+  ip_hash TEXT,
+  allowed INTEGER NOT NULL CHECK(allowed IN (0, 1)),
+  blocking_gate TEXT NOT NULL CHECK(blocking_gate IN ('none', 'deny_list', 'turnstile', 'sybil', 'compliance')),
+  reason_code TEXT NOT NULL,
+  http_status INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pre_credit_gate_wallet_time
+  ON pre_credit_gate_decisions (wallet_hash, created_at DESC);
+CREATE TABLE IF NOT EXISTS profile_2fa_challenges (
+  wallet_hash TEXT PRIMARY KEY,
+  session_hash TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS profile_2fa_lockouts (
+  wallet_hash TEXT PRIMARY KEY,
+  failed_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until INTEGER NOT NULL DEFAULT 0,
+  recovery_hash TEXT,
+  recovery_salt TEXT,
+  recovery_expires_at INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS profile_2fa_audit (
+  id TEXT PRIMARY KEY,
+  wallet_hash TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  reason_code TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_profile_2fa_audit_wallet_time
+  ON profile_2fa_audit (wallet_hash, created_at DESC);
+CREATE TABLE IF NOT EXISTS artist_aliases (
+  wallet TEXT PRIMARY KEY,
+  alias TEXT NOT NULL,
+  alias_normalized TEXT NOT NULL UNIQUE,
+  version INTEGER NOT NULL DEFAULT 1,
+  attested INTEGER NOT NULL DEFAULT 0,
+  signature TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS artist_alias_audit (
+  id TEXT PRIMARY KEY,
+  wallet TEXT NOT NULL,
+  action TEXT NOT NULL,
+  alias TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  nonce TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_artist_alias_audit_wallet_time
+  ON artist_alias_audit (wallet, created_at DESC);
 `;
 
 // Issue #89 (phase-140): `listings` predates the creator/royalty concept, so
