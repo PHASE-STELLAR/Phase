@@ -120,6 +120,8 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   tamper verification, renderer fallback and closed counters (issue #712)
  * - phase-260: OG image generation with centralized design tokens, canonical
  *   digest caching, bounded timeout and static template fallback (issue #713)
+ * - phase-261: Referral quest with SEP-10 signed attribution, one-use codes,
+ *   atomic version-guarded enrollment, referrer caps, closed counters and EN/ES copy (issue #714)
  * - phase-256: Gas estimate preview before wallet signing with bounded simulation,
  *   staleness timestamp, input-change re-simulation, honest fallback and EN/ES copy (issue #709)
  * - phase-257: Lore versioning with explicit append-only rollback, If-Match
@@ -267,7 +269,8 @@ export type PhaseFeatureFlag =
   | "phase-256"
   | "phase-257"
   | "phase-259"
-  | "phase-260";
+  | "phase-260"
+  | "phase-261";
 
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
@@ -395,6 +398,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-257": ["NEXT_PUBLIC_FEATURE_PHASE_257", "FEATURE_PHASE_257"],
   "phase-259": ["NEXT_PUBLIC_FEATURE_PHASE_259", "FEATURE_PHASE_259"],
   "phase-260": ["NEXT_PUBLIC_FEATURE_PHASE_260", "FEATURE_PHASE_260"],
+  "phase-261": ["NEXT_PUBLIC_FEATURE_PHASE_261", "FEATURE_PHASE_261"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -512,6 +516,7 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-257",
   "phase-259",
   "phase-260",
+  "phase-261",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {

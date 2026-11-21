@@ -60,6 +60,17 @@ export const CUSTODIAN_RELEASE_REASONS = [
   "rpc_failure",
 ] as const
 
+export const REFERRAL_QUEST_REASONS = [
+  "enrolled",
+  "self_referral",
+  "already_enrolled",
+  "code_already_used",
+  "invalid_code",
+  "referrer_cap_reached",
+  "version_conflict",
+  "sybil_rejected",
+] as const
+
 /** Every reason code any counter may carry. */
 export const SECURITY_REASON_CODES = [
   ...PREVIEW_VERIFY_REASONS,
@@ -67,6 +78,7 @@ export const SECURITY_REASON_CODES = [
   ...MODERATION_DECISIONS,
   ...LABEL_REJECTION_REASONS,
   ...CUSTODIAN_RELEASE_REASONS,
+  ...REFERRAL_QUEST_REASONS,
 ] as const
 
 export type SecurityReasonCode = (typeof SECURITY_REASON_CODES)[number]
@@ -122,6 +134,8 @@ export const SECURITY_COUNTER_REGISTRY = {
   winback_dormant_detected: { surface: "growth", reasons: NO_REASONS },
   winback_experiment_dispatched: { surface: "growth", reasons: NO_REASONS },
   winback_fatigue_suppressed: { surface: "growth", reasons: NO_REASONS },
+  referral_quest_code_issued: { surface: "growth", reasons: NO_REASONS },
+  referral_quest_enrollment: { surface: "growth", reasons: REFERRAL_QUEST_REASONS },
   ve_lock_created: { surface: "governance", reasons: NO_REASONS },
   ve_lock_extended: { surface: "governance", reasons: NO_REASONS },
   ve_fee_distributed: { surface: "governance", reasons: NO_REASONS },

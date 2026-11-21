@@ -853,6 +853,21 @@ export const phaseCopy: Record<
       | "disclaimer",
       string
     >
+    referralQuest: Record<
+      | "title"
+      | "subtitle"
+      | "issueCodeAction"
+      | "enrollAction"
+      | "codeLabel"
+      | "selfReferralError"
+      | "alreadyEnrolledError"
+      | "codeUsedError"
+      | "capReachedError"
+      | "versionConflictError"
+      | "authRequiredError"
+      | "enrolledSuccess",
+      string
+    >
   }
 > = {
   en: {
@@ -1664,6 +1679,20 @@ export const phaseCopy: Record<
       simulatingLabel: "Simulating transaction…",
       fallbackNotice: "Live simulation unavailable ({reason}). Showing conservative bounded fallback.",
       disclaimer: "Estimate only — not a guarantee. Final network fee is determined by the Stellar ledger at execution.",
+    },
+    referralQuest: {
+      title: "Referral Quest",
+      subtitle: "Share a one-use signed referral code. Attribution is bound to your SEP-10 session wallet.",
+      issueCodeAction: "Generate one-use code",
+      enrollAction: "Claim referral",
+      codeLabel: "Referral code",
+      selfReferralError: "Self-referral is not allowed.",
+      alreadyEnrolledError: "This wallet has already enrolled in a referral quest.",
+      codeUsedError: "This one-use referral code has already been redeemed.",
+      capReachedError: "Referrer has reached the maximum reward cap.",
+      versionConflictError: "Referral state changed concurrently (409). Please retry.",
+      authRequiredError: "Connect and verify your SEP-10 wallet session first.",
+      enrolledSuccess: "Referral attributed and bonus recorded.",
     },
   },
 
@@ -2479,6 +2508,20 @@ export const phaseCopy: Record<
       simulatingLabel: "Simulando transacción…",
       fallbackNotice: "Simulación en vivo no disponible ({reason}). Mostrando estimación acotada de respaldo.",
       disclaimer: "Solo una estimación — no es una garantía. La tarifa final la determina el ledger de Stellar al ejecutarse.",
+    },
+    referralQuest: {
+      title: "Misión de Referidos",
+      subtitle: "Compartí un código de un solo uso. La atribución queda vinculada a tu sesión SEP-10.",
+      issueCodeAction: "Generar código de un solo uso",
+      enrollAction: "Reclamar referido",
+      codeLabel: "Código de referido",
+      selfReferralError: "No podés referirte a vos mismo.",
+      alreadyEnrolledError: "Esta billetera ya participó en una misión de referidos.",
+      codeUsedError: "Este código de referido de un solo uso ya fue utilizado.",
+      capReachedError: "El referente alcanzó el límite máximo de recompensas.",
+      versionConflictError: "El estado de referidos cambió concurrentemente (409). Intentá de nuevo.",
+      authRequiredError: "Conectá y verificá tu sesión de billetera SEP-10 primero.",
+      enrolledSuccess: "Referido atribuido y bonificación registrada.",
     },
   },
 

@@ -20,6 +20,7 @@ import { isFeatureEnabled } from "@/lib/feature-flags"
 import { assessWalletSybilRisk, isSybilResistanceEnabled } from "@/lib/sybil-resistance"
 import { readJsonFile, updateStore } from "@/lib/json-store"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
+import { incSecurityCounter } from "@/lib/security-counters"
 
 const FLAG: "phase-132" = "phase-132"
 
@@ -42,9 +43,17 @@ type ReferralRecord = {
   referredAt: number[]
   /** Rate-limit by origin fingerprint. */
   rateLimits?: Record<string, number>
+  /** phase-261: whether this code is single-use. */
+  oneUse?: boolean
+  /** phase-261: wallet that redeemed this one-use code. */
+  consumedBy?: string
+  /** phase-261: timestamp when the one-use code was redeemed. */
+  consumedAt?: number
 }
 
 export type ReferralStore = {
+  /** Monotonic optimistic-concurrency version (phase-261). */
+  version?: number
   /** wallet → referral code */
   codesByWallet: Record<string, ReferralCode>
   /** code → referral record */
@@ -54,6 +63,7 @@ export type ReferralStore = {
 }
 
 const DEFAULT_STORE: ReferralStore = {
+  version: 0,
   codesByWallet: {},
   recordsByCode: {},
   referredByWallet: {},
@@ -217,4 +227,227 @@ export async function getReferralAttribution(
   const record = store.recordsByCode[code]
   if (!record) return null
   return { referrer: record.referrer, referralCode: code }
+}
+
+// ─── phase-261: SEP-10 signed attribution, one-use codes & atomic version guard ─
+
+export function isSignedReferralQuestEnabled(wallet?: string): boolean {
+  return isFeatureEnabled("phase-261", wallet ? { wallet } : undefined)
+}
+
+export function signedReferralQuestRollbackNote(): string {
+  return "Rollback phase-261: unset NEXT_PUBLIC_FEATURE_PHASE_261 / FEATURE_PHASE_261. Referral route 404; rows inert."
+}
+
+function countReferrerTotalCredits(store: ReferralStore, referrer: string): number {
+  let total = 0
+  for (const key of Object.keys(store.recordsByCode)) {
+    const rec = store.recordsByCode[key]
+    if (rec && rec.referrer === referrer) {
+      total += rec.referred.length
+    }
+  }
+  return total
+}
+
+export type IssueOneUseCodeResult =
+  | { ok: true; code: string; version: number }
+  | { ok: false; status: number; code: "FLAG_DISABLED" | "REFERRER_CAP_REACHED" | "VERSION_CONFLICT"; error: string }
+
+/**
+ * Issue a one-use referral code bound to the authenticated SEP-10 session wallet.
+ */
+export async function issueOneUseReferralCode(
+  sessionWallet: string,
+  opts: { expectedVersion?: number } = {},
+): Promise<IssueOneUseCodeResult> {
+  if (!isSignedReferralQuestEnabled(sessionWallet)) {
+    return { ok: false, status: 404, code: "FLAG_DISABLED", error: "Referral quest disabled" }
+  }
+
+  return updateStore<ReferralStore, IssueOneUseCodeResult>("referralQuests", (store) => {
+    const currentVersion = store.version ?? 0
+    if (opts.expectedVersion !== undefined && opts.expectedVersion !== currentVersion) {
+      return {
+        ok: false,
+        status: 409,
+        code: "VERSION_CONFLICT",
+        error: "Concurrent modification detected",
+      }
+    }
+
+    if (countReferrerTotalCredits(store, sessionWallet) >= MAX_REFERRALS_PER_WALLET) {
+      return {
+        ok: false,
+        status: 429,
+        code: "REFERRER_CAP_REACHED",
+        error: "Referrer has reached the maximum referral limit.",
+      }
+    }
+
+    let code = generateCode()
+    while (hasOwn(store.recordsByCode, code)) {
+      code = generateCode()
+    }
+
+    store.recordsByCode[code] = {
+      referrer: sessionWallet,
+      referred: [],
+      referredAt: [],
+      oneUse: true,
+    }
+    if (!hasOwn(store.codesByWallet, sessionWallet) || !store.codesByWallet[sessionWallet]) {
+      store.codesByWallet[sessionWallet] = code
+    }
+    store.version = currentVersion + 1
+    incSecurityCounter("referral_quest_code_issued")
+    return { ok: true, code, version: store.version }
+  })
+}
+
+export type SignedReferralEnrollErrorCode =
+  | "FLAG_DISABLED"
+  | "INVALID_CODE"
+  | "SELF_REFERRAL"
+  | "ALREADY_ENROLLED"
+  | "CODE_ALREADY_USED"
+  | "REFERRER_CAP_REACHED"
+  | "VERSION_CONFLICT"
+  | "SYBIL_REJECTED"
+
+export type SignedReferralEnrollResult =
+  | {
+      ok: true
+      status: 200
+      referrer: string
+      referredWallet: string
+      bonus: string
+      version: number
+    }
+  | {
+      ok: false
+      status: 400 | 403 | 404 | 409 | 429
+      code: SignedReferralEnrollErrorCode
+      error: string
+      currentVersion?: number
+    }
+
+/**
+ * Atomically enroll `sessionWallet` (from verified SEP-10 session) using a
+ * one-use referral code with optimistic version guard and closed counters.
+ */
+export async function enrollSignedReferral(input: {
+  sessionWallet: string
+  code: string
+  expectedVersion?: number
+  nowMs?: number
+}): Promise<SignedReferralEnrollResult> {
+  const { sessionWallet, code, expectedVersion } = input
+  if (!isSignedReferralQuestEnabled(sessionWallet)) {
+    return { ok: false, status: 404, code: "FLAG_DISABLED", error: "Referral quest disabled" }
+  }
+
+  const normalizedCode = code.trim().toUpperCase()
+  if (!normalizedCode) {
+    incSecurityCounter("referral_quest_enrollment", { reason: "invalid_code" })
+    return { ok: false, status: 400, code: "INVALID_CODE", error: "Invalid referral code." }
+  }
+
+  if (isSybilResistanceEnabled()) {
+    const risk = await assessWalletSybilRisk(sessionWallet)
+    if (risk?.suspect) {
+      incSecurityCounter("referral_quest_enrollment", { reason: "sybil_rejected" })
+      return { ok: false, status: 403, code: "SYBIL_REJECTED", error: "Wallet failed referral trust checks." }
+    }
+  }
+
+  const now = input.nowMs ?? Date.now()
+  return updateStore<ReferralStore, SignedReferralEnrollResult>("referralQuests", (store) => {
+    const currentVersion = store.version ?? 0
+    if (expectedVersion !== undefined && expectedVersion !== currentVersion) {
+      incSecurityCounter("referral_quest_enrollment", { reason: "version_conflict" })
+      return {
+        ok: false,
+        status: 409,
+        code: "VERSION_CONFLICT",
+        error: "Concurrent modification detected",
+        currentVersion,
+      }
+    }
+
+    const record = hasOwn(store.recordsByCode, normalizedCode)
+      ? store.recordsByCode[normalizedCode]
+      : undefined
+    if (!record) {
+      incSecurityCounter("referral_quest_enrollment", { reason: "invalid_code" })
+      return { ok: false, status: 400, code: "INVALID_CODE", error: "Invalid referral code." }
+    }
+
+    if (record.referrer === sessionWallet) {
+      incSecurityCounter("referral_quest_enrollment", { reason: "self_referral" })
+      return { ok: false, status: 400, code: "SELF_REFERRAL", error: "Cannot refer yourself." }
+    }
+
+    if (hasOwn(store.referredByWallet, sessionWallet)) {
+      incSecurityCounter("referral_quest_enrollment", { reason: "already_enrolled" })
+      return { ok: false, status: 409, code: "ALREADY_ENROLLED", error: "Wallet already enrolled." }
+    }
+
+    if (record.oneUse && record.consumedBy) {
+      incSecurityCounter("referral_quest_enrollment", { reason: "code_already_used" })
+      return { ok: false, status: 409, code: "CODE_ALREADY_USED", error: "Referral code already used." }
+    }
+
+    if (countReferrerTotalCredits(store, record.referrer) >= MAX_REFERRALS_PER_WALLET) {
+      incSecurityCounter("referral_quest_enrollment", { reason: "referrer_cap_reached" })
+      return {
+        ok: false,
+        status: 429,
+        code: "REFERRER_CAP_REACHED",
+        error: "Referrer has reached the maximum referral limit.",
+      }
+    }
+
+    record.referred.push(sessionWallet)
+    record.referredAt.push(now)
+    if (record.oneUse) {
+      record.consumedBy = sessionWallet
+      record.consumedAt = now
+    }
+    store.referredByWallet[sessionWallet] = normalizedCode
+    store.version = currentVersion + 1
+
+    incSecurityCounter("referral_quest_enrollment", { reason: "enrolled" })
+    return {
+      ok: true,
+      status: 200,
+      referrer: record.referrer,
+      referredWallet: sessionWallet,
+      bonus: REFERRAL_BONUS_STROOPS,
+      version: store.version,
+    }
+  })
+}
+
+/**
+ * Get signed referral summary + store version for a SEP-10 session wallet.
+ */
+export async function getSignedReferralSummary(sessionWallet: string): Promise<{
+  version: number
+  totalReferredByMe: number
+  remainingSlots: number
+  enrolledWith: { referrer: string; code: string } | null
+}> {
+  const store = await readReferralStore()
+  const totalReferredByMe = countReferrerTotalCredits(store, sessionWallet)
+  const usedCode = hasOwn(store.referredByWallet, sessionWallet)
+    ? store.referredByWallet[sessionWallet]
+    : undefined
+  const usedRecord = usedCode ? store.recordsByCode[usedCode] : undefined
+  return {
+    version: store.version ?? 0,
+    totalReferredByMe,
+    remainingSlots: Math.max(0, MAX_REFERRALS_PER_WALLET - totalReferredByMe),
+    enrolledWith: usedCode && usedRecord ? { referrer: usedRecord.referrer, code: usedCode } : null,
+  }
 }
