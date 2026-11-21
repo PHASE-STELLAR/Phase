@@ -399,6 +399,34 @@ CREATE TABLE IF NOT EXISTS pre_credit_gate_decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_pre_credit_gate_wallet_time
   ON pre_credit_gate_decisions (wallet_hash, created_at DESC);
+CREATE TABLE IF NOT EXISTS profile_2fa_challenges (
+  wallet_hash TEXT PRIMARY KEY,
+  session_hash TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS profile_2fa_lockouts (
+  wallet_hash TEXT PRIMARY KEY,
+  failed_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until INTEGER NOT NULL DEFAULT 0,
+  recovery_hash TEXT,
+  recovery_salt TEXT,
+  recovery_expires_at INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS profile_2fa_audit (
+  id TEXT PRIMARY KEY,
+  wallet_hash TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  reason_code TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_profile_2fa_audit_wallet_time
+  ON profile_2fa_audit (wallet_hash, created_at DESC);
 `;
 
 // Issue #89 (phase-140): `listings` predates the creator/royalty concept, so
