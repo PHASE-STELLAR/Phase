@@ -2,7 +2,8 @@ import { Address, extractBaseAddress, FeeBumpTransaction, rpc, scValToNative, Tr
 import { decodePaymentHeader, PaymentPayloadSchema, PaymentRequirementsSchema, useFacilitator, type PaymentRequirements } from "x402-stellar"
 import { getPhaseProtocolConfigFromChain, NETWORK_PASSPHRASE, phaseProtocolContractIdForServer, READONLY_SIM_SOURCE_G, REQUIRED_AMOUNT, RPC_URL, stroopsToLiqDisplay, PHASER_LIQ_SYMBOL, tokenContractIdForServer } from "@/lib/phase-protocol"
 import { logUnknownStellarError } from "@/lib/stellar"
-import { resolveForgeRequiredAmountStroops } from "@/lib/experiments"
+import { isExperimentationEnabled, resolveForgeRequiredAmountStroops } from "@/lib/experiments"
+import { incSecurityCounter } from "@/lib/security-counters"
 
 const PHASE_PROTOCOL_CONTRACT = phaseProtocolContractIdForServer()
 const PHASE_LIQ_TOKEN_CONTRACT = tokenContractIdForServer()
@@ -20,8 +21,11 @@ export function forgePriceDisplay(amountStroops: string = REQUIRED_AMOUNT): stri
  * single source of truth for challenge amount, header and verifier floor so a
  * variant can never sell at A and verify at B.
  */
-export async function resolveForgePaymentAmount(payerAddress?: string): Promise<string> {
-  const resolution = await resolveForgeRequiredAmountStroops(payerAddress)
+export async function resolveForgePaymentAmount(
+  payerAddress?: string,
+  challengeId?: string,
+): Promise<string> {
+  const resolution = await resolveForgeRequiredAmountStroops(payerAddress, challengeId)
   return resolution.amountStroops
 }
 
@@ -196,12 +200,14 @@ export function extractSettlementReceiptTxHash(authHeader: string | null, body: 
 // ── pipeline step ───────────────────────────────────────────────────────────
 export type VerifyPaymentStepInput = {
   authHeader: string | null
-  body: { settlementTxHash?: string; payerAddress?: string }
+  body: { settlementTxHash?: string; payerAddress?: string; invoice?: string }
   paymentRequirements: PaymentRequirements | null
+  challengeId?: string
 }
 
 export async function verifyPaymentStep(input: VerifyPaymentStepInput): Promise<ForgePaymentResolution> {
   const { authHeader, body, paymentRequirements } = input
+  const challengeId = input.challengeId ?? body.invoice
   const bearerHash = parseBearerSettlementTxHash(authHeader)
   let settlementTx = body.settlementTxHash?.trim() ?? ""
   if (bearerHash) {
@@ -212,17 +218,25 @@ export async function verifyPaymentStep(input: VerifyPaymentStepInput): Promise<
   if (settlementTx) {
     if (!payer) payer = (await sorobanSuccessfulTxSourcePublicKey(settlementTx)) ?? ""
     if (payer) {
-      // Spike 612: the verifier floor follows the payer's price variant so a
-      // variant-priced settlement verifies at the same price it was sold at.
-      const requiredAmount = await resolveForgePaymentAmount(payer)
-      try { return (await verifyPhaseSettleTxOnChain(settlementTx, payer, requiredAmount)) ? "paid" : "missing" }
+      // Spike 612: the verifier floor follows the payer's locked challenge or
+      // price variant so a variant-priced settlement verifies at the same price it was sold at.
+      const requiredAmount = await resolveForgePaymentAmount(payer, challengeId)
+      try {
+        const ok = await verifyPhaseSettleTxOnChain(settlementTx, payer, requiredAmount)
+        if (ok && isExperimentationEnabled()) incSecurityCounter("experiment_challenge_verified")
+        return ok ? "paid" : "missing"
+      }
       catch (e) { logUnknownStellarError("forge verifyPaymentStep (body settle)", e); return "missing" }
     }
   }
   const phaseFromAuth = tryPhaseProofFromAuthHeader(authHeader)
   if (phaseFromAuth) {
-    const requiredAmount = await resolveForgePaymentAmount(phaseFromAuth.payerAddress)
-    try { return (await verifyPhaseSettleTxOnChain(phaseFromAuth.settlementTxHash, phaseFromAuth.payerAddress, requiredAmount)) ? "paid" : "missing" }
+    const requiredAmount = await resolveForgePaymentAmount(phaseFromAuth.payerAddress, challengeId)
+    try {
+      const ok = await verifyPhaseSettleTxOnChain(phaseFromAuth.settlementTxHash, phaseFromAuth.payerAddress, requiredAmount)
+      if (ok && isExperimentationEnabled()) incSecurityCounter("experiment_challenge_verified")
+      return ok ? "paid" : "missing"
+    }
     catch (e) { logUnknownStellarError("forge verifyPaymentStep (auth settle)", e); return "missing" }
   }
   if (!authHeader?.toLowerCase().startsWith("x402 ")) return "missing"
@@ -230,6 +244,10 @@ export async function verifyPaymentStep(input: VerifyPaymentStepInput): Promise<
   let decoded: unknown
   try { decoded = decodePaymentHeader<unknown>(raw) } catch { return "missing" }
   if (!PaymentPayloadSchema.safeParse(decoded).success) return "missing"
-  try { return (await verifyOfficialX402(raw, paymentRequirements)) ? "paid" : "facilitator_rejected" }
+  try {
+    const ok = await verifyOfficialX402(raw, paymentRequirements)
+    if (ok && isExperimentationEnabled()) incSecurityCounter("experiment_challenge_verified")
+    return ok ? "paid" : "facilitator_rejected"
+  }
   catch (e) { logUnknownStellarError("forge verifyPaymentStep (x402 verify)", e); return "facilitator_rejected" }
 }

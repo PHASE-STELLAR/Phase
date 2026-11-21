@@ -168,6 +168,8 @@ export type ForgeExperimentVariantCopy = {
   /** `{amount}` = formatted variant price. */
   paymentGateExplainer: string
   paymentGateHint: string
+  chamberBanner: string
+  chamberCta: string
 }
 
 export type ForgeExperimentCopy = {
@@ -1630,16 +1632,22 @@ export const phaseCopy: Record<
           label: "Standard",
           paymentGateExplainer: "Pay {amount} PHASELQ to the Forge Agent — your artifact is generated and minted on the Stellar ledger automatically.",
           paymentGateHint: "One payment settles on-chain; your artifact is minted automatically.",
+          chamberBanner: "Settle on-chain in the Chamber to mint your artifact.",
+          chamberCta: "Execute Settlement",
         },
         price_cut: {
           label: "Launch price",
           paymentGateExplainer: "Launch price: pay {amount} PHASELQ to the Forge Agent — same on-chain settlement, same automatic mint.",
           paymentGateHint: "Launch pricing — one on-chain payment, artifact minted automatically.",
+          chamberBanner: "Launch pricing active — single on-chain settlement, instant mint.",
+          chamberCta: "Settle at Launch Price",
         },
         copy_urgent: {
           label: "Limited",
           paymentGateExplainer: "Secure your artifact for {amount} PHASELQ — settlement is on-chain and minting is automatic.",
           paymentGateHint: "Limited window — pay once on-chain and the Forge mints your artifact automatically.",
+          chamberBanner: "Limited window — lock your on-chain Chamber settlement now.",
+          chamberCta: "Lock Settlement Now",
         },
       },
     },
@@ -2463,16 +2471,22 @@ export const phaseCopy: Record<
           label: "Estándar",
           paymentGateExplainer: "Pagá {amount} PHASELQ al Forge Agent — tu artefacto se genera y se mintea en el ledger de Stellar automáticamente.",
           paymentGateHint: "Un pago se liquida on-chain; tu artefacto se mintea automáticamente.",
+          chamberBanner: "Liquidá on-chain en la Cámara para mintear tu artefacto.",
+          chamberCta: "Ejecutar Liquidación",
         },
         price_cut: {
           label: "Precio de lanzamiento",
           paymentGateExplainer: "Precio de lanzamiento: pagá {amount} PHASELQ al Forge Agent — misma liquidación on-chain, mismo mint automático.",
           paymentGateHint: "Precio de lanzamiento — un pago on-chain y el Forge mintea tu artefacto automáticamente.",
+          chamberBanner: "Precio de lanzamiento activo — una liquidación on-chain, mint instantáneo.",
+          chamberCta: "Liquidar a Precio de Lanzamiento",
         },
         copy_urgent: {
           label: "Por tiempo limitado",
           paymentGateExplainer: "Asegurá tu artefacto por {amount} PHASELQ — la liquidación es on-chain y el mint es automático.",
           paymentGateHint: "Ventana limitada — pagá una vez on-chain y el Forge mintea tu artefacto automáticamente.",
+          chamberBanner: "Ventana limitada — asegurá tu liquidación on-chain en la Cámara ahora.",
+          chamberCta: "Asegurar Liquidación",
         },
       },
     },

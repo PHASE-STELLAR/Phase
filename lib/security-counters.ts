@@ -320,6 +320,10 @@ export const SECURITY_COUNTER_REGISTRY = {
   webhook_alerts_dispatched: { surface: "notifications", reasons: NO_REASONS },
   webhook_alerts_deduped: { surface: "notifications", reasons: NO_REASONS },
   webhook_alerts_circuit_broken: { surface: "notifications", reasons: NO_REASONS },
+  experiment_assignment_created: { surface: "operations", reasons: NO_REASONS },
+  experiment_assignment_sticky_hit: { surface: "operations", reasons: NO_REASONS },
+  experiment_challenge_locked: { surface: "operations", reasons: NO_REASONS },
+  experiment_challenge_verified: { surface: "operations", reasons: NO_REASONS },
   security_counter_label_rejected: { surface: "operations", reasons: LABEL_REJECTION_REASONS },
 } as const satisfies Record<string, CounterSpec>
 
