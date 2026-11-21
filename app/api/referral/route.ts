@@ -24,6 +24,8 @@ const ReferralPostSchema = z.discriminatedUnion("action", [
   }),
 ])
 
+const NO_STORE_HEADERS = { "Cache-Control": "no-store" }
+
 function resolveLang(request: NextRequest): string {
   return (
     request.nextUrl.searchParams.get("lang") ??
@@ -32,42 +34,41 @@ function resolveLang(request: NextRequest): string {
   )
 }
 
-/** GET /api/referral — SEP-10 authenticated referral quest summary (phase-261). */
-export async function GET(request: NextRequest) {
+async function requireReferralSession(request: NextRequest) {
   if (!isSignedReferralQuestEnabled()) {
-    return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 })
+    return { error: NextResponse.json({ error: "NOT_FOUND" }, { status: 404 }) }
   }
 
   const wallet = await resolveSessionWallet(request)
   const copy = pickCopy(resolveLang(request)).referralQuest
   if (!wallet) {
-    return NextResponse.json(
-      { error: "SESSION_REQUIRED", message: copy.authRequiredError },
-      { status: 401, headers: { "Cache-Control": "no-store" } },
-    )
+    return {
+      error: NextResponse.json(
+        { error: "SESSION_REQUIRED", message: copy.authRequiredError },
+        { status: 401, headers: NO_STORE_HEADERS },
+      ),
+    }
   }
 
-  const summary = await getSignedReferralSummary(wallet)
+  return { wallet, copy }
+}
+
+/** GET /api/referral — SEP-10 authenticated referral quest summary (phase-261). */
+export async function GET(request: NextRequest) {
+  const session = await requireReferralSession(request)
+  if ("error" in session) return session.error
+
+  const summary = await getSignedReferralSummary(session.wallet)
   return NextResponse.json(
-    { ok: true, wallet, ...summary, copy },
-    { headers: { "Cache-Control": "no-store" } },
+    { ok: true, wallet: session.wallet, ...summary, copy: session.copy },
+    { headers: NO_STORE_HEADERS },
   )
 }
 
 /** POST /api/referral — issue one-use code or atomically enroll via SEP-10 session (phase-261). */
 export async function POST(request: NextRequest) {
-  if (!isSignedReferralQuestEnabled()) {
-    return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 })
-  }
-
-  const wallet = await resolveSessionWallet(request)
-  const copy = pickCopy(resolveLang(request)).referralQuest
-  if (!wallet) {
-    return NextResponse.json(
-      { error: "SESSION_REQUIRED", message: copy.authRequiredError },
-      { status: 401, headers: { "Cache-Control": "no-store" } },
-    )
-  }
+  const session = await requireReferralSession(request)
+  if ("error" in session) return session.error
 
   let rawBody: unknown
   try {
@@ -85,22 +86,22 @@ export async function POST(request: NextRequest) {
   }
 
   if (parsed.data.action === "issue_code") {
-    const res = await issueOneUseReferralCode(wallet, {
+    const res = await issueOneUseReferralCode(session.wallet, {
       expectedVersion: parsed.data.expectedVersion,
     })
     return NextResponse.json(res, {
       status: res.ok ? 200 : res.status,
-      headers: { "Cache-Control": "no-store" },
+      headers: NO_STORE_HEADERS,
     })
   }
 
   const res = await enrollSignedReferral({
-    sessionWallet: wallet,
+    sessionWallet: session.wallet,
     code: parsed.data.code,
     expectedVersion: parsed.data.expectedVersion,
   })
   return NextResponse.json(res, {
     status: res.status,
-    headers: { "Cache-Control": "no-store" },
+    headers: NO_STORE_HEADERS,
   })
 }
