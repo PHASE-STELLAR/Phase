@@ -60,6 +60,14 @@ export const CUSTODIAN_RELEASE_REASONS = [
   "rpc_failure",
 ] as const
 
+export const SYBIL_DECISION_REASONS = [
+  "allowed_trusted",
+  "allowed_caution",
+  "below_threshold",
+  "signal_unavailable",
+  "invalid_wallet",
+] as const
+
 /** Every reason code any counter may carry. */
 export const SECURITY_REASON_CODES = [
   ...PREVIEW_VERIFY_REASONS,
@@ -67,6 +75,7 @@ export const SECURITY_REASON_CODES = [
   ...MODERATION_DECISIONS,
   ...LABEL_REJECTION_REASONS,
   ...CUSTODIAN_RELEASE_REASONS,
+  ...SYBIL_DECISION_REASONS,
 ] as const
 
 export type SecurityReasonCode = (typeof SECURITY_REASON_CODES)[number]
@@ -308,6 +317,7 @@ export const SECURITY_COUNTER_REGISTRY = {
   drop_queue_ticket_issued: { surface: "market", reasons: NO_REASONS },
   market_accept_conflict: { surface: "market", reasons: NO_REASONS },
   edge_store_degraded: { surface: "operations", reasons: NO_REASONS },
+  sybil_decision_recorded: { surface: "governance", reasons: SYBIL_DECISION_REASONS },
   security_counter_label_rejected: { surface: "operations", reasons: LABEL_REJECTION_REASONS },
 } as const satisfies Record<string, CounterSpec>
 

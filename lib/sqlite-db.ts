@@ -373,6 +373,20 @@ CREATE TABLE IF NOT EXISTS quest_arcs (
 );
 CREATE INDEX IF NOT EXISTS idx_quest_arcs_wallet_status
   ON quest_arcs (wallet, status, created_at DESC);
+CREATE TABLE IF NOT EXISTS sybil_decisions (
+  decision_id TEXT PRIMARY KEY,
+  wallet_hash TEXT NOT NULL,
+  surface TEXT NOT NULL CHECK(surface IN ('reward_credit', 'governance_vote')),
+  score INTEGER NOT NULL,
+  min_threshold INTEGER NOT NULL,
+  band TEXT NOT NULL CHECK(band IN ('trusted', 'caution', 'suspect')),
+  allowed INTEGER NOT NULL CHECK(allowed IN (0, 1)),
+  reason_code TEXT NOT NULL,
+  signals_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sybil_decisions_wallet_hash_time
+  ON sybil_decisions (wallet_hash, created_at DESC);
 `;
 
 // Issue #89 (phase-140): `listings` predates the creator/royalty concept, so

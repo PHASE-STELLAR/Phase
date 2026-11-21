@@ -47,7 +47,12 @@ import {
   isValidQuestId,
   type QuestEvaluationResult
 } from "@/lib/quest-registry"
-import { assessWalletSybilRisk, isSybilResistanceEnabled } from "@/lib/sybil-resistance"
+import {
+  assessWalletSybilRisk,
+  evaluateAndRecordSybilDecision,
+  isSybilGatingEnabled,
+  isSybilResistanceEnabled,
+} from "@/lib/sybil-resistance"
 import { isWalletDenied } from "@/lib/faucet-deny-list"
 import { verifyTurnstileToken, turnstileSiteKeyConfigured } from "@/lib/faucet-turnstile"
 import {
@@ -618,7 +623,23 @@ export async function POST(req: NextRequest) {
   }
 
   // Triple check #3: Sybil resistance score (on-chain wallet history)
-  if (isSybilResistanceEnabled(userAddress)) {
+  if (isSybilGatingEnabled(userAddress)) {
+    const sybilDecision = await evaluateAndRecordSybilDecision(userAddress, "reward_credit")
+    if (sybilDecision && !sybilDecision.allowed) {
+      return NextResponse.json(
+        {
+          error: "Wallet does not meet the minimum sybil score required for reward credit.",
+          code: "SYBIL_BELOW_THRESHOLD",
+          reasonCode: sybilDecision.reasonCode,
+          decisionId: sybilDecision.decisionId,
+          score: sybilDecision.score,
+          minThreshold: sybilDecision.minThreshold,
+          suspectBand: sybilDecision.band,
+        },
+        { status: 403 },
+      )
+    }
+  } else if (isSybilResistanceEnabled(userAddress)) {
     const sybilScore = await assessWalletSybilRisk(userAddress)
     if (sybilScore && sybilScore.suspect) {
       return NextResponse.json(
