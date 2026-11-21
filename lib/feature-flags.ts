@@ -120,6 +120,8 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   tamper verification, renderer fallback and closed counters (issue #712)
  * - phase-260: OG image generation with centralized design tokens, canonical
  *   digest caching, bounded timeout and static template fallback (issue #713)
+ * - phase-256: Gas estimate preview before wallet signing with bounded simulation,
+ *   staleness timestamp, input-change re-simulation, honest fallback and EN/ES copy (issue #709)
  * - phase-257: Lore versioning with explicit append-only rollback, If-Match
  *   optimistic concurrency guard, author proof and EN/ES copy (issue #710)
  * - phase-253: Analytics warehouse export integration with signed one-use
@@ -262,6 +264,7 @@ export type PhaseFeatureFlag =
   | "phase-250"
   | "phase-249"
   | "phase-253"
+  | "phase-256"
   | "phase-257"
   | "phase-259"
   | "phase-260";
@@ -388,6 +391,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-250": ["NEXT_PUBLIC_FEATURE_PHASE_250", "FEATURE_PHASE_250"],
   "phase-249": ["NEXT_PUBLIC_FEATURE_PHASE_249", "FEATURE_PHASE_249"],
   "phase-253": ["NEXT_PUBLIC_FEATURE_PHASE_253", "FEATURE_PHASE_253"],
+  "phase-256": ["NEXT_PUBLIC_FEATURE_PHASE_256", "FEATURE_PHASE_256"],
   "phase-257": ["NEXT_PUBLIC_FEATURE_PHASE_257", "FEATURE_PHASE_257"],
   "phase-259": ["NEXT_PUBLIC_FEATURE_PHASE_259", "FEATURE_PHASE_259"],
   "phase-260": ["NEXT_PUBLIC_FEATURE_PHASE_260", "FEATURE_PHASE_260"],
@@ -504,6 +508,7 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-250",
   "phase-249",
   "phase-253",
+  "phase-256",
   "phase-257",
   "phase-259",
   "phase-260",

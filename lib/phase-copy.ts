@@ -839,6 +839,20 @@ export const phaseCopy: Record<
     dependencyCadence: Record<"title" | "sdkAligned" | "skewDetected" | "bytecodeGateBlocked", string>
     searchAnalytics: Record<"zeroResultsTitle" | "zeroResultsHint" | "didYouMean" | "clickthroughLabel" | "zeroResultRateLabel" | "typoSuccessLabel", string>
     loreVersioning: Record<"historyTitle" | "versionLabel" | "rollbackAction" | "rolledBackFrom" | "conflictError" | "authorProofLabel", string>
+    gasEstimatePreview: Record<
+      | "title"
+      | "estimatedFeeLabel"
+      | "maxBoundLabel"
+      | "baseFeeLabel"
+      | "resourceFeeLabel"
+      | "updatedAtLabel"
+      | "staleBadge"
+      | "refreshAction"
+      | "simulatingLabel"
+      | "fallbackNotice"
+      | "disclaimer",
+      string
+    >
   }
 > = {
   en: {
@@ -1637,6 +1651,19 @@ export const phaseCopy: Record<
       rolledBackFrom: "Restored from v{version}",
       conflictError: "Edit conflict: narrative was updated by another collaborator (409).",
       authorProofLabel: "Author proof",
+    },
+    gasEstimatePreview: {
+      title: "Estimated Network Fee",
+      estimatedFeeLabel: "Estimated fee",
+      maxBoundLabel: "Bounded max",
+      baseFeeLabel: "Base fee",
+      resourceFeeLabel: "Soroban resource fee",
+      updatedAtLabel: "Simulated {seconds}s ago",
+      staleBadge: "Estimate may be stale — refresh before signing",
+      refreshAction: "Re-simulate",
+      simulatingLabel: "Simulating transaction…",
+      fallbackNotice: "Live simulation unavailable ({reason}). Showing conservative bounded fallback.",
+      disclaimer: "Estimate only — not a guarantee. Final network fee is determined by the Stellar ledger at execution.",
     },
   },
 
@@ -2439,6 +2466,19 @@ export const phaseCopy: Record<
       rolledBackFrom: "Restaurada desde v{version}",
       conflictError: "Conflicto de edición: la narrativa fue actualizada por otro colaborador (409).",
       authorProofLabel: "Prueba de autoría",
+    },
+    gasEstimatePreview: {
+      title: "Tarifa de Red Estimada",
+      estimatedFeeLabel: "Tarifa estimada",
+      maxBoundLabel: "Máximo acotado",
+      baseFeeLabel: "Tarifa base",
+      resourceFeeLabel: "Tarifa de recursos Soroban",
+      updatedAtLabel: "Simulado hace {seconds}s",
+      staleBadge: "La estimación puede estar desactualizada — volvé a simular antes de firmar",
+      refreshAction: "Re-simular",
+      simulatingLabel: "Simulando transacción…",
+      fallbackNotice: "Simulación en vivo no disponible ({reason}). Mostrando estimación acotada de respaldo.",
+      disclaimer: "Solo una estimación — no es una garantía. La tarifa final la determina el ledger de Stellar al ejecutarse.",
     },
   },
 
