@@ -1,3 +1,4 @@
+import { isPhase233Enabled, persistWashDecision } from "@/lib/wash-screening"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 import { verifySignalSignature } from "@/lib/viewer-signature"
 import { NextRequest, NextResponse } from "next/server"
@@ -53,6 +54,20 @@ export async function POST(
   const listing = await getListing(id)
   if (!listing) return NextResponse.json({ error: "Listing not found" }, { status: 404 })
   if (listing.seller_wallet !== wallet) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+
+  if (offer.buyer_wallet.toLowerCase() === listing.seller_wallet.toLowerCase()) {
+    if (isPhase233Enabled()) {
+      persistWashDecision({
+        entityType: "offer",
+        entityId: offer_id,
+        actorWallet: offer.buyer_wallet,
+        targetWallet: listing.seller_wallet,
+        decision: "reject",
+        reason: "self_trade",
+      })
+    }
+    return NextResponse.json({ error: "Self-dealing cannot be accepted", code: "SELF_DEAL_REJECTED" }, { status: 400 })
+  }
 
   const offers = await getOffers(id)
   const offer = offers.find((o) => o.id === offer_id)

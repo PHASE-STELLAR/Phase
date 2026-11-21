@@ -36,7 +36,7 @@ export const PREVIEW_VERIFY_RESULTS = [
   "missing_claims",
 ] as const
 
-export const WASH_FLAG_REASONS = ["self_trade", "circular", "rapid_flip", "sybil_cluster"] as const
+export const WASH_FLAG_REASONS = ["self_trade", "circular", "rapid_flip", "sybil_cluster", "wash_loop"] as const
 
 /** phase-146 decision labels; every moderation counter maps from one of these. */
 export const MODERATION_DECISIONS = ["auto_allow", "human_review", "auto_hold"] as const
@@ -103,6 +103,8 @@ export const SECURITY_COUNTER_REGISTRY = {
   preview_bad_signature: { surface: "gated_preview", reasons: NO_REASONS },
   preview_network_mismatch: { surface: "gated_preview", reasons: NO_REASONS },
   gated_cdn_leak_blocked: { surface: "gated_preview", reasons: NO_REASONS },
+  preview_grant_allowed: { surface: "gated_preview", reasons: NO_REASONS },
+  preview_grant_denied: { surface: "gated_preview", reasons: PREVIEW_VERIFY_REASONS },
   cid_poison_attempts: { surface: "ipfs", reasons: NO_REASONS },
   cid_mismatch: { surface: "ipfs", reasons: NO_REASONS },
   cid_verified: { surface: "ipfs", reasons: NO_REASONS },
@@ -112,6 +114,7 @@ export const SECURITY_COUNTER_REGISTRY = {
   wash_volume_excluded: { surface: "market", reasons: NO_REASONS },
   wash_graph_sybil: { surface: "market", reasons: NO_REASONS },
   market_volume_drift: { surface: "market", reasons: NO_REASONS },
+  wash_loop_detected: { surface: "market", reasons: NO_REASONS },
   distributor_refill_race: { surface: "faucet", reasons: NO_REASONS },
   distributor_op_underfunded: { surface: "faucet", reasons: NO_REASONS },
   distributor_available_balance_stale: { surface: "faucet", reasons: NO_REASONS },
@@ -222,6 +225,8 @@ export const SECURITY_COUNTER_REGISTRY = {
   leaderboard_scored: { surface: "growth", reasons: NO_REASONS },
   leaderboard_farm_penalized: { surface: "growth", reasons: NO_REASONS },
   leaderboard_sybil_discounted: { surface: "growth", reasons: NO_REASONS },
+  leaderboard_integrity_verified: { surface: "operations", reasons: NO_REASONS },
+  leaderboard_wallet_excluded: { surface: "operations", reasons: NO_REASONS },
   retention_sweep_runs: { surface: "privacy", reasons: NO_REASONS },
   retention_records_expired: { surface: "privacy", reasons: NO_REASONS },
   gdpr_erasure_completed: { surface: "privacy", reasons: NO_REASONS },
