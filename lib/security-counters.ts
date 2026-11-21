@@ -312,6 +312,14 @@ export const SECURITY_COUNTER_REGISTRY = {
   bounty_claim_rejected: { surface: "faucet", reasons: NO_REASONS },
   bounty_claim_duplicate: { surface: "faucet", reasons: NO_REASONS },
   bounty_claim_stale_snapshot: { surface: "faucet", reasons: NO_REASONS },
+  push_notifications_dispatched: { surface: "notifications", reasons: NO_REASONS },
+  push_notifications_deduped: { surface: "notifications", reasons: NO_REASONS },
+  push_notifications_failed: { surface: "notifications", reasons: NO_REASONS },
+  push_circuit_breaker_opened: { surface: "notifications", reasons: NO_REASONS },
+  push_subscriptions_pruned: { surface: "notifications", reasons: NO_REASONS },
+  webhook_alerts_dispatched: { surface: "notifications", reasons: NO_REASONS },
+  webhook_alerts_deduped: { surface: "notifications", reasons: NO_REASONS },
+  webhook_alerts_circuit_broken: { surface: "notifications", reasons: NO_REASONS },
   security_counter_label_rejected: { surface: "operations", reasons: LABEL_REJECTION_REASONS },
 } as const satisfies Record<string, CounterSpec>
 

@@ -120,6 +120,10 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   tamper verification, renderer fallback and closed counters (issue #712)
  * - phase-257: Lore versioning with explicit append-only rollback, If-Match
  *   optimistic concurrency guard, author proof and EN/ES copy (issue #710)
+ * - phase-251: Market orderbook & offer expiry integration
+ * - phase-252: Webhook alerts and push notification delivery integration with
+ *   per-wallet dedupe keys, bounded-concurrency batching, circuit breakers and
+ *   stale subscription pruning (issue #703)
  * - phase-253: Analytics warehouse export integration with signed one-use
  *   grants, closed-label sanitization, paginated streaming and audit events (issue #704)
  * - phase-254: Bounty claim and quest reward integration bound to versioned
@@ -260,6 +264,7 @@ export type PhaseFeatureFlag =
   | "phase-288"
   | "phase-289"
   | "phase-251"
+  | "phase-252"
   | "phase-248"
   | "phase-250"
   | "phase-249"
@@ -387,6 +392,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-288": ["NEXT_PUBLIC_FEATURE_PHASE_288", "FEATURE_PHASE_288"],
   "phase-289": ["NEXT_PUBLIC_FEATURE_PHASE_289", "FEATURE_PHASE_289"],
   "phase-251": ["NEXT_PUBLIC_FEATURE_PHASE_251", "FEATURE_PHASE_251"],
+  "phase-252": ["NEXT_PUBLIC_FEATURE_PHASE_252", "FEATURE_PHASE_252"],
   "phase-248": ["NEXT_PUBLIC_FEATURE_PHASE_248", "FEATURE_PHASE_248"],
   "phase-250": ["NEXT_PUBLIC_FEATURE_PHASE_250", "FEATURE_PHASE_250"],
   "phase-249": ["NEXT_PUBLIC_FEATURE_PHASE_249", "FEATURE_PHASE_249"],
@@ -504,6 +510,7 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-288",
   "phase-289",
   "phase-251",
+  "phase-252",
   "phase-248",
   "phase-250",
   "phase-249",
