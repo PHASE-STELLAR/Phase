@@ -31,6 +31,8 @@ export type NotificationType =
   | "quest_arc_completed"
   // phase-143 winback reactivation hook
   | "winback_reactivation"
+  // phase-255 watchlist price-drop alert
+  | "watchlist_price_drop"
 
 export type Notification = {
   id: string

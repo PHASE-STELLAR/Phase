@@ -71,6 +71,13 @@ export const REFERRAL_QUEST_REASONS = [
   "sybil_rejected",
 ] as const
 
+export const WATCHLIST_ALERT_REASONS = [
+  "triggered",
+  "deduped_window",
+  "rearmed_reversal",
+  "version_conflict",
+] as const
+
 /** Every reason code any counter may carry. */
 export const SECURITY_REASON_CODES = [
   ...PREVIEW_VERIFY_REASONS,
@@ -79,6 +86,7 @@ export const SECURITY_REASON_CODES = [
   ...LABEL_REJECTION_REASONS,
   ...CUSTODIAN_RELEASE_REASONS,
   ...REFERRAL_QUEST_REASONS,
+  ...WATCHLIST_ALERT_REASONS,
 ] as const
 
 export type SecurityReasonCode = (typeof SECURITY_REASON_CODES)[number]
@@ -124,6 +132,8 @@ export const SECURITY_COUNTER_REGISTRY = {
   wash_volume_excluded: { surface: "market", reasons: NO_REASONS },
   wash_graph_sybil: { surface: "market", reasons: NO_REASONS },
   market_volume_drift: { surface: "market", reasons: NO_REASONS },
+  watchlist_mutation: { surface: "market", reasons: NO_REASONS },
+  watchlist_price_drop_alert: { surface: "market", reasons: WATCHLIST_ALERT_REASONS },
   distributor_refill_race: { surface: "faucet", reasons: NO_REASONS },
   distributor_op_underfunded: { surface: "faucet", reasons: NO_REASONS },
   distributor_available_balance_stale: { surface: "faucet", reasons: NO_REASONS },

@@ -868,6 +868,21 @@ export const phaseCopy: Record<
       | "enrolledSuccess",
       string
     >
+    watchlist: Record<
+      | "title"
+      | "emptyState"
+      | "addAction"
+      | "removeAction"
+      | "targetPriceLabel"
+      | "dropPctLabel"
+      | "armedStatus"
+      | "alertedStatus"
+      | "alertTitle"
+      | "alertBody"
+      | "conflictError"
+      | "authRequiredError",
+      string
+    >
   }
 > = {
   en: {
@@ -1693,6 +1708,20 @@ export const phaseCopy: Record<
       versionConflictError: "Referral state changed concurrently (409). Please retry.",
       authRequiredError: "Connect and verify your SEP-10 wallet session first.",
       enrolledSuccess: "Referral attributed and bonus recorded.",
+    },
+    watchlist: {
+      title: "Watchlist & Price-Drop Alerts",
+      emptyState: "No watched artifacts yet. Add a token to get notified when its price drops.",
+      addAction: "Watch item",
+      removeAction: "Remove",
+      targetPriceLabel: "Target price (PHASELQ)",
+      dropPctLabel: "Drop threshold (%)",
+      armedStatus: "Armed",
+      alertedStatus: "Alerted",
+      alertTitle: "Price drop alert for {token}",
+      alertBody: "Price dropped from {previousPrice} to {newPrice} PHASELQ (-{dropPct}%).",
+      conflictError: "Watchlist changed concurrently (409). Please refresh and retry.",
+      authRequiredError: "Connect and verify your SEP-10 wallet session to manage your watchlist.",
     },
   },
 
@@ -2522,6 +2551,20 @@ export const phaseCopy: Record<
       versionConflictError: "El estado de referidos cambió concurrentemente (409). Intentá de nuevo.",
       authRequiredError: "Conectá y verificá tu sesión de billetera SEP-10 primero.",
       enrolledSuccess: "Referido atribuido y bonificación registrada.",
+    },
+    watchlist: {
+      title: "Lista de Seguimiento y Alertas de Precio",
+      emptyState: "Todavía no seguís ningún artefacto. Agregá un token para recibir alertas de baja.",
+      addAction: "Seguir ítem",
+      removeAction: "Quitar",
+      targetPriceLabel: "Precio objetivo (PHASELQ)",
+      dropPctLabel: "Umbral de baja (%)",
+      armedStatus: "Activa",
+      alertedStatus: "Alertada",
+      alertTitle: "Alerta de baja de precio para {token}",
+      alertBody: "El precio bajó de {previousPrice} a {newPrice} PHASELQ (-{dropPct}%).",
+      conflictError: "La lista cambió concurrentemente (409). Actualizá e intentá de nuevo.",
+      authRequiredError: "Conectá y verificá tu sesión SEP-10 para gestionar tu lista.",
     },
   },
 
