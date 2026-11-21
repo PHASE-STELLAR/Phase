@@ -261,7 +261,15 @@ export type PhaseFeatureFlag =
   | "phase-249"
   | "phase-253"
   | "phase-257"
-  | "phase-259";
+  | "phase-259"
+  | "phase-233"
+  | "phase-234"
+  | "phase-235"
+  | "phase-236"
+  | "phase-240"
+  | "phase-241"
+  | "phase-242"
+  | "phase-243";
 
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
@@ -387,6 +395,14 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-253": ["NEXT_PUBLIC_FEATURE_PHASE_253", "FEATURE_PHASE_253"],
   "phase-257": ["NEXT_PUBLIC_FEATURE_PHASE_257", "FEATURE_PHASE_257"],
   "phase-259": ["NEXT_PUBLIC_FEATURE_PHASE_259", "FEATURE_PHASE_259"],
+  "phase-233": ["NEXT_PUBLIC_FEATURE_PHASE_233", "FEATURE_PHASE_233"],
+  "phase-234": ["NEXT_PUBLIC_FEATURE_PHASE_234", "FEATURE_PHASE_234"],
+  "phase-235": ["NEXT_PUBLIC_FEATURE_PHASE_235", "FEATURE_PHASE_235"],
+  "phase-236": ["NEXT_PUBLIC_FEATURE_PHASE_236", "FEATURE_PHASE_236"],
+  "phase-240": ["NEXT_PUBLIC_FEATURE_PHASE_240", "FEATURE_PHASE_240"],
+  "phase-241": ["NEXT_PUBLIC_FEATURE_PHASE_241", "FEATURE_PHASE_241"],
+  "phase-242": ["NEXT_PUBLIC_FEATURE_PHASE_242", "FEATURE_PHASE_242"],
+  "phase-243": ["NEXT_PUBLIC_FEATURE_PHASE_243", "FEATURE_PHASE_243"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -502,6 +518,14 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-253",
   "phase-257",
   "phase-259",
+  "phase-233",
+  "phase-234",
+  "phase-235",
+  "phase-236",
+  "phase-240",
+  "phase-241",
+  "phase-242",
+  "phase-243",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {
