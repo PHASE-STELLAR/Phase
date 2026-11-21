@@ -13,6 +13,7 @@ import { publicPhaseSiteBaseUrl } from "@/lib/phase-nft-metadata-build";
 import {
   getOgTheme,
   resolvePinIntent,
+  rgbaToCss,
   type OgTheme,
 } from "@/lib/og-design-tokens";
 import {
@@ -22,6 +23,7 @@ import {
   fetchImageBuffer,
   safeDisplayName,
   withOgErrorBoundary,
+  renderOgWithTimeoutAndCache,
 } from "@/lib/og-render-utils";
 import { isSybilResistanceEnabled } from "@/lib/sybil-resistance";
 
@@ -111,11 +113,15 @@ function resolveImageUrl(uri: string, base: string): string | null {
 
 async function generatePriceHistoryChart(
   tokenId: number,
-  width: number,
-  height: number,
   theme: OgTheme,
 ): Promise<Buffer | null> {
   try {
+    const chamberTokens = theme.dimensions.chamber;
+    const width = chamberTokens?.chartWidth ?? 200;
+    const height = chamberTokens?.chartHeight ?? 80;
+    const padding = chamberTokens?.chartPadding ?? 10;
+    const strokeWidth = chamberTokens?.chartStrokeWidth ?? 2;
+
     // Fetch on-chain price history from market store
     const priceHistory = await fetchTokenPriceHistory(tokenId, 30);
     if (priceHistory.length === 0) return null;
@@ -124,7 +130,6 @@ async function generatePriceHistoryChart(
     const maxPrice = Math.max(...priceHistory.map((p) => p.price));
     const minPrice = Math.min(...priceHistory.map((p) => p.price));
     const priceRange = maxPrice - minPrice || 1;
-    const padding = 10;
     const chartWidth = width - padding * 2;
     const chartHeight = height - padding * 2;
 
@@ -140,8 +145,8 @@ async function generatePriceHistoryChart(
       .join(" ");
 
     const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-      <rect width="${width}" height="${height}" fill="${theme.canvasBackground}"/>
-      <polyline points="${points}" fill="none" stroke="${theme.colors.primary}" stroke-width="2"/>
+      <rect width="${width}" height="${height}" fill="${rgbaToCss(theme.canvasBackground)}"/>
+      <polyline points="${points}" fill="none" stroke="${theme.colors.primary}" stroke-width="${strokeWidth}"/>
     </svg>`;
 
     return sharp(Buffer.from(svg)).png().toBuffer();
@@ -219,12 +224,13 @@ async function renderTokenOg(
   }
 
   // Add price history chart overlay if available
-  const priceChart = await generatePriceHistoryChart(tokenId, 200, 80, theme);
+  const chamberTokens = theme.dimensions.chamber;
+  const priceChart = await generatePriceHistoryChart(tokenId, theme);
   if (priceChart) {
     layers.push({
       input: priceChart,
-      left: theme.dimensions.canvas.width - 220,
-      top: theme.dimensions.canvas.height - 100,
+      left: theme.dimensions.canvas.width - (chamberTokens?.chartRightOffset ?? 220),
+      top: theme.dimensions.canvas.height - (chamberTokens?.chartBottomOffset ?? 100),
     });
   }
 
@@ -232,7 +238,7 @@ async function renderTokenOg(
   const badgeLayer = await textLayer(`#${tokenId}`, {
     left: theme.dimensions.badgeLeft,
     top: theme.dimensions.badgeTop,
-    width: 160,
+    width: chamberTokens?.badgeWidth ?? 160,
     height: theme.dimensions.badgeFontSize + 6,
     fontSize: theme.dimensions.badgeFontSize,
     color: theme.colors.badge,
@@ -250,11 +256,11 @@ async function renderTokenOg(
     left: 0,
     top: theme.dimensions.nameTop,
     width: theme.dimensions.canvas.width,
-    height: 28,
+    height: chamberTokens?.nameHeight ?? 28,
     fontSize: theme.dimensions.nameFontSize,
     color: theme.colors.headline,
     align: "center",
-    letterSpacing: 3,
+    letterSpacing: chamberTokens?.nameLetterSpacing ?? 3,
   });
   if (nameLayer) layers.push(nameLayer);
 
@@ -311,10 +317,11 @@ async function renderCollectionOg(
   }
 
   // Badge #collectionId
+  const chamberTokens = theme.dimensions.chamber;
   const badgeLayer = await textLayer(`#${collectionId}`, {
     left: theme.dimensions.badgeLeft,
     top: theme.dimensions.badgeTop,
-    width: 160,
+    width: chamberTokens?.badgeWidth ?? 160,
     height: theme.dimensions.badgeFontSize + 6,
     fontSize: theme.dimensions.badgeFontSize,
     color: theme.colors.badge,
@@ -330,11 +337,11 @@ async function renderCollectionOg(
         left: 0,
         top: theme.dimensions.nameTop,
         width: theme.dimensions.canvas.width,
-        height: 32,
+        height: chamberTokens?.collectionNameHeight ?? 32,
         fontSize: theme.dimensions.nameFontSize,
         color: theme.colors.headline,
         align: "center",
-        letterSpacing: 3,
+        letterSpacing: chamberTokens?.nameLetterSpacing ?? 3,
       },
     );
     if (nameLayer) layers.push(nameLayer);
@@ -440,16 +447,21 @@ export async function GET(request: NextRequest) {
   const rawToken = searchParams.get("token_id") ?? searchParams.get("token");
   const tokenId = rawToken ? parseInt(rawToken, 10) : NaN;
   if (Number.isFinite(tokenId) && tokenId > 0) {
-    const result = await withOgErrorBoundary(() =>
-      renderTokenOg(tokenId, base, OG_THEME),
+    const rendered = await renderOgWithTimeoutAndCache({
+      surface: "chamber",
+      theme: OG_THEME,
+      params: { kind: "token", tokenId },
+      render: () => renderTokenOg(tokenId, base, OG_THEME),
+    });
+    return finalize(
+      pngResponse(rendered.buffer, {
+        "X-Phase-Og-Digest": rendered.digest,
+        "X-Phase-Og-Cache": rendered.cacheHit ? "hit" : "miss",
+        ...(rendered.fallbackReason
+          ? { "X-Phase-Og-Fallback": rendered.fallbackReason }
+          : {}),
+      }),
     );
-    if (!result.ok) {
-      return new NextResponse("OG render failed", {
-        status: 500,
-        headers: { "Content-Type": "text/plain" },
-      });
-    }
-    return finalize(pngResponse(result.value));
   }
 
   // Collection-level OG — monitor frame with best-effort token metadata
@@ -471,14 +483,19 @@ export async function GET(request: NextRequest) {
     return finalize(pngResponse(pngBuffer));
   }
 
-  const result = await withOgErrorBoundary(() =>
-    renderCollectionOg(collectionId, base, OG_THEME),
+  const rendered = await renderOgWithTimeoutAndCache({
+    surface: "chamber",
+    theme: OG_THEME,
+    params: { kind: "collection", collectionId },
+    render: () => renderCollectionOg(collectionId, base, OG_THEME),
+  });
+  return finalize(
+    pngResponse(rendered.buffer, {
+      "X-Phase-Og-Digest": rendered.digest,
+      "X-Phase-Og-Cache": rendered.cacheHit ? "hit" : "miss",
+      ...(rendered.fallbackReason
+        ? { "X-Phase-Og-Fallback": rendered.fallbackReason }
+        : {}),
+    }),
   );
-  if (!result.ok) {
-    return new NextResponse("OG render failed", {
-      status: 500,
-      headers: { "Content-Type": "text/plain" },
-    });
-  }
-  return finalize(pngResponse(result.value));
 }
