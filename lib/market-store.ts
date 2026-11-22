@@ -524,6 +524,23 @@ export async function createListing(
     if (total > 10000) throw new MarketStoreValidationError("VALIDATION_FAILED", "split bps exceed 10000");
     if (listing.split_payees.length > 20) throw new MarketStoreValidationError("VALIDATION_FAILED", "too many payees (max 20)");
   }
+  // phase-140: validate royalty fields when supplied
+  if (listing.creator_wallet != null || listing.royalty_bps != null) {
+    if (!isPhase140Enabled()) {
+      throw new MarketStoreValidationError("FLAG_DISABLED", "phase-140 flag disabled");
+    }
+    if (listing.creator_wallet != null && !StrKey.isValidEd25519PublicKey(listing.creator_wallet)) {
+      throw new MarketStoreValidationError("VALIDATION_FAILED", "creator_wallet must be a valid Stellar public key");
+    }
+    if (listing.royalty_bps != null) {
+      if (!Number.isInteger(listing.royalty_bps) || listing.royalty_bps < 0 || listing.royalty_bps > 10000) {
+        throw new MarketStoreValidationError("VALIDATION_FAILED", "royalty_bps must be an integer between 0 and 10000");
+      }
+    }
+    if (listing.creator_wallet == null && listing.royalty_bps != null) {
+      throw new MarketStoreValidationError("VALIDATION_FAILED", "royalty_bps requires creator_wallet");
+    }
+  }
   if ((listing.drop_start_at != null || listing.drop_end_at != null) && !isPhaseTimedDropsEnabled()) {
     throw new MarketStoreValidationError("FLAG_DISABLED", "phase-timed-drops flag disabled");
   }
@@ -742,7 +759,28 @@ export function decideOfferAtomic(listingId: string, offerId: string, wallet: st
         const common = { asset, occurredAt: now, verified: false, washFlagged: !!offerRow.wash_flagged }
         taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:seller`, wallet, kind: "disposal", amountStroops: phaselqToStroopString(split.seller_amount_phaselq) }, false))
         taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:buyer`, wallet: offerRow.buyer_wallet, kind: "acquisition", amountStroops: phaselqToStroopString(offerRow.amount_phaselq) }, false))
-        if (listing.creator_wallet && split.royalty_amount_phaselq > 0) taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:royalty`, wallet: listing.creator_wallet, kind: "royalty", amountStroops: phaselqToStroopString(split.royalty_amount_phaselq) }, false))
+        if (listing.creator_wallet && split.royalty_amount_phaselq > 0) {
+          taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:royalty`, wallet: listing.creator_wallet, kind: "royalty", amountStroops: phaselqToStroopString(split.royalty_amount_phaselq) }, false))
+          // phase-140: append-only payout ledger row within the same transaction
+          db.prepare(
+            `INSERT INTO royalty_payouts
+               (id, listing_id, offer_id, creator_wallet, seller_wallet,
+                sale_amount_phaselq, royalty_bps, royalty_amount_phaselq,
+                seller_amount_phaselq, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            randomUUID(),
+            listingId,
+            offerId,
+            listing.creator_wallet,
+            listing.seller_wallet,
+            offerRow.amount_phaselq,
+            split.royalty_bps,
+            split.royalty_amount_phaselq,
+            split.seller_amount_phaselq,
+            now,
+          )
+        }
       }
     }
     db.exec("COMMIT")
