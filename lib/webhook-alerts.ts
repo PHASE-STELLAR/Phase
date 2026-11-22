@@ -11,7 +11,39 @@
  * - GENERIC_WEBHOOK_URL
  */
 
+import { isFeatureEnabled } from "@/lib/feature-flags"
+import { incSecurityCounter } from "@/lib/security-counters"
+
 export type WebhookAlertType = "info" | "warning" | "critical"
+
+const WEBHOOK_CIRCUIT_THRESHOLD = 3
+const WEBHOOK_CIRCUIT_OPEN_MS = 5 * 60 * 1000
+const channelCircuitState = new Map<string, { failures: number; openUntil: number }>()
+
+function isWebhookCircuitOpen(service: string, now: number): boolean {
+  const st = channelCircuitState.get(service)
+  return Boolean(st && st.openUntil > now)
+}
+
+function recordWebhookChannelOutcome(service: string, ok: boolean, now: number): void {
+  if (ok) {
+    channelCircuitState.set(service, { failures: 0, openUntil: 0 })
+    incSecurityCounter("webhook_alerts_dispatched")
+    return
+  }
+  const prev = channelCircuitState.get(service) ?? { failures: 0, openUntil: 0 }
+  const failures = prev.failures + 1
+  const openUntil = failures >= WEBHOOK_CIRCUIT_THRESHOLD ? now + WEBHOOK_CIRCUIT_OPEN_MS : 0
+  if (openUntil > now && prev.openUntil <= now) {
+    incSecurityCounter("webhook_alerts_circuit_broken")
+  }
+  channelCircuitState.set(service, { failures, openUntil })
+}
+
+export function resetWebhookAlertStateForTests(): void {
+  recentAlerts.clear()
+  channelCircuitState.clear()
+}
 
 // Suppresses repeat sends of the same alert (by type+title) within this
 // window so a persistently unhealthy check can't spam webhooks on every
@@ -220,8 +252,63 @@ export async function sendWebhookAlert(
   type: WebhookAlertType,
   payload: WebhookAlertPayload
 ): Promise<{ sent: string[]; failed: string[] }> {
+  const phase252 = isFeatureEnabled("phase-252")
   if (shouldSuppressAlert(type, payload.title)) {
+    if (phase252) incSecurityCounter("webhook_alerts_deduped")
     return { sent: [], failed: [] }
+  }
+
+  const now = Date.now()
+  const channels: Array<{
+    service: string
+    configured: boolean
+    send: () => Promise<boolean>
+  }> = [
+    {
+      service: "discord",
+      configured: Boolean(process.env.DISCORD_WEBHOOK_URL?.trim()),
+      send: () => sendDiscordWebhook(type, payload),
+    },
+    {
+      service: "telegram",
+      configured: Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim() && process.env.TELEGRAM_CHAT_ID?.trim()),
+      send: () => sendTelegramWebhook(type, payload),
+    },
+    {
+      service: "slack",
+      configured: Boolean(process.env.SLACK_WEBHOOK_URL?.trim()),
+      send: () => sendSlackWebhook(type, payload),
+    },
+    {
+      service: "generic",
+      configured: Boolean(process.env.GENERIC_WEBHOOK_URL?.trim()),
+      send: () => sendGenericWebhook(type, payload),
+    },
+  ]
+
+  if (phase252) {
+    const sent: string[] = []
+    const failed: string[] = []
+    const settled = await Promise.allSettled(
+      channels.map(async (ch) => {
+        if (!ch.configured) return { service: ch.service, status: "unconfigured" as const }
+        if (isWebhookCircuitOpen(ch.service, now)) {
+          return { service: ch.service, status: "circuit_open" as const }
+        }
+        const ok = await ch.send()
+        recordWebhookChannelOutcome(ch.service, ok, now)
+        return { service: ch.service, status: ok ? ("sent" as const) : ("failed" as const) }
+      }),
+    )
+    for (const r of settled) {
+      if (r.status === "fulfilled") {
+        if (r.value.status === "sent") sent.push(r.value.service)
+        else if (r.value.status === "failed" || r.value.status === "circuit_open") failed.push(r.value.service)
+      } else {
+        failed.push("unknown")
+      }
+    }
+    return { sent, failed }
   }
 
   const results = await Promise.allSettled([

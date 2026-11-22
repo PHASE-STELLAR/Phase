@@ -45,6 +45,9 @@ export type QuestSnapshotEntry = {
   progress: Record<QuestId, QuestProgress>
   snapshotAt: number
   cohortKey?: string
+  /** phase-254: monotonic per-wallet snapshot version & integrity hash */
+  version?: number
+  snapshotHash?: string
 }
 
 type QuestSnapshotStore = Record<string, QuestSnapshotEntry>
@@ -107,12 +110,60 @@ export async function saveQuestSnapshot(
   if (!wallet) return
 
   const store = await readSnapshotStore()
-  store[wallet] = {
+  const prev = store[wallet]
+  const nextVersion = (prev?.version ?? 0) + 1
+  const now = Date.now()
+  const entry: QuestSnapshotEntry = {
     wallet,
     progress,
-    snapshotAt: Date.now(),
+    snapshotAt: now,
+    version: nextVersion,
   }
+  entry.snapshotHash = computeSnapshotHash(entry)
+  store[wallet] = entry
   await writeSnapshotStore(store)
+}
+
+/**
+ * phase-254: Persist a versioned, hash-bound quest snapshot for bounty claims.
+ * Works when either `phase-254` or `phase-130` is enabled.
+ */
+export async function saveVersionedQuestSnapshot(
+  wallet: string,
+  progress: Record<QuestId, QuestProgress>,
+  now: number = Date.now(),
+): Promise<QuestSnapshotEntry> {
+  const store = await readSnapshotStore()
+  const prev = store[wallet]
+  const nextVersion = (prev?.version ?? 0) + 1
+  const entry: QuestSnapshotEntry = {
+    wallet,
+    progress,
+    snapshotAt: now,
+    version: nextVersion,
+  }
+  entry.snapshotHash = computeSnapshotHash(entry)
+  store[wallet] = entry
+  await writeSnapshotStore(store)
+  return entry
+}
+
+/**
+ * phase-254: Load the latest versioned quest snapshot for a wallet.
+ * Returns null if absent or expired past `maxAgeMs`.
+ */
+export async function loadVersionedQuestSnapshot(
+  wallet: string,
+  maxAgeMs: number = SNAPSHOT_TTL_MS,
+): Promise<(QuestSnapshotEntry & { version: number; snapshotHash: string }) | null> {
+  if (!wallet) return null
+  const store = await readSnapshotStore()
+  const entry = store[wallet]
+  if (!entry) return null
+  if (Date.now() - entry.snapshotAt > maxAgeMs) return null
+  const version = typeof entry.version === "number" && entry.version > 0 ? entry.version : 1
+  const snapshotHash = entry.snapshotHash ?? computeSnapshotHash(entry)
+  return { ...entry, version, snapshotHash }
 }
 
 /**

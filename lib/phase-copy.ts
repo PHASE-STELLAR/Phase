@@ -168,6 +168,8 @@ export type ForgeExperimentVariantCopy = {
   /** `{amount}` = formatted variant price. */
   paymentGateExplainer: string
   paymentGateHint: string
+  chamberBanner: string
+  chamberCta: string
 }
 
 export type ForgeExperimentCopy = {
@@ -416,6 +418,37 @@ export const phaseCopy: Record<
       cancel: string
       clear: string
       seal: string
+    }
+    studioMetadata: {
+      panelTitle: string
+      nameLabel: string
+      descriptionLabel: string
+      imageLabel: string
+      externalUrlLabel: string
+      collectionIdLabel: string
+      attributesLabel: string
+      addAttribute: string
+      traitTypePlaceholder: string
+      traitValuePlaceholder: string
+      previewTitle: string
+      previewToggle: string
+      saveDraft: string
+      commitMetadata: string
+      draftSaved: string
+      committed: string
+      staleConflict: string
+      validationFailed: string
+      versionLabel: string
+    }
+    bountyClaim: {
+      unauthorized: string
+      walletMismatch: string
+      snapshotMissing: string
+      staleSnapshot: string
+      notEligible: string
+      alreadyClaimed: string
+      versionConflict: string
+      claimSuccess: string
     }
     studioEditor: {
       tools: string
@@ -1013,6 +1046,37 @@ export const phaseCopy: Record<
       clear: "Clear",
       seal: "Seal",
     },
+    studioMetadata: {
+      panelTitle: "Artifact Metadata",
+      nameLabel: "Name",
+      descriptionLabel: "Description",
+      imageLabel: "Image URI (https:// or ipfs://)",
+      externalUrlLabel: "External URL (https://)",
+      collectionIdLabel: "Collection ID (optional)",
+      attributesLabel: "Attributes",
+      addAttribute: "Add attribute",
+      traitTypePlaceholder: "Trait type",
+      traitValuePlaceholder: "Value",
+      previewTitle: "Metadata Preview (SEP-50)",
+      previewToggle: "Preview JSON",
+      saveDraft: "Save Draft",
+      commitMetadata: "Commit Metadata",
+      draftSaved: "Draft saved",
+      committed: "Metadata committed",
+      staleConflict: "Draft is stale (409). Reload latest version before saving.",
+      validationFailed: "Metadata schema validation failed",
+      versionLabel: "Version",
+    },
+    bountyClaim: {
+      unauthorized: "Signed wallet session is required to claim a bounty.",
+      walletMismatch: "Claim wallet does not match the signed session wallet.",
+      snapshotMissing: "No active quest snapshot found for this wallet.",
+      staleSnapshot: "Quest snapshot is stale or tampered. Refresh quest progress and try again.",
+      notEligible: "Quest eligibility requirements are not met in the current snapshot.",
+      alreadyClaimed: "Bounty reward has already been claimed for this wallet.",
+      versionConflict: "Concurrent claim conflict. Please retry.",
+      claimSuccess: "Bounty reward claimed successfully.",
+    },
     studioEditor: {
       tools: "Tools",
       pencil: "Pencil",
@@ -1568,16 +1632,22 @@ export const phaseCopy: Record<
           label: "Standard",
           paymentGateExplainer: "Pay {amount} PHASELQ to the Forge Agent — your artifact is generated and minted on the Stellar ledger automatically.",
           paymentGateHint: "One payment settles on-chain; your artifact is minted automatically.",
+          chamberBanner: "Settle on-chain in the Chamber to mint your artifact.",
+          chamberCta: "Execute Settlement",
         },
         price_cut: {
           label: "Launch price",
           paymentGateExplainer: "Launch price: pay {amount} PHASELQ to the Forge Agent — same on-chain settlement, same automatic mint.",
           paymentGateHint: "Launch pricing — one on-chain payment, artifact minted automatically.",
+          chamberBanner: "Launch pricing active — single on-chain settlement, instant mint.",
+          chamberCta: "Settle at Launch Price",
         },
         copy_urgent: {
           label: "Limited",
           paymentGateExplainer: "Secure your artifact for {amount} PHASELQ — settlement is on-chain and minting is automatic.",
           paymentGateHint: "Limited window — pay once on-chain and the Forge mints your artifact automatically.",
+          chamberBanner: "Limited window — lock your on-chain Chamber settlement now.",
+          chamberCta: "Lock Settlement Now",
         },
       },
     },
@@ -1812,6 +1882,37 @@ export const phaseCopy: Record<
       cancel: "Cancelar",
       clear: "Borrar",
       seal: "Sellar",
+    },
+    studioMetadata: {
+      panelTitle: "Metadatos del artefacto",
+      nameLabel: "Nombre",
+      descriptionLabel: "Descripción",
+      imageLabel: "URI de imagen (https:// o ipfs://)",
+      externalUrlLabel: "URL externa (https://)",
+      collectionIdLabel: "ID de colección (opcional)",
+      attributesLabel: "Atributos",
+      addAttribute: "Agregar atributo",
+      traitTypePlaceholder: "Tipo de rasgo",
+      traitValuePlaceholder: "Valor",
+      previewTitle: "Vista previa de metadatos (SEP-50)",
+      previewToggle: "Previsualizar JSON",
+      saveDraft: "Guardar borrador",
+      commitMetadata: "Confirmar metadatos",
+      draftSaved: "Borrador guardado",
+      committed: "Metadatos confirmados",
+      staleConflict: "Borrador desactualizado (409). Recargá la última versión antes de guardar.",
+      validationFailed: "Falló la validación del esquema de metadatos",
+      versionLabel: "Versión",
+    },
+    bountyClaim: {
+      unauthorized: "Se requiere una sesión de wallet firmada para reclamar la recompensa.",
+      walletMismatch: "La wallet del reclamo no coincide con la sesión firmada.",
+      snapshotMissing: "No se encontró un snapshot de misiones activo para esta wallet.",
+      staleSnapshot: "El snapshot de misiones está desactualizado o alterado. Actualizá el progreso e intentá de nuevo.",
+      notEligible: "Los requisitos de la misión no se cumplen en el snapshot actual.",
+      alreadyClaimed: "La recompensa de esta misión ya fue reclamada por esta wallet.",
+      versionConflict: "Conflicto de reclamo concurrente. Por favor intentá de nuevo.",
+      claimSuccess: "Recompensa de misión reclamada con éxito.",
     },
     studioEditor: {
       tools: "Herramientas",
@@ -2370,16 +2471,22 @@ export const phaseCopy: Record<
           label: "Estándar",
           paymentGateExplainer: "Pagá {amount} PHASELQ al Forge Agent — tu artefacto se genera y se mintea en el ledger de Stellar automáticamente.",
           paymentGateHint: "Un pago se liquida on-chain; tu artefacto se mintea automáticamente.",
+          chamberBanner: "Liquidá on-chain en la Cámara para mintear tu artefacto.",
+          chamberCta: "Ejecutar Liquidación",
         },
         price_cut: {
           label: "Precio de lanzamiento",
           paymentGateExplainer: "Precio de lanzamiento: pagá {amount} PHASELQ al Forge Agent — misma liquidación on-chain, mismo mint automático.",
           paymentGateHint: "Precio de lanzamiento — un pago on-chain y el Forge mintea tu artefacto automáticamente.",
+          chamberBanner: "Precio de lanzamiento activo — una liquidación on-chain, mint instantáneo.",
+          chamberCta: "Liquidar a Precio de Lanzamiento",
         },
         copy_urgent: {
           label: "Por tiempo limitado",
           paymentGateExplainer: "Asegurá tu artefacto por {amount} PHASELQ — la liquidación es on-chain y el mint es automático.",
           paymentGateHint: "Ventana limitada — pagá una vez on-chain y el Forge mintea tu artefacto automáticamente.",
+          chamberBanner: "Ventana limitada — asegurá tu liquidación on-chain en la Cámara ahora.",
+          chamberCta: "Asegurar Liquidación",
         },
       },
     },

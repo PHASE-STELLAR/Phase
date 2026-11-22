@@ -128,8 +128,16 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   version-guarded primary alias uniqueness, audit trail, and EN/ES copy (issue #696)
  * - phase-257: Lore versioning with explicit append-only rollback, If-Match
  *   optimistic concurrency guard, author proof and EN/ES copy (issue #710)
+ * - phase-251: Market orderbook & offer expiry integration
+ * - phase-252: Webhook alerts and push notification delivery integration with
+ *   per-wallet dedupe keys, bounded-concurrency batching, circuit breakers and
+ *   stale subscription pruning (issue #703)
  * - phase-253: Analytics warehouse export integration with signed one-use
  *   grants, closed-label sanitization, paginated streaming and audit events (issue #704)
+ * - phase-254: Bounty claim and quest reward integration bound to versioned
+ *   quest snapshots, signed session wallet, idempotent version-guarded ledger (issue #705)
+ * - phase-258: Design Studio editor for artifact metadata with Zod schema
+ *   validation, preview before commit, If-Match 409 draft guard and EN/ES copy (issue #711)
  *
  * - phase-265: one decimal-amount parser for forge, market and x402 amounts with explicit
  *   decimal places and rounding modes (issue #723)
@@ -264,10 +272,12 @@ export type PhaseFeatureFlag =
   | "phase-288"
   | "phase-289"
   | "phase-251"
+  | "phase-252"
   | "phase-248"
   | "phase-250"
   | "phase-249"
   | "phase-253"
+  | "phase-254"
   | "phase-257"
   | "phase-259"
   | "phase-246"
@@ -393,11 +403,14 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-288": ["NEXT_PUBLIC_FEATURE_PHASE_288", "FEATURE_PHASE_288"],
   "phase-289": ["NEXT_PUBLIC_FEATURE_PHASE_289", "FEATURE_PHASE_289"],
   "phase-251": ["NEXT_PUBLIC_FEATURE_PHASE_251", "FEATURE_PHASE_251"],
+  "phase-252": ["NEXT_PUBLIC_FEATURE_PHASE_252", "FEATURE_PHASE_252"],
   "phase-248": ["NEXT_PUBLIC_FEATURE_PHASE_248", "FEATURE_PHASE_248"],
   "phase-250": ["NEXT_PUBLIC_FEATURE_PHASE_250", "FEATURE_PHASE_250"],
   "phase-249": ["NEXT_PUBLIC_FEATURE_PHASE_249", "FEATURE_PHASE_249"],
   "phase-253": ["NEXT_PUBLIC_FEATURE_PHASE_253", "FEATURE_PHASE_253"],
+  "phase-254": ["NEXT_PUBLIC_FEATURE_PHASE_254", "FEATURE_PHASE_254"],
   "phase-257": ["NEXT_PUBLIC_FEATURE_PHASE_257", "FEATURE_PHASE_257"],
+  "phase-258": ["NEXT_PUBLIC_FEATURE_PHASE_258", "FEATURE_PHASE_258"],
   "phase-259": ["NEXT_PUBLIC_FEATURE_PHASE_259", "FEATURE_PHASE_259"],
   "phase-246": ["NEXT_PUBLIC_FEATURE_PHASE_246", "FEATURE_PHASE_246"],
   "phase-247": ["NEXT_PUBLIC_FEATURE_PHASE_247", "FEATURE_PHASE_247"],
@@ -512,11 +525,14 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-288",
   "phase-289",
   "phase-251",
+  "phase-252",
   "phase-248",
   "phase-250",
   "phase-249",
   "phase-253",
+  "phase-254",
   "phase-257",
+  "phase-258",
   "phase-259",
   "phase-246",
   "phase-247",

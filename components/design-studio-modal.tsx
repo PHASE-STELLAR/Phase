@@ -9,8 +9,11 @@ import {
   STUDIO_H,
   STUDIO_W,
 } from "@/components/design-studio-editor"
+import { DesignStudioMetadataPanel } from "@/components/design-studio-metadata-panel"
 import { LangToggle } from "@/components/lang-toggle"
 import { useLang } from "@/components/lang-context"
+import { isFeatureEnabled } from "@/lib/feature-flags"
+import type { PhaseTokenMetadataJson } from "@/lib/phase-nft-metadata-build"
 import { pickCopy } from "@/lib/phase-copy"
 import { cn } from "@/lib/utils"
 
@@ -18,6 +21,9 @@ export type DesignStudioModalProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSeal: (blob: Blob) => void
+  tokenId?: number
+  contractId?: string
+  onMetadataCommitted?: (metadata: PhaseTokenMetadataJson) => void
 }
 
 function Win95Menu({
@@ -94,7 +100,14 @@ function MenuItem({
   )
 }
 
-export function DesignStudioModal({ open, onOpenChange, onSeal }: DesignStudioModalProps) {
+export function DesignStudioModal({
+  open,
+  onOpenChange,
+  onSeal,
+  tokenId,
+  contractId,
+  onMetadataCommitted,
+}: DesignStudioModalProps) {
   const { lang } = useLang()
   const m = pickCopy(lang).studioModal
   const editorRef = useRef<DesignStudioEditorHandle>(null)
@@ -285,7 +298,16 @@ export function DesignStudioModal({ open, onOpenChange, onSeal }: DesignStudioMo
               "inset 1px 1px 0 rgba(0,255,255,0.22), inset -2px -2px 0 rgba(0,0,0,0.6), 0 0 24px rgba(0,255,136,0.08)",
           }}
         >
-          <DesignStudioEditor ref={editorRef} className="min-h-0 flex-1" />
+          <div className="flex min-h-0 flex-1 flex-col gap-3 md:flex-row">
+            <DesignStudioEditor ref={editorRef} className="min-h-0 flex-1" />
+            {isFeatureEnabled("phase-258") && (
+              <DesignStudioMetadataPanel
+                tokenId={tokenId}
+                contractId={contractId}
+                onCommitted={onMetadataCommitted}
+              />
+            )}
+          </div>
         </div>
       </div>
 

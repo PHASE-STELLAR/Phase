@@ -60,6 +60,9 @@ const FILES = {
   featureFlagOps: "feature-flag-ops.json",
   referralQuests: "referral-quests.json",
   liquidityPoolIntents: "liquidity-pool-intents.json",
+  artifactMetadataDrafts: "artifact-metadata-drafts.json",
+  bountyClaimLedger: "bounty-claim-ledger.json",
+  pushEventDedupe: "push-event-dedupe.json",
 } as const
 
 
