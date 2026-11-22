@@ -33,8 +33,17 @@ import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
 import { z } from "zod"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
+import { isFeatureEnabled } from "@/lib/feature-flags"
+import { incSecurityCounter } from "@/lib/security-counters"
+
+export const MAX_REPLAY_ATTEMPTS = 3
+
+export function isPhase240Enabled(): boolean {
+  return isFeatureEnabled("phase-240")
+}
 
 export function isX402DeadLetterEnabled(): boolean {
+  if (isPhase240Enabled()) return true
   const v = (
     process.env.NEXT_PUBLIC_FEATURE_PHASE_144 ??
     process.env.FEATURE_PHASE_144 ??
@@ -86,10 +95,14 @@ export type X402DeadLetterEntry = {
   resolved_at?: number
   resolved_by?: string
   resolution_note?: string
+  attempts?: number
+  nonce?: string
+  reason_code?: string
+  replayed_at?: number
 }
 
 export class X402DeadLetterError extends Error {
-  readonly code: "FLAG_DISABLED" | "STORE_WRITE_FAILED" | "NOT_FOUND"
+  readonly code: "FLAG_DISABLED" | "STORE_WRITE_FAILED" | "NOT_FOUND" | "MAX_REPLAY_ATTEMPTS_EXCEEDED"
   constructor(code: X402DeadLetterError["code"], message: string) {
     super(message)
     this.name = "X402DeadLetterError"
@@ -223,6 +236,9 @@ export async function quarantineInvoice(input: QuarantineInput): Promise<Quarant
     (entry) => entry.fingerprint === fingerprint && entry.status === "open",
   )
 
+  const rawObj = input.raw && typeof input.raw === "object" ? (input.raw as Record<string, unknown>) : undefined
+  const nonce = typeof rawObj?.nonce === "string" ? rawObj.nonce : undefined
+
   const id = randomUUID()
   store[id] = {
     id,
@@ -232,8 +248,12 @@ export async function quarantineInvoice(input: QuarantineInput): Promise<Quarant
     fingerprint,
     reasons,
     raw_payload: redactSecrets(input.raw),
+    attempts: 1,
+    nonce,
+    reason_code: reasons[0]?.code ?? "unknown",
   }
   await writeStore(store)
+  incSecurityCounter("x402_dead_letter_enqueued")
 
   return priorOpen
     ? { quarantined: true, id, fingerprint, duplicateOf: priorOpen.id }
@@ -268,6 +288,35 @@ export async function resolveDeadLetterEntry(
   if (opts.note) entry.resolution_note = opts.note.slice(0, 512)
   await writeStore(store)
   return entry
+}
+
+export async function replayDeadLetterEntry(
+  id: string,
+  opts: { by?: string } = {},
+): Promise<{ ok: boolean; status: "replayed" | "idempotent"; entry: X402DeadLetterEntry }> {
+  const store = await readStore()
+  const entry = store[id]
+  if (!entry) throw new X402DeadLetterError("NOT_FOUND", `Dead-letter entry ${id} not found`)
+
+  // Idempotent: already resolved entries don't re-execute
+  if (entry.status === "resolved") {
+    return { ok: true, status: "idempotent", entry }
+  }
+
+  const currentAttempts = entry.attempts ?? 1
+  if (currentAttempts >= MAX_REPLAY_ATTEMPTS) {
+    incSecurityCounter("x402_replay_rejected")
+    throw new X402DeadLetterError(
+      "MAX_REPLAY_ATTEMPTS_EXCEEDED",
+      `Replay refused: entry ${id} reached max replay attempts (${MAX_REPLAY_ATTEMPTS})`,
+    )
+  }
+
+  entry.attempts = currentAttempts + 1
+  entry.replayed_at = Date.now()
+  incSecurityCounter("x402_replay_attempted")
+  await writeStore(store)
+  return { ok: true, status: "replayed", entry }
 }
 
 export async function getDeadLetterStats(): Promise<{

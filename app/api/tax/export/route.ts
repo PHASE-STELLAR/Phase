@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { isFeatureEnabled } from "@/lib/feature-flags"
-import { taxExportSchema, verifyTaxExport, taxCsv, taxExportRateLimited } from "@/lib/tax-report"
+import { taxExportSchema, verifyTaxExport, taxCsv, taxExportRateLimited, recordTaxExportAudit } from "@/lib/tax-report"
 import { resolveStellarNetwork } from "@/lib/stellar-network"
 import { getDb } from "@/lib/sqlite-db"
 import { incSecurityCounter } from "@/lib/security-counters"
@@ -12,7 +12,8 @@ export const dynamic = "force-dynamic"
 export const maxDuration = 60
 export async function POST(request: NextRequest) {
   const headers = { "Cache-Control": "private, no-store" }
-  if (!isFeatureEnabled("phase-177")) return NextResponse.json({ code: "DISABLED" }, { status: 404, headers })
+  if (process.env.FEATURE_PHASE_243 === "0" || process.env.NEXT_PUBLIC_FEATURE_PHASE_243 === "0") return NextResponse.json({ code: "DISABLED" }, { status: 404, headers })
+  if (!isFeatureEnabled("phase-243") && !isFeatureEnabled("phase-177")) return NextResponse.json({ code: "DISABLED" }, { status: 404, headers })
   if (resolveStellarNetwork().network !== "testnet") return NextResponse.json({ code: "TESTNET_ONLY" }, { status: 503, headers })
   let raw: { claims?: unknown; signature?: string }
   try { raw = JSON.parse(await readBoundedBody(request, 4096)) } catch { return NextResponse.json({ code: "INVALID_JSON" }, { status: 400, headers }) }
@@ -27,6 +28,7 @@ export async function POST(request: NextRequest) {
   const consumed = db.prepare("INSERT INTO tax_export_nonces(nonce,expires_at) VALUES (?,?) ON CONFLICT DO NOTHING").run(claims.nonce, claims.exp * 1000)
   if (!consumed.changes) return NextResponse.json({ code: "REPLAY" }, { status: 409, headers })
   const snapshot = (db.prepare("SELECT COALESCE(MAX(seq),0) AS seq FROM tax_events").get() as { seq: number }).seq
+  recordTaxExportAudit({ wallet: claims.wallet, snapshot, policy: claims.policy, nonce: claims.nonce })
   const iterator = taxCsv(claims, snapshot)
   const stream = isFeatureEnabled("phase-264")
     ? readableStreamFromAsyncIterable(iterator, { readTimeoutMs: 30_000 })

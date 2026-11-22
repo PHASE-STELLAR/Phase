@@ -102,3 +102,15 @@ test("canonicalSignalPayload is deterministic and stable", () => {
   assert.ok(a.includes("42"))
 })
 
+test("verifySignalSignature rejects oversized payload (>64KB)", async () => {
+  const kp = Keypair.random()
+  const oversizedPayload = {
+    title: "Big Title",
+    body: "x".repeat(65 * 1024),
+    timestamp: 1234567890,
+  }
+  const signature = await signPayload(oversizedPayload, kp)
+  const ok = await verifySignalSignature(kp.publicKey(), oversizedPayload, signature)
+  assert.equal(ok, false)
+})
+
