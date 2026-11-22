@@ -471,6 +471,28 @@ CREATE TABLE IF NOT EXISTS leaderboard_integrity_decisions (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_leaderboard_integrity_wallet ON leaderboard_integrity_decisions(wallet);
+
+CREATE TABLE IF NOT EXISTS cost_budget_windows (
+  id TEXT PRIMARY KEY,
+  surface TEXT NOT NULL,
+  window_start INTEGER NOT NULL,
+  spent_units REAL NOT NULL,
+  alert_level TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cost_budget_surface ON cost_budget_windows(surface, window_start);
+
+CREATE TABLE IF NOT EXISTS anomaly_detections (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  message TEXT NOT NULL,
+  value REAL,
+  z REAL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_anomaly_detections_metric ON anomaly_detections(metric, created_at DESC);
 `;
 
 // Issue #89 (phase-140): `listings` predates the creator/royalty concept, so

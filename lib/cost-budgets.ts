@@ -1,3 +1,33 @@
+
+import { randomUUID } from "node:crypto"
+import { getDb } from "@/lib/sqlite-db"
+import { NextResponse } from "next/server"
+
+export function persistCostBudgetWindow(surface: CostSurface, window: SurfaceWindow): void {
+  try {
+    const db = getDb()
+    db.prepare(
+      `INSERT INTO cost_budget_windows (id, surface, window_start, spent_units, alert_level, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(
+      randomUUID(),
+      surface,
+      window.windowStart,
+      window.spentUnits,
+      window.alertLevel,
+      Date.now()
+    )
+  } catch (error) {
+    console.warn("[phase-176] failed to persist cost budget window:", error)
+  }
+}
+
+export function surfaceHaltedResponse(surface: CostSurface, retryAfterSeconds = 300): NextResponse {
+  return NextResponse.json(
+    { success: false, error: `${surface.toUpperCase()}_SURFACE_HALTED`, surface, retryAfterSeconds },
+    { status: 503, headers: { "Retry-After": String(retryAfterSeconds) } }
+  )
+}
 import { z } from "zod"
 import { flagRollbackNote, isFeatureEnabled } from "@/lib/feature-flags"
 import { updateStoreWithReader } from "@/lib/json-store"
