@@ -19,6 +19,7 @@ import {
   robustStats,
   routeAnomalyAlerts,
   zScore,
+  clearAnomalyAlertCache,
   type AnomalyFinding,
 } from "@/lib/anomaly-detection"
 import type { WebhookAlertPayload, WebhookAlertType } from "@/lib/webhook-alerts"
@@ -45,6 +46,7 @@ beforeEach(() => {
   vi.stubEnv("PHASE_SERVER_DATA_DIR", dir)
   resetDbForTests()
   resetSecurityCounters()
+  clearAnomalyAlertCache()
   enable(true)
 })
 
@@ -265,7 +267,27 @@ describe("phase-181 alert routing", () => {
     assert.deepEqual(await routeAnomalyAlerts([], router), { routed: 0, sent: 0 })
     assert.equal(getSecurityCounter("anomaly_alerts_routed"), 3, "empty routing must not inflate the counter")
   })
+
+it("suppresses duplicate alerts for the same metric within the deduplication window", async () => {
+    clearAnomalyAlertCache()
+    const seen: string[] = []
+    const router = async (_type: any, payload: any) => {
+      seen.push(payload.title)
+      return { sent: ["discord"], failed: [] }
+    }
+    const f1 = finding({ metric: "market_volume_phaselq_24h" })
+    const f2 = finding({ metric: "market_volume_phaselq_24h" })
+
+    const res1 = await routeAnomalyAlerts([f1], router)
+    assert.equal(res1.sent, 1)
+
+    // Immediate duplicate finding in the same window
+    const res2 = await routeAnomalyAlerts([f2], router)
+    assert.equal(res2.sent, 0, "duplicate alert must be suppressed")
+    assert.equal(seen.length, 1)
+  })
 })
+
 
 describe("phase-181 sample collection", () => {
   it("excludes anomaly's own counters so the detector cannot alert on itself", async () => {

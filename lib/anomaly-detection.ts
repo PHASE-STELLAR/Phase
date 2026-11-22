@@ -1,3 +1,44 @@
+
+import { randomUUID } from "node:crypto"
+
+const recentAlertTimestamps = new Map<string, number>()
+const ALERT_DEDUP_WINDOW_MS = 15 * 60 * 1000
+
+export function persistAnomalyDetection(finding: AnomalyFinding): void {
+  try {
+    const db = getDb()
+    db.prepare(
+      `INSERT INTO anomaly_detections (id, kind, metric, severity, message, value, z, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      randomUUID(),
+      finding.kind,
+      finding.metric,
+      finding.severity,
+      finding.message,
+      finding.value ?? null,
+      finding.z ?? null,
+      Date.now()
+    )
+  } catch (error) {
+    console.warn("[phase-181] failed to persist anomaly detection:", error)
+  }
+}
+
+export function shouldAlertForAnomaly(finding: AnomalyFinding, now: number = Date.now()): boolean {
+  const key = `${finding.kind}:${finding.metric}`
+  const last = recentAlertTimestamps.get(key)
+  if (last && now - last < ALERT_DEDUP_WINDOW_MS) {
+    incSecurityCounter("anomaly_alerts_suppressed")
+    return false
+  }
+  recentAlertTimestamps.set(key, now)
+  return true
+}
+
+export function clearAnomalyAlertCache(): void {
+  recentAlertTimestamps.clear()
+}
 /**
  * Anomaly detection on volume, counters and balances with alert routing.
  * Spike 619 / Issue #482.
@@ -46,7 +87,7 @@ export const ANOMALY_DEFAULTS = {
 } as const
 
 export function isAnomalyDetectionEnabled(): boolean {
-  return isFeatureEnabled("phase-181")
+  return isFeatureEnabled("phase-181") || isFeatureEnabled("phase-179") || isFeatureEnabled("phase-175")
 }
 
 export function anomaly181RollbackNote(): string {
@@ -364,6 +405,10 @@ export async function routeAnomalyAlerts(
   let routed = 0
   let sent = 0
   for (const finding of findings) {
+    persistAnomalyDetection(finding)
+    if (!shouldAlertForAnomaly(finding)) {
+      continue
+    }
     const { type, payload } = anomalyAlertFor(finding)
     const result = await router(type, payload)
     routed++

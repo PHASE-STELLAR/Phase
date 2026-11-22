@@ -1,3 +1,5 @@
+import { incSecurityCounter } from "@/lib/security-counters"
+import { createHash } from "node:crypto"
 import {
   Account,
   Asset,
@@ -422,10 +424,12 @@ async function submitTrustlineWithRetry(
 ): Promise<TrustlineSubmitResult> {
   for (let attempt = 1; ; attempt++) {
     try {
+      incSecurityCounter("trustline_submitted")
       const { hash } = await submit(signedXdr)
       return { signedXdr, ok: true, hash, attempts: attempt }
     } catch (e) {
       if (attempt > maxRetries || !isRetryableHorizonError(e)) {
+        incSecurityCounter("trustline_failed")
         return {
           signedXdr,
           ok: false,
@@ -435,6 +439,7 @@ async function submitTrustlineWithRetry(
           cause: e,
         }
       }
+      incSecurityCounter("trustline_retried")
       const jitterMs = Math.random() * baseDelayMs
       await sleep(baseDelayMs * 2 ** (attempt - 1) + jitterMs)
     }
@@ -478,12 +483,22 @@ export async function submitTrustlineBatch(
   const concurrency = Math.max(1, Math.min(opts.concurrency ?? 3, signedXdrs.length || 1))
 
   const results: TrustlineSubmitResult[] = new Array(signedXdrs.length)
+  const inFlightPromises = new Map<string, Promise<TrustlineSubmitResult>>()
+
   let nextIndex = 0
   async function worker(): Promise<void> {
     for (;;) {
       const i = nextIndex++
       if (i >= signedXdrs.length) return
-      results[i] = await submitTrustlineWithRetry(signedXdrs[i]!, submit, maxRetries, baseDelayMs)
+      const xdr = signedXdrs[i]!
+      const xdrHash = createHash("sha256").update(xdr).digest("hex")
+
+      let p = inFlightPromises.get(xdrHash)
+      if (!p) {
+        p = submitTrustlineWithRetry(xdr, submit, maxRetries, baseDelayMs)
+        inFlightPromises.set(xdrHash, p)
+      }
+      results[i] = await p
     }
   }
   await Promise.all(Array.from({ length: concurrency }, () => worker()))
