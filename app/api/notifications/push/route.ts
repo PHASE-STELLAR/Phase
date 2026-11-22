@@ -4,6 +4,7 @@ import {
   PushNotificationError,
   SubscribePushRequestSchema,
   getPushSubscriptions,
+  isPhase252Enabled,
   isPhase92Enabled,
   subscribeToPush,
   unsubscribeFromPush,
@@ -33,8 +34,13 @@ export async function GET(req: NextRequest) {
   const subscriptions = await getPushSubscriptions(wallet)
   return NextResponse.json({
     wallet,
-    subscriptions: subscriptions.map((s) => ({ endpoint: s.endpoint, subscribedAt: s.subscribedAt })),
+    subscriptions: subscriptions.map((s) => ({
+      endpoint: s.endpoint,
+      subscribedAt: s.subscribedAt,
+      ...(s.dedupeKey ? { dedupeKey: s.dedupeKey } : {}),
+    })),
     feature_enabled: isPhase92Enabled(),
+    phase252_enabled: isPhase252Enabled(wallet),
   })
 }
 
@@ -51,7 +57,12 @@ export async function POST(req: NextRequest) {
   }
   try {
     const sub = await subscribeToPush(parsed.data)
-    return NextResponse.json({ ok: true, endpoint: sub.endpoint, subscribedAt: sub.subscribedAt })
+    return NextResponse.json({
+      ok: true,
+      endpoint: sub.endpoint,
+      subscribedAt: sub.subscribedAt,
+      ...(sub.dedupeKey ? { dedupeKey: sub.dedupeKey } : {}),
+    })
   } catch (e) {
     if (e instanceof PushNotificationError) {
       return NextResponse.json({ ok: false, error: e.message, code: e.code }, { status: statusForCode(e.code) })

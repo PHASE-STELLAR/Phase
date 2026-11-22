@@ -292,19 +292,131 @@ export type TimelineEvent = {
   unlocked_at: number;
 };
 
-/** Returns the wallet's achievement unlocks ordered oldest-first, with display names attached. */
+export type TimelinePage = {
+  events: TimelineEvent[];
+  /** Opaque cursor for the next page; absent when this is the last page. */
+  next_cursor?: string;
+  /** Total number of achievements unlocked (all time). */
+  closed_count: number;
+};
+
+export class AchievementVersionConflictError extends Error {
+  constructor(message = "stale achievement store version") {
+    super(message);
+    this.name = "AchievementVersionConflictError";
+  }
+}
+
+/** Stable comparator: oldest first; tie-break by lexicographic achievement id. */
+function compareTimelineEvents(a: Achievement, b: Achievement): number {
+  const dt = a.unlocked_at - b.unlocked_at;
+  if (dt !== 0) return dt;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Returns a paginated, chronologically ordered timeline of achievement unlocks.
+ *
+ * Pagination uses an opaque base64-encoded cursor that encodes
+ * `{unlocked_at, id}` of the last-seen event. This guarantees no duplicates
+ * across pages even when new achievements are unlocked between requests.
+ *
+ * Flag off → returns `{ events: [], closed_count: 0 }` with no next_cursor.
+ */
 export async function getAchievementTimeline(
   wallet: string,
-): Promise<TimelineEvent[]> {
+  opts: { limit?: number; cursor?: string } = {},
+): Promise<TimelinePage> {
+  if (!isTimelineVisualizationEnabled()) {
+    return { events: [], closed_count: 0 };
+  }
+
   const achievements = await getAchievements(wallet);
-  return achievements
-    .slice()
-    .sort((a, b) => a.unlocked_at - b.unlocked_at)
-    .map((a) => ({
-      id: a.id,
-      name: ACHIEVEMENT_NAMES[a.id] ?? a.id,
-      unlocked_at: a.unlocked_at,
-    }));
+  const sorted = achievements.slice().sort(compareTimelineEvents);
+  const closed_count = sorted.length;
+
+  const limit = Math.min(50, Math.max(1, Math.floor(opts.limit ?? 20)));
+
+  // Decode cursor: { unlocked_at: number; id: string }
+  let startAfter: { unlocked_at: number; id: string } | null = null;
+  if (opts.cursor) {
+    try {
+      startAfter = JSON.parse(
+        Buffer.from(opts.cursor, "base64url").toString("utf-8"),
+      ) as { unlocked_at: number; id: string };
+    } catch {
+      startAfter = null;
+    }
+  }
+
+  // Find the index to start from (exclusive of the cursor event).
+  let startIdx = 0;
+  if (startAfter) {
+    const idx = sorted.findIndex(
+      (a) =>
+        a.unlocked_at === startAfter!.unlocked_at && a.id === startAfter!.id,
+    );
+    startIdx = idx === -1 ? 0 : idx + 1;
+  }
+
+  const page = sorted.slice(startIdx, startIdx + limit);
+  const hasMore = startIdx + limit < sorted.length;
+
+  const events: TimelineEvent[] = page.map((a) => ({
+    id: a.id,
+    name: ACHIEVEMENT_NAMES[a.id] ?? a.id,
+    unlocked_at: a.unlocked_at,
+  }));
+
+  let next_cursor: string | undefined;
+  if (hasMore && page.length > 0) {
+    const last = page[page.length - 1]!;
+    next_cursor = Buffer.from(
+      JSON.stringify({ unlocked_at: last.unlocked_at, id: last.id }),
+    ).toString("base64url");
+  }
+
+  return { events, closed_count, next_cursor };
+}
+
+/**
+ * Version-guarded unlock: writes `id` to `wallet`'s achievement list only if
+ * the store's current version matches `expectedVersion`.  Throws
+ * `AchievementVersionConflictError` (HTTP 409) on a mismatch.
+ *
+ * Version is a monotonic counter stored alongside the wallet entry.  Callers
+ * read the version with `getAchievementVersion`, then pass it back here.
+ */
+export async function unlockAchievementVersioned(
+  wallet: string,
+  id: AchievementId,
+  expectedVersion: number,
+  evidence?: string,
+): Promise<{ unlocked: boolean; version: number }> {
+  return updateAchievementStore((store) => {
+    const key = walletKey(wallet);
+    const entry = ensureEntry(store, wallet);
+    const currentVersion: number = (store as any)[`${key}__v`] ?? 0;
+    if (currentVersion !== expectedVersion) {
+      throw new AchievementVersionConflictError(
+        `expected version ${expectedVersion}, current is ${currentVersion}`,
+      );
+    }
+    const alreadyUnlocked = entry.unlocked.some((a) => a.id === id);
+    if (!alreadyUnlocked) {
+      entry.unlocked.push({ id, unlocked_at: Date.now(), tx_evidence: evidence });
+      store[key] = entry;
+    }
+    const nextVersion = currentVersion + 1;
+    (store as any)[`${key}__v`] = nextVersion;
+    return { unlocked: !alreadyUnlocked, version: nextVersion };
+  });
+}
+
+/** Returns the current version for a wallet's achievement entry (0 if never written). */
+export async function getAchievementVersion(wallet: string): Promise<number> {
+  const store = await readStore();
+  return (store as any)[`${walletKey(wallet)}__v`] ?? 0;
 }
 
 // ── Issue #102: Relevance-based Feed Ranking (phase-84) ──────────────────────

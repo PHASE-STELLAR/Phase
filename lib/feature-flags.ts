@@ -88,6 +88,7 @@ import { incSecurityCounter } from "@/lib/security-counters"
  * - phase-171: backup and disaster-recovery snapshots for sidecars, SQLite and the secrets map (spike 605 / issue #469)
  * - phase-172: SQLite to Postgres migration rehearsal with dual-write, parity and rollback (spike 604 / issue #468)
  * - phase-173: Vercel preview-environment isolation for data roots, secrets, contracts and cron (spike 603 / issue #467)
+ * - phase-228: per-PR Soroban contract deploy, preview CI job, branch-DB seeding and env collision guard (issue #655)
  * - phase-178: leaderboard integrity with anti-farm scoring, time decay and sybil discount (spike 616 / issue #479)
  * - phase-179: data retention and GDPR erasure with TTL sweeps and wallet deletion (spike 617 / issue #480)
  * - phase-180: analytics warehouse export with Parquet and NDJSON, schema-versioned and redacted (spike 618 / issue #481)
@@ -118,18 +119,26 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   timeout, typed failure, and SQLite idempotent recording (issue #700)
  * - phase-259: Forge paint canvas with deterministic seal image, digest-keyed cache,
  *   tamper verification, renderer fallback and closed counters (issue #712)
- * - phase-260: OG image generation with centralized design tokens, canonical
- *   digest caching, bounded timeout and static template fallback (issue #713)
- * - phase-261: Referral quest with SEP-10 signed attribution, one-use codes,
- *   atomic version-guarded enrollment, referrer caps, closed counters and EN/ES copy (issue #714)
- * - phase-256: Gas estimate preview before wallet signing with bounded simulation,
- *   staleness timestamp, input-change re-simulation, honest fallback and EN/ES copy (issue #709)
+ * - phase-246: Sybil resistance for rewards and governance with bounded score,
+ *   persisted decisions, closed reason codes, and admin inspect route (issue #697)
+ * - phase-247: Unified Turnstile, deny-list, sybil, and compliance pre-credit gate
+ *   with fail-closed 503 + Retry-After and keyed-hash persistence (issue #698)
+ * - phase-244: Profile 2FA bound to SEP-10 session with lockout cooldown,
+ *   auditable recovery, hashed secrets, and EN/ES copy (issue #695)
+ * - phase-245: Artist attestation and alias control with wallet signatures,
+ *   version-guarded primary alias uniqueness, audit trail, and EN/ES copy (issue #696)
  * - phase-257: Lore versioning with explicit append-only rollback, If-Match
  *   optimistic concurrency guard, author proof and EN/ES copy (issue #710)
+ * - phase-251: Market orderbook & offer expiry integration
+ * - phase-252: Webhook alerts and push notification delivery integration with
+ *   per-wallet dedupe keys, bounded-concurrency batching, circuit breakers and
+ *   stale subscription pruning (issue #703)
  * - phase-253: Analytics warehouse export integration with signed one-use
  *   grants, closed-label sanitization, paginated streaming and audit events (issue #704)
- * - phase-255: Watchlist with version-guarded store, market price-drop threshold
- *   alerts, reversal reset, window dedupe, closed counters and EN/ES copy (issue #708)
+ * - phase-254: Bounty claim and quest reward integration bound to versioned
+ *   quest snapshots, signed session wallet, idempotent version-guarded ledger (issue #705)
+ * - phase-258: Design Studio editor for artifact metadata with Zod schema
+ *   validation, preview before commit, If-Match 409 draft guard and EN/ES copy (issue #711)
  *
  * - phase-265: one decimal-amount parser for forge, market and x402 amounts with explicit
  *   decimal places and rounding modes (issue #723)
@@ -263,17 +272,28 @@ export type PhaseFeatureFlag =
   | "phase-287"
   | "phase-288"
   | "phase-289"
+  | "phase-228"
   | "phase-251"
+  | "phase-252"
   | "phase-248"
   | "phase-250"
   | "phase-249"
   | "phase-253"
-  | "phase-255"
-  | "phase-256"
+  | "phase-254"
   | "phase-257"
   | "phase-259"
-  | "phase-260"
-  | "phase-261";
+  | "phase-246"
+  | "phase-247"
+  | "phase-244"
+  | "phase-245"
+  | "phase-233"
+  | "phase-234"
+  | "phase-235"
+  | "phase-236"
+  | "phase-240"
+  | "phase-241"
+  | "phase-242"
+  | "phase-243";
 
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
@@ -392,17 +412,29 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-287": ["NEXT_PUBLIC_FEATURE_PHASE_287", "FEATURE_PHASE_287"],
   "phase-288": ["NEXT_PUBLIC_FEATURE_PHASE_288", "FEATURE_PHASE_288"],
   "phase-289": ["NEXT_PUBLIC_FEATURE_PHASE_289", "FEATURE_PHASE_289"],
+  "phase-228": ["NEXT_PUBLIC_FEATURE_PHASE_228", "FEATURE_PHASE_228"],
   "phase-251": ["NEXT_PUBLIC_FEATURE_PHASE_251", "FEATURE_PHASE_251"],
+  "phase-252": ["NEXT_PUBLIC_FEATURE_PHASE_252", "FEATURE_PHASE_252"],
   "phase-248": ["NEXT_PUBLIC_FEATURE_PHASE_248", "FEATURE_PHASE_248"],
   "phase-250": ["NEXT_PUBLIC_FEATURE_PHASE_250", "FEATURE_PHASE_250"],
   "phase-249": ["NEXT_PUBLIC_FEATURE_PHASE_249", "FEATURE_PHASE_249"],
   "phase-253": ["NEXT_PUBLIC_FEATURE_PHASE_253", "FEATURE_PHASE_253"],
-  "phase-255": ["NEXT_PUBLIC_FEATURE_PHASE_255", "FEATURE_PHASE_255"],
-  "phase-256": ["NEXT_PUBLIC_FEATURE_PHASE_256", "FEATURE_PHASE_256"],
+  "phase-254": ["NEXT_PUBLIC_FEATURE_PHASE_254", "FEATURE_PHASE_254"],
   "phase-257": ["NEXT_PUBLIC_FEATURE_PHASE_257", "FEATURE_PHASE_257"],
+  "phase-258": ["NEXT_PUBLIC_FEATURE_PHASE_258", "FEATURE_PHASE_258"],
   "phase-259": ["NEXT_PUBLIC_FEATURE_PHASE_259", "FEATURE_PHASE_259"],
-  "phase-260": ["NEXT_PUBLIC_FEATURE_PHASE_260", "FEATURE_PHASE_260"],
-  "phase-261": ["NEXT_PUBLIC_FEATURE_PHASE_261", "FEATURE_PHASE_261"],
+  "phase-246": ["NEXT_PUBLIC_FEATURE_PHASE_246", "FEATURE_PHASE_246"],
+  "phase-247": ["NEXT_PUBLIC_FEATURE_PHASE_247", "FEATURE_PHASE_247"],
+  "phase-244": ["NEXT_PUBLIC_FEATURE_PHASE_244", "FEATURE_PHASE_244"],
+  "phase-245": ["NEXT_PUBLIC_FEATURE_PHASE_245", "FEATURE_PHASE_245"],
+  "phase-233": ["NEXT_PUBLIC_FEATURE_PHASE_233", "FEATURE_PHASE_233"],
+  "phase-234": ["NEXT_PUBLIC_FEATURE_PHASE_234", "FEATURE_PHASE_234"],
+  "phase-235": ["NEXT_PUBLIC_FEATURE_PHASE_235", "FEATURE_PHASE_235"],
+  "phase-236": ["NEXT_PUBLIC_FEATURE_PHASE_236", "FEATURE_PHASE_236"],
+  "phase-240": ["NEXT_PUBLIC_FEATURE_PHASE_240", "FEATURE_PHASE_240"],
+  "phase-241": ["NEXT_PUBLIC_FEATURE_PHASE_241", "FEATURE_PHASE_241"],
+  "phase-242": ["NEXT_PUBLIC_FEATURE_PHASE_242", "FEATURE_PHASE_242"],
+  "phase-243": ["NEXT_PUBLIC_FEATURE_PHASE_243", "FEATURE_PHASE_243"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -511,17 +543,29 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-287",
   "phase-288",
   "phase-289",
+  "phase-228",
   "phase-251",
+  "phase-252",
   "phase-248",
   "phase-250",
   "phase-249",
   "phase-253",
-  "phase-255",
-  "phase-256",
+  "phase-254",
   "phase-257",
+  "phase-258",
   "phase-259",
-  "phase-260",
-  "phase-261",
+  "phase-246",
+  "phase-247",
+  "phase-244",
+  "phase-245",
+  "phase-233",
+  "phase-234",
+  "phase-235",
+  "phase-236",
+  "phase-240",
+  "phase-241",
+  "phase-242",
+  "phase-243",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {

@@ -11,8 +11,15 @@ import {
   isSybilSuspect,
   SybilResistanceError,
   isSybilResistanceEnabled,
+  isSybilGatingEnabled,
+  evaluateAndRecordSybilDecision,
+  getSybilDecisionById,
+  listSybilDecisionsByWallet,
   assessWalletSybilRisk,
+  type SybilScoreInput,
 } from "@/lib/sybil-resistance"
+import { Keypair } from "@stellar/stellar-sdk"
+import { resetSecurityCounters, snapshotSecurityCounters, SYBIL_DECISION_REASONS } from "@/lib/security-counters"
 
 function features(over: Partial<Record<string, number | boolean>> = {}): Record<string, unknown> {
   return {
@@ -156,5 +163,90 @@ describe("assessWalletSybilRisk (flag gate)", () => {
     assert.equal(isSybilResistanceEnabled(), true)
     assert.equal(await assessWalletSybilRisk("not-an-address"), null)
     delete process.env.FEATURE_PHASE_145
+  })
+})
+
+describe("phase-246 sybil gating for rewards and governance (#697)", () => {
+  const wallet = Keypair.random().publicKey()
+
+  it("skips gating and returns null when phase-246 flag is off", async () => {
+    delete process.env.NEXT_PUBLIC_FEATURE_PHASE_246
+    delete process.env.FEATURE_PHASE_246
+    assert.equal(isSybilGatingEnabled(wallet), false)
+    const decision = await evaluateAndRecordSybilDecision(wallet, "reward_credit", {
+      features: features({ accountAgeDays: 0, transactionCount: 0, distinctCounterparties: 0, nativeBalance: 0 }) as SybilScoreInput,
+    })
+    assert.equal(decision, null)
+  })
+
+  it("blocks below-threshold wallets on reward_credit and governance_vote and persists reason code", async () => {
+    process.env.FEATURE_PHASE_246 = "1"
+    process.env.FEATURE_PHASE_267 = "1"
+    resetSecurityCounters()
+    try {
+      const lowFeatures = features({
+        accountAgeDays: 0,
+        transactionCount: 0,
+        paymentCount: 0,
+        distinctCounterparties: 0,
+        nativeBalance: 0,
+        hasHomeDomain: false,
+        signerCount: 1,
+        trustlineCount: 0,
+        sponsoredReserves: 2,
+      }) as SybilScoreInput
+
+      const rewardDecision = await evaluateAndRecordSybilDecision(wallet, "reward_credit", {
+        features: lowFeatures,
+      })
+      assert.ok(rewardDecision)
+      assert.equal(rewardDecision.allowed, false)
+      assert.equal(rewardDecision.reasonCode, "below_threshold")
+      assert.ok((SYBIL_DECISION_REASONS as readonly string[]).includes(rewardDecision.reasonCode))
+
+      const voteDecision = await evaluateAndRecordSybilDecision(wallet, "governance_vote", {
+        features: lowFeatures,
+      })
+      assert.ok(voteDecision)
+      assert.equal(voteDecision.allowed, false)
+      assert.equal(voteDecision.reasonCode, "below_threshold")
+
+      const stored = getSybilDecisionById(rewardDecision.decisionId)
+      assert.ok(stored)
+      assert.equal(stored.decisionId, rewardDecision.decisionId)
+      assert.equal(stored.reasonCode, "below_threshold")
+
+      const byWallet = listSybilDecisionsByWallet(wallet, 10)
+      assert.ok(byWallet.length >= 2)
+
+      // Ensure no wallet or CID appears in security counter labels
+      const snap = snapshotSecurityCounters()
+      const serialized = JSON.stringify(snap)
+      assert.equal(serialized.includes(wallet), false)
+    } finally {
+      delete process.env.FEATURE_PHASE_246
+      delete process.env.FEATURE_PHASE_267
+    }
+  })
+
+  it("admits established wallets and fails closed when signals are unavailable", async () => {
+    process.env.FEATURE_PHASE_246 = "1"
+    try {
+      const trustedDecision = await evaluateAndRecordSybilDecision(wallet, "governance_vote", {
+        features: features() as SybilScoreInput,
+      })
+      assert.ok(trustedDecision)
+      assert.equal(trustedDecision.allowed, true)
+      assert.equal(trustedDecision.reasonCode, "allowed_trusted")
+
+      const unavailableDecision = await evaluateAndRecordSybilDecision(wallet, "reward_credit", {
+        features: null,
+      })
+      assert.ok(unavailableDecision)
+      assert.equal(unavailableDecision.allowed, false)
+      assert.equal(unavailableDecision.reasonCode, "signal_unavailable")
+    } finally {
+      delete process.env.FEATURE_PHASE_246
+    }
   })
 })

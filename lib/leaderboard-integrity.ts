@@ -1,3 +1,38 @@
+
+import { randomUUID } from "node:crypto"
+import { getDb } from "@/lib/sqlite-db"
+import { incSecurityCounter } from "@/lib/security-counters"
+
+export function persistLeaderboardIntegrityDecision(input: {
+  wallet: string
+  score: number
+  signals: string[]
+  excluded?: boolean
+  reasonCode?: string | null
+}): void {
+  try {
+    const db = getDb()
+    db.prepare(
+      `INSERT INTO leaderboard_integrity_decisions (id, wallet, score, signals, excluded, reason_code, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      randomUUID(),
+      input.wallet,
+      input.score,
+      JSON.stringify(input.signals),
+      input.excluded ? 1 : 0,
+      input.reasonCode ?? null,
+      Date.now()
+    )
+    if (input.excluded) {
+      incSecurityCounter("leaderboard_wallet_excluded")
+    } else {
+      incSecurityCounter("leaderboard_integrity_verified")
+    }
+  } catch (error) {
+    console.warn("[phase-178] failed to persist leaderboard integrity decision:", error)
+  }
+}
 /**
  * Leaderboard integrity: anti-farm scoring with decay and sybil discount.
  * Spike 616 / Issue #479.
@@ -222,9 +257,31 @@ export function rankLeaderboard(
   opts: LeaderboardIntegrityOptions = {},
   now: number = Date.now(),
 ): LeaderboardScore[] {
-  return candidates
-    .map((candidate) => scoreLeaderboardCandidate(candidate, opts, now))
-    .sort((a, b) => b.finalScore - a.finalScore || a.wallet.localeCompare(b.wallet))
+  const filtered = candidates.filter((c) => {
+    if ((c as any).excluded === true) {
+      incSecurityCounter("leaderboard_wallet_excluded")
+      return false
+    }
+    return true
+  })
+
+  return filtered
+    .map((candidate) => {
+      const score = scoreLeaderboardCandidate(candidate, opts, now)
+      if (isLeaderboardIntegrityEnabled()) {
+        persistLeaderboardIntegrityDecision({
+          wallet: score.wallet,
+          score: score.finalScore,
+          signals: score.signals,
+          excluded: false,
+        })
+      }
+      return score
+    })
+    .sort((a, b) => {
+      if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore
+      return a.wallet.localeCompare(b.wallet)
+    })
 }
 
 export function topLeaderboard(

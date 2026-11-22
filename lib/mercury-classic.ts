@@ -160,3 +160,120 @@ export async function fetchTokenIdsOwnedByMercury(
   }
   return ids.sort((a, b) => a - b)
 }
+
+import { isFeatureEnabled } from "@/lib/feature-flags"
+import { incSecurityCounter } from "@/lib/security-counters"
+
+export function isPhase236Enabled(): boolean {
+  return isFeatureEnabled("phase-236")
+}
+
+export type ReadAdapterConfig = {
+  mercuryTimeoutMs?: number
+  failureThreshold?: number
+  cooldownMs?: number
+  sampleDisagreementRate?: number
+}
+
+export class MercuryCircuitBreaker {
+  state: "closed" | "open" | "half-open" = "closed"
+  failures = 0
+  lastFailureTime = 0
+  readonly threshold: number
+  readonly cooldownMs: number
+
+  constructor(threshold = 3, cooldownMs = 30000) {
+    this.threshold = threshold
+    this.cooldownMs = cooldownMs
+  }
+
+  recordSuccess(): void {
+    this.failures = 0
+    this.state = "closed"
+  }
+
+  recordFailure(): void {
+    this.failures += 1
+    this.lastFailureTime = Date.now()
+    if (this.failures >= this.threshold) {
+      this.state = "open"
+      incSecurityCounter("mercury_circuit_breaker_tripped")
+    }
+  }
+
+  canAttemptMercury(): boolean {
+    if (this.state === "closed") return true
+    if (this.state === "open") {
+      if (Date.now() - this.lastFailureTime > this.cooldownMs) {
+        this.state = "half-open"
+        return true
+      }
+      return false
+    }
+    return true // half-open
+  }
+
+  reset(): void {
+    this.state = "closed"
+    this.failures = 0
+    this.lastFailureTime = 0
+  }
+}
+
+export const globalMercuryBreaker = new MercuryCircuitBreaker()
+
+export async function fetchTokenIdsWithResilience(
+  contractId: string,
+  address: string,
+  rpcFallbackFn: () => Promise<number[]>,
+  config: ReadAdapterConfig = {},
+): Promise<{ tokenIds: number[]; source: "mercury" | "soroban-rpc" | "soroban-rpc-fallback"; durationMs: number }> {
+  const start = Date.now()
+
+  // Flag phase-236 off = RPC only
+  if (!isPhase236Enabled()) {
+    const ids = await rpcFallbackFn()
+    return { tokenIds: ids, source: "soroban-rpc", durationMs: Date.now() - start }
+  }
+
+  const timeoutMs = config.mercuryTimeoutMs ?? 2000
+  const breaker = globalMercuryBreaker
+
+  if (mercuryConfigured() && breaker.canAttemptMercury()) {
+    try {
+      const mercuryPromise = fetchTokenIdsOwnedByMercury(contractId, address)
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Mercury timeout")), timeoutMs),
+      )
+      const tokenIds = await Promise.race([mercuryPromise, timeoutPromise])
+      breaker.recordSuccess()
+      incSecurityCounter("mercury_read_success")
+
+      // Sampled disagreement check
+      if (config.sampleDisagreementRate && Math.random() < config.sampleDisagreementRate) {
+        rpcFallbackFn()
+          .then((rpcIds) => {
+            const mSet = new Set(tokenIds)
+            const rSet = new Set(rpcIds)
+            const disagree = mSet.size !== rSet.size || tokenIds.some((id) => !rSet.has(id))
+            if (disagree) {
+              incSecurityCounter("mercury_rpc_disagreement")
+              console.warn(`[phase-236] Mercury/RPC disagreement: mercury=${mSet.size} rpc=${rSet.size}`)
+            }
+          })
+          .catch(() => {})
+      }
+
+      return { tokenIds, source: "mercury", durationMs: Date.now() - start }
+    } catch (error) {
+      breaker.recordFailure()
+      const isTimeout = error instanceof Error && error.message.includes("timeout")
+      if (isTimeout) incSecurityCounter("mercury_read_timeout")
+      incSecurityCounter("mercury_read_fallback_rpc")
+    }
+  }
+
+  // Fallback to RPC
+  const ids = await rpcFallbackFn()
+  return { tokenIds: ids, source: "soroban-rpc-fallback", durationMs: Date.now() - start }
+}

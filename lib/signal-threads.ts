@@ -6,16 +6,25 @@
  */
 
 import { z } from "zod"
+import { isFeatureEnabled } from "@/lib/feature-flags"
 
-// ── Feature flag ───────────────────────────────────────────────────────────
+// ── Feature flags ──────────────────────────────────────────────────────────
 
 export function isPhase81Enabled(): boolean {
   const v = (process.env.NEXT_PUBLIC_FEATURE_PHASE_81 ?? process.env.FEATURE_PHASE_81 ?? "").trim().toLowerCase()
   return v === "1" || v === "true" || v === "yes" || v === "on"
 }
 
+export function isPhase237Enabled(): boolean {
+  return isFeatureEnabled("phase-237")
+}
+
 export function flag81RollbackNote(): string {
   return "Rollback phase-81: unset NEXT_PUBLIC_FEATURE_PHASE_81 / FEATURE_PHASE_81 or set to 0/false. Signals return to flat discussion mode."
+}
+
+export function flag237RollbackNote(): string {
+  return "Rollback phase-237: unset NEXT_PUBLIC_FEATURE_PHASE_237 / FEATURE_PHASE_237 or set to 0/false. Normalized reply tree and materialized paths inert."
 }
 
 // ── Configuration ──────────────────────────────────────────────────────────
@@ -33,10 +42,12 @@ export const SignalThreadSchema = z.object({
   author: z.string().length(56).regex(/^G[A-Z2-7]{55}$/),
   content: z.string().min(1).max(5000),
   depth: z.number().int().min(0).max(MAX_THREAD_DEPTH_LIMIT),
+  materializedPath: z.string().min(1).max(1024).nullable().optional(),
   createdAt: z.number().int().positive(),
   updatedAt: z.number().int().positive().nullable(),
   replyCount: z.number().int().min(0),
   isDeleted: z.boolean(),
+  version: z.number().int().positive().optional(),
 })
 
 export type SignalThread = z.infer<typeof SignalThreadSchema>
@@ -63,7 +74,7 @@ export type ThreadQueryOptions = z.infer<typeof ThreadQueryOptionsSchema>
 // ── Error handling ─────────────────────────────────────────────────────────
 
 export class SignalThreadError extends Error {
-  code: "FLAG_DISABLED" | "MAX_DEPTH_EXCEEDED" | "PARENT_NOT_FOUND" | "VALIDATION_FAILED" | "SIGNAL_NOT_FOUND"
+  code: "FLAG_DISABLED" | "MAX_DEPTH_EXCEEDED" | "PARENT_NOT_FOUND" | "VALIDATION_FAILED" | "SIGNAL_NOT_FOUND" | "CYCLE_DETECTED"
   details?: unknown
 
   constructor(code: SignalThreadError["code"], message: string, details?: unknown) {
@@ -72,6 +83,84 @@ export class SignalThreadError extends Error {
     this.code = code
     this.details = details
   }
+}
+
+// ── Path & Cycle helpers ───────────────────────────────────────────────────
+
+export function wouldCreateCycle(
+  threadId: string,
+  parentId: string | null,
+  lookup: (id: string) => { parentId: string | null } | null | undefined,
+): boolean {
+  if (!parentId) return false
+  if (parentId === threadId) return true
+  let curr: string | null = parentId
+  const visited = new Set<string>([threadId])
+  while (curr) {
+    if (visited.has(curr)) return true
+    visited.add(curr)
+    const node = lookup(curr)
+    if (!node) break
+    curr = node.parentId
+  }
+  return false
+}
+
+export function computeMaterializedPath(
+  parentId: string | null,
+  threadId: string,
+  parentPath?: string | null,
+): string {
+  if (!parentId) return `/${threadId}`
+  if (parentPath) return `${parentPath}/${threadId}`
+  return `/${parentId}/${threadId}`
+}
+
+export function getAncestryFromPath(materializedPath: string): string[] {
+  if (!materializedPath) return []
+  return materializedPath.split("/").filter(Boolean)
+}
+
+export function migrateThreadRows(threads: SignalThread[]): {
+  migrated: SignalThread[]
+  orphans: SignalThread[]
+  cycles: string[]
+} {
+  const map = new Map<string, SignalThread>()
+  for (const t of threads) map.set(t.id, t)
+
+  const migrated: SignalThread[] = []
+  const orphans: SignalThread[] = []
+  const cycles: string[] = []
+
+  for (const t of threads) {
+    if (t.parentId && !map.has(t.parentId)) {
+      orphans.push(t)
+      continue
+    }
+    if (wouldCreateCycle(t.id, t.parentId, (id) => map.get(id))) {
+      cycles.push(t.id)
+      continue
+    }
+
+    let depth = 0
+    const segments: string[] = [t.id]
+    let curr = t.parentId
+    while (curr && map.has(curr)) {
+      const p = map.get(curr)!
+      depth++
+      segments.unshift(p.id)
+      curr = p.parentId
+    }
+
+    migrated.push({
+      ...t,
+      depth,
+      materializedPath: "/" + segments.join("/"),
+    })
+  }
+
+  return { migrated, orphans, cycles }
 }
 
 // ── Thread operations ──────────────────────────────────────────────────────
@@ -128,9 +217,20 @@ export function validateThreadReply(
     }
   }
 
+  if (isPhase237Enabled() && parentThread && (reply as any).id) {
+    if (wouldCreateCycle((reply as any).id, reply.parentId, () => parentThread)) {
+      return {
+        valid: false,
+        error: "Cyclic parent reference rejected",
+        code: "CYCLE_DETECTED",
+      }
+    }
+  }
+
   try {
     const depth = calculateThreadDepth(parentThread, maxDepth)
-    return { valid: true, depth }
+    const materializedPath = computeMaterializedPath(reply.parentId, (reply as any).id ?? "new", parentThread?.materializedPath)
+    return { valid: true, depth, materializedPath } as any
   } catch (e) {
     if (e instanceof SignalThreadError) {
       return { valid: false, error: e.message, code: e.code }

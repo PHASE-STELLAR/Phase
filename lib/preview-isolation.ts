@@ -185,3 +185,76 @@ export function isCronBlockedInPreview(env: Env = process.env): boolean {
 export function previewTrustsVercelCronHeader(env: Env = process.env): boolean {
   return !(isPreviewIsolationEnabled() && isPreviewDeployment(env))
 }
+
+// ── phase-228: per-PR contract deploy ─────────────────────────────────────────
+
+/**
+ * Whether per-PR contract deploy, branch-DB seeding and strict contract-collision
+ * enforcement (phase-228) are enabled.
+ */
+export function isPerPrContractDeployEnabled(): boolean {
+  return isFeatureEnabled("phase-228")
+}
+
+/**
+ * Env var name that the per-PR deploy CI job writes the preview contract ID into.
+ * Vercel preview deployments read this via the Vercel API env override.
+ */
+export const PREVIEW_CONTRACT_ENV_VAR = "NEXT_PUBLIC_PHASE_PREVIEW_CONTRACT_ID"
+
+/**
+ * Returns the per-PR contract ID for the current preview, or null when phase-228
+ * is off or no contract has been deployed yet.
+ */
+export function resolvePreviewContractId(env: Env = process.env): string | null {
+  if (!isPerPrContractDeployEnabled()) return null
+  const id = env[PREVIEW_CONTRACT_ENV_VAR]?.trim()
+  return id || null
+}
+
+/**
+ * Returns true when phase-228 is on AND a preview contract ID is set AND it does
+ * NOT appear in `PHASE_PROD_CONTRACT_IDS` — i.e., the preview is using its own
+ * isolated contract.
+ *
+ * Returns false when the flag is off (shared contract as today is acceptable).
+ */
+export function previewContractIsIsolated(env: Env = process.env): boolean {
+  if (!isPerPrContractDeployEnabled()) return false
+  const id = resolvePreviewContractId(env)
+  if (!id) return false
+  const prod = new Set(listFrom(env.PHASE_PROD_CONTRACT_IDS))
+  return !prod.has(id)
+}
+
+/**
+ * Violations added by phase-228 on top of phase-173.
+ * Returns empty outside previews or when flag is off.
+ */
+export function checkPerPrContractIsolation(env: Env = process.env): PreviewIsolationViolation[] {
+  if (!isPerPrContractDeployEnabled() || !isPreviewDeployment(env)) return []
+  const violations: PreviewIsolationViolation[] = []
+
+  const previewId = resolvePreviewContractId(env)
+  if (!previewId) {
+    violations.push({
+      variable: PREVIEW_CONTRACT_ENV_VAR,
+      code: "contract_matches_production",
+      message: "No per-PR preview contract ID is set.",
+      hint: `The deploy-preview CI job must run and inject ${PREVIEW_CONTRACT_ENV_VAR} for this PR. Trigger it manually or push a commit.`,
+    })
+    return violations
+  }
+
+  const prod = new Set(listFrom(env.PHASE_PROD_CONTRACT_IDS))
+  if (prod.size > 0 && prod.has(previewId)) {
+    violations.push({
+      variable: PREVIEW_CONTRACT_ENV_VAR,
+      code: "contract_matches_production",
+      message: `${PREVIEW_CONTRACT_ENV_VAR} points at a production contract.`,
+      hint: "The deploy-preview CI job must deploy a fresh testnet contract, not reuse a production ID.",
+    })
+  }
+
+  return violations
+}

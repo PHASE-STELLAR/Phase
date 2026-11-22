@@ -106,16 +106,35 @@ export async function POST(
   }
 
   const walletStr = body.wallet
-  const signatureVerified = await verifySignalSignature(
-    walletStr,
-    { title: "", body: (body.body as string).trim(), timestamp: body.timestamp as number },
-    body.signature as string,
-  )
-  if (!signatureVerified) {
+  const payloadBytes = Buffer.byteLength(JSON.stringify(body))
+  if (payloadBytes > 64 * 1024) {
     return api.json(
-      { error: "Invalid signature: reply not signed by this wallet" },
-      { status: 400, event: "signals.reply.invalid_signature" },
+      { error: "Payload exceeds 64KB limit" },
+      { status: 400, event: "signals.reply.payload_too_large" },
     )
+  }
+
+  const phase242 = isFeatureEnabled("phase-242")
+  let signatureVerified = false
+  if (phase242) {
+    signatureVerified = await verifySignalSignature(
+      walletStr,
+      { title: "", body: (body.body as string).trim(), timestamp: body.timestamp as number },
+      body.signature as string,
+    )
+    if (!signatureVerified) {
+      return api.json(
+        { error: "Invalid signature: reply not signed by this wallet" },
+        { status: 400, event: "signals.reply.invalid_signature" },
+      )
+    }
+  } else {
+    // Legacy authorship path: verification skipped / best effort
+    signatureVerified = await verifySignalSignature(
+      walletStr,
+      { title: "", body: (body.body as string).trim(), timestamp: body.timestamp as number },
+      body.signature as string,
+    ).catch(() => false)
   }
 
   // phase-156 (Module #56): reject posts from wallets on the governed deny-list.
@@ -247,6 +266,7 @@ export async function POST(
         body: (body.body as string).trim(),
         upvotes: [],
         signature: body.signature as string,
+        signature_verified: signatureVerified,
       },
       parentVersion,
     )

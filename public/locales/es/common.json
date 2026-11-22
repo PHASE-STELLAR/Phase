@@ -32,5 +32,15 @@
     "networkError": "Error de red. Por favor verifica tu conexión.",
     "unknownError": "Ocurrió un error desconocido",
     "walletRequired": "Por favor conecta tu billetera para continuar"
+  },
+  "achievements": {
+    "timeline": {
+      "title": "Línea de tiempo de logros",
+      "empty": "Aún no hay logros desbloqueados",
+      "loadMore": "Cargar más",
+      "closedCount": "{{count}} logro desbloqueado",
+      "closedCount_plural": "{{count}} logros desbloqueados",
+      "disabled": "La vista de línea de tiempo no está habilitada"
+    }
   }
 }

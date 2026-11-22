@@ -12,6 +12,7 @@ process.env.PHASE_SERVER_DATA_DIR = path.join(os.tmpdir(), `phase-test-${Date.no
 
 import {
   PushNotificationError,
+  dispatchPushNotification,
   extractMentionedWallets,
   getPushSubscriptions,
   isPhase92Enabled,
@@ -98,6 +99,35 @@ async function testFlagDisabledBlocksSubscribe() {
   console.log("✓ subscribe blocked when phase-92 flag disabled")
 }
 
+async function testBurstDedupe() {
+  process.env.NEXT_PUBLIC_FEATURE_PHASE_252 = "1"
+  process.env.FEATURE_PHASE_252 = "1"
+  await subscribeToPush({
+    wallet: WALLET_A,
+    endpoint: "https://push.example.com/burst-test",
+    keys: { p256dh: "k1", auth: "a1" },
+  })
+  const origFetch = globalThis.fetch
+  let deliveries = 0
+  globalThis.fetch = (async () => {
+    deliveries++
+    return new Response("ok", { status: 200 })
+  }) as typeof fetch
+  try {
+    await Promise.all(
+      Array.from({ length: 10 }, () =>
+        dispatchPushNotification(WALLET_A, "mention", { id: "sig-burst" }, { eventId: "burst-1" }),
+      ),
+    )
+    assert.equal(deliveries, 1)
+  } finally {
+    globalThis.fetch = origFetch
+    delete process.env.NEXT_PUBLIC_FEATURE_PHASE_252
+    delete process.env.FEATURE_PHASE_252
+  }
+  console.log("✓ burst dispatch produces one notification per event (phase-252)")
+}
+
 async function run() {
   await testFlagEnabled()
   await testSubscribeAndList()
@@ -107,7 +137,8 @@ async function run() {
   await testExtractMentions()
   await testExtractMentionsNoDuplicates()
   await testFlagDisabledBlocksSubscribe()
-  console.log("\nAll push-notifications (phase-92) tests passed.")
+  await testBurstDedupe()
+  console.log("\nAll push-notifications (phase-92 + phase-252) tests passed.")
 }
 
 run().catch((e) => {

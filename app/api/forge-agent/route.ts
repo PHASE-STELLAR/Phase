@@ -11,6 +11,11 @@ import {
   resolveForgePaymentAmount,
   X402_NETWORK,
 } from "@/lib/forge/payment-verifier"
+import {
+  isExperimentationEnabled,
+  lockChallengePrice,
+  resolveForgeRequiredAmountStroops,
+} from "@/lib/experiments"
 import { runForgePipeline } from "@/lib/forge/pipeline"
 import { tokenContractIdForServer } from "@/lib/phase-protocol"
 import { isSettlementUsed, markSettlementUsedIfUnused } from "@/lib/settlement-store"
@@ -42,8 +47,18 @@ async function paymentRequiredResponse(request: NextRequest, payerAddress?: stri
   // Spike 612: challenge amount follows the payer's price variant (control when
   // flag off / no payer / holdout). One resolved amount feeds challenge, header
   // and verifier so the three can never diverge.
-  const amountStroops = await resolveForgePaymentAmount(payerAddress)
+  const resolution = await resolveForgeRequiredAmountStroops(payerAddress)
+  const amountStroops = resolution.amountStroops
   const challenge = buildLegacyChallenge(origin, request.nextUrl.pathname, amountStroops)
+  if (isExperimentationEnabled() && payerAddress?.trim()) {
+    await lockChallengePrice({
+      challengeId: challenge.invoice,
+      subject: payerAddress.trim(),
+      experimentId: resolution.experimentId,
+      variantId: resolution.variantId,
+      amountStroops,
+    }).catch(() => undefined)
+  }
   const paymentRequirements = buildOfficialPaymentRequirements(origin, amountStroops)
   const b64 = Buffer.from(JSON.stringify(challenge)).toString("base64")
   const body: Record<string, unknown> = {
@@ -95,12 +110,16 @@ export async function POST(request: NextRequest) {
   warnPhaserLiqSacMismatchOnce(PHASE_LIQ_TOKEN_CONTRACT, "forge-agent")
 
   const payerForPricing = body.payerAddress?.trim()
-  const requiredAmountStroops = await resolveForgePaymentAmount(payerForPricing)
+  const challengeId =
+    (typeof body.invoice === "string" ? body.invoice.trim() : "") ||
+    request.headers.get("x-challenge-id")?.trim() ||
+    undefined
+  const requiredAmountStroops = await resolveForgePaymentAmount(payerForPricing, challengeId)
   const paymentRequirements = buildOfficialPaymentRequirements(request.nextUrl.origin, requiredAmountStroops)
   const auth = request.headers.get("authorization")
   const receipt = extractSettlementReceiptTxHash(auth, body)
 
-  const resolution = await verifyPaymentStep({ authHeader: auth, body, paymentRequirements })
+  const resolution = await verifyPaymentStep({ authHeader: auth, body, paymentRequirements, challengeId })
   if (resolution === "facilitator_rejected") {
     if (isAnalyticsWarehouseEnabled()) {
       void recordWarehouseEvent({

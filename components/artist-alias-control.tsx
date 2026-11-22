@@ -24,6 +24,10 @@ const copy = {
     errorPrefix: "Alias error:",
     length: "Alias must be 3-24 characters.",
     pattern: "Only letters, numbers, spaces, ., -, and _ are allowed.",
+    attestedBadge: "Wallet-attested primary alias",
+    versionConflict: "Alias version conflict. Refresh and retry.",
+    signatureRequired: "Wallet signature required for alias attestation.",
+    auditLabel: "Audit trail",
   },
   es: {
     title: "Alias de artista",
@@ -35,6 +39,10 @@ const copy = {
     errorPrefix: "Error de alias:",
     length: "El alias debe tener entre 3 y 24 caracteres.",
     pattern: "Solo se permiten letras, numeros, espacios, ., -, y _.",
+    attestedBadge: "Alias principal atestado por wallet",
+    versionConflict: "Conflicto de versión del alias. Actualiza e inténtalo de nuevo.",
+    signatureRequired: "Se requiere firma de wallet para atestar el alias.",
+    auditLabel: "Historial de auditoría",
   },
 } as const
 

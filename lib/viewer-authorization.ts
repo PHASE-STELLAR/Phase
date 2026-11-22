@@ -28,6 +28,7 @@
  */
 
 import { getDb } from "@/lib/sqlite-db"
+import { incSecurityCounter } from "@/lib/security-counters"
 import { resolveStellarNetwork } from "@/lib/stellar-network"
 
 /** Domain separator. Any change invalidates every previously issued signature. */
@@ -271,16 +272,20 @@ export async function verifyViewerSignature(input: {
     return { ok: false, code: "bad_signature", reason: "signature does not verify for the requested token" }
   }
 
+  if (isJtiRevoked(claims.jti)) {
+    incSecurityCounter("preview_grant_denied", 1, "revoked")
+    return { ok: false, code: "revoked", reason: "grant has been revoked" }
+  }
+
   if (input.consume !== false) {
-    if (isJtiRevoked(claims.jti)) {
-      return { ok: false, code: "revoked", reason: "grant has been revoked" }
-    }
     const firstUse = consumeJti(claims.jti, claims.viewer, claims.tokenId, claims.exp, now)
     if (!firstUse) {
+      incSecurityCounter("preview_grant_denied", 1, "replay")
       return { ok: false, code: "replay", reason: "signature has already been used" }
     }
   }
 
+  incSecurityCounter("preview_grant_allowed")
   return { ok: true, claims }
 }
 

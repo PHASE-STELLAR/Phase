@@ -36,7 +36,7 @@ export const PREVIEW_VERIFY_RESULTS = [
   "missing_claims",
 ] as const
 
-export const WASH_FLAG_REASONS = ["self_trade", "circular", "rapid_flip", "sybil_cluster"] as const
+export const WASH_FLAG_REASONS = ["self_trade", "circular", "rapid_flip", "sybil_cluster", "wash_loop"] as const
 
 /** phase-146 decision labels; every moderation counter maps from one of these. */
 export const MODERATION_DECISIONS = ["auto_allow", "human_review", "auto_hold"] as const
@@ -60,22 +60,22 @@ export const CUSTODIAN_RELEASE_REASONS = [
   "rpc_failure",
 ] as const
 
-export const REFERRAL_QUEST_REASONS = [
-  "enrolled",
-  "self_referral",
-  "already_enrolled",
-  "code_already_used",
-  "invalid_code",
-  "referrer_cap_reached",
-  "version_conflict",
-  "sybil_rejected",
+export const SYBIL_DECISION_REASONS = [
+  "allowed_trusted",
+  "allowed_caution",
+  "below_threshold",
+  "signal_unavailable",
+  "invalid_wallet",
 ] as const
 
-export const WATCHLIST_ALERT_REASONS = [
-  "triggered",
-  "deduped_window",
-  "rearmed_reversal",
-  "version_conflict",
+export const PRE_CREDIT_GATE_REASONS = [
+  "admitted",
+  "wallet_denied",
+  "turnstile_required",
+  "turnstile_failed",
+  "sybil_blocked",
+  "compliance_blocked",
+  "provider_outage",
 ] as const
 
 /** Every reason code any counter may carry. */
@@ -85,8 +85,8 @@ export const SECURITY_REASON_CODES = [
   ...MODERATION_DECISIONS,
   ...LABEL_REJECTION_REASONS,
   ...CUSTODIAN_RELEASE_REASONS,
-  ...REFERRAL_QUEST_REASONS,
-  ...WATCHLIST_ALERT_REASONS,
+  ...SYBIL_DECISION_REASONS,
+  ...PRE_CREDIT_GATE_REASONS,
 ] as const
 
 export type SecurityReasonCode = (typeof SECURITY_REASON_CODES)[number]
@@ -123,6 +123,8 @@ export const SECURITY_COUNTER_REGISTRY = {
   preview_bad_signature: { surface: "gated_preview", reasons: NO_REASONS },
   preview_network_mismatch: { surface: "gated_preview", reasons: NO_REASONS },
   gated_cdn_leak_blocked: { surface: "gated_preview", reasons: NO_REASONS },
+  preview_grant_allowed: { surface: "gated_preview", reasons: NO_REASONS },
+  preview_grant_denied: { surface: "gated_preview", reasons: PREVIEW_VERIFY_REASONS },
   cid_poison_attempts: { surface: "ipfs", reasons: NO_REASONS },
   cid_mismatch: { surface: "ipfs", reasons: NO_REASONS },
   cid_verified: { surface: "ipfs", reasons: NO_REASONS },
@@ -132,8 +134,18 @@ export const SECURITY_COUNTER_REGISTRY = {
   wash_volume_excluded: { surface: "market", reasons: NO_REASONS },
   wash_graph_sybil: { surface: "market", reasons: NO_REASONS },
   market_volume_drift: { surface: "market", reasons: NO_REASONS },
-  watchlist_mutation: { surface: "market", reasons: NO_REASONS },
-  watchlist_price_drop_alert: { surface: "market", reasons: WATCHLIST_ALERT_REASONS },
+  wash_loop_detected: { surface: "market", reasons: NO_REASONS },
+  mercury_read_success: { surface: "operations", reasons: NO_REASONS },
+  mercury_read_fallback_rpc: { surface: "operations", reasons: NO_REASONS },
+  mercury_read_timeout: { surface: "operations", reasons: NO_REASONS },
+  mercury_circuit_breaker_tripped: { surface: "operations", reasons: NO_REASONS },
+  mercury_rpc_disagreement: { surface: "operations", reasons: NO_REASONS },
+  grid_virtualization_rendered: { surface: "operations", reasons: NO_REASONS },
+  grid_virtualization_window_sliced: { surface: "operations", reasons: NO_REASONS },
+  trustline_submitted: { surface: "liquidity", reasons: NO_REASONS },
+  trustline_retried: { surface: "liquidity", reasons: NO_REASONS },
+  trustline_failed: { surface: "liquidity", reasons: NO_REASONS },
+  anomaly_alerts_suppressed: { surface: "operations", reasons: NO_REASONS },
   distributor_refill_race: { surface: "faucet", reasons: NO_REASONS },
   distributor_op_underfunded: { surface: "faucet", reasons: NO_REASONS },
   distributor_available_balance_stale: { surface: "faucet", reasons: NO_REASONS },
@@ -246,6 +258,8 @@ export const SECURITY_COUNTER_REGISTRY = {
   leaderboard_scored: { surface: "growth", reasons: NO_REASONS },
   leaderboard_farm_penalized: { surface: "growth", reasons: NO_REASONS },
   leaderboard_sybil_discounted: { surface: "growth", reasons: NO_REASONS },
+  leaderboard_integrity_verified: { surface: "operations", reasons: NO_REASONS },
+  leaderboard_wallet_excluded: { surface: "operations", reasons: NO_REASONS },
   retention_sweep_runs: { surface: "privacy", reasons: NO_REASONS },
   retention_records_expired: { surface: "privacy", reasons: NO_REASONS },
   gdpr_erasure_completed: { surface: "privacy", reasons: NO_REASONS },
@@ -332,7 +346,18 @@ export const SECURITY_COUNTER_REGISTRY = {
   drop_queue_ticket_issued: { surface: "market", reasons: NO_REASONS },
   market_accept_conflict: { surface: "market", reasons: NO_REASONS },
   edge_store_degraded: { surface: "operations", reasons: NO_REASONS },
+  sybil_decision_recorded: { surface: "governance", reasons: SYBIL_DECISION_REASONS },
+  pre_credit_gate_decision: { surface: "faucet", reasons: PRE_CREDIT_GATE_REASONS },
   security_counter_label_rejected: { surface: "operations", reasons: LABEL_REJECTION_REASONS },
+  x402_dead_letter_enqueued: { surface: "operations", reasons: NO_REASONS },
+  x402_replay_attempted: { surface: "operations", reasons: NO_REASONS },
+  x402_replay_rejected: { surface: "operations", reasons: NO_REASONS },
+  nft_index_invalidated: { surface: "operations", reasons: NO_REASONS },
+  nft_index_event_malformed: { surface: "operations", reasons: NO_REASONS },
+  sep41_allowance_read: { surface: "liquidity", reasons: NO_REASONS },
+  sep41_balance_read: { surface: "liquidity", reasons: NO_REASONS },
+  sep41_sac_misuse_blocked: { surface: "liquidity", reasons: NO_REASONS },
+  sep41_tx_proof_recorded: { surface: "liquidity", reasons: NO_REASONS },
 } as const satisfies Record<string, CounterSpec>
 
 export type SecurityCounterName = keyof typeof SECURITY_COUNTER_REGISTRY

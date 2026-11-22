@@ -11,10 +11,14 @@ import {
   FORGE_PRICE_EXPERIMENT_ID,
   getExperimentSummary,
   loadForgeExperimentConfig,
+  lockChallengePrice,
   parseExperimentConfig,
+  resolveChamberExperiment,
   resolveForgeExperimentCopyKey,
   resolveForgeRequiredAmountStroops,
 } from "@/lib/experiments"
+import { pickForgeExperimentCopy } from "@/lib/phase-copy"
+import { getSecurityCounter, resetSecurityCounters } from "@/lib/security-counters"
 import { REQUIRED_AMOUNT } from "@/lib/phase-protocol"
 
 const WALLET = "GAXGYD5H4J5XQQ0W6NXKJ6TRJZ4NXBTSNSGQ2MGE43LQX4KJQK5V5V5V"
@@ -172,5 +176,61 @@ describe("experiments (spike 612 / phase-174)", () => {
     delete process.env.NEXT_PUBLIC_FEATURE_PHASE_174
     const key = await resolveForgeExperimentCopyKey(WALLET)
     expect(key).toBe(EXPERIMENT_CONTROL_VARIANT_ID)
+    const chamber = await resolveChamberExperiment(WALLET)
+    expect(chamber.variantId).toBe(EXPERIMENT_CONTROL_VARIANT_ID)
+    expect(chamber.amountStroops).toBe(REQUIRED_AMOUNT)
+  })
+
+  it("variant cannot change price mid-challenge once locked", async () => {
+    resetSecurityCounters()
+    process.env.PHASE_EXPERIMENT_CONFIG = JSON.stringify(
+      config({
+        variants: [
+          { id: "control", weight: 1, priceStroops: "25000000" },
+          { id: "price_cut", weight: 9999, priceStroops: "15000000" },
+        ],
+      }),
+    )
+    const initial = await resolveForgeRequiredAmountStroops(WALLET)
+    await lockChallengePrice({
+      challengeId: "forge_chal_123",
+      subject: WALLET,
+      experimentId: initial.experimentId,
+      variantId: initial.variantId,
+      amountStroops: initial.amountStroops,
+    })
+    expect(getSecurityCounter("experiment_challenge_locked")).toBe(1)
+
+    // Mutate config mid-challenge; locked challenge price must stay immutable
+    process.env.PHASE_EXPERIMENT_CONFIG = JSON.stringify(
+      config({
+        variants: [
+          { id: "control", weight: 1, priceStroops: "99000000" },
+          { id: "price_cut", weight: 9999, priceStroops: "99000000" },
+        ],
+      }),
+    )
+    const locked = await resolveForgeRequiredAmountStroops(WALLET, "forge_chal_123")
+    expect(locked.amountStroops).toBe(initial.amountStroops)
+    expect(locked.variantId).toBe(initial.variantId)
+  })
+
+  it("resolves chamber experiment and EN/ES copy for variants", async () => {
+    process.env.PHASE_EXPERIMENT_CONFIG = JSON.stringify(
+      config({
+        experimentId: "chamber_copy_v1",
+        variants: [
+          { id: "control", weight: 1 },
+          { id: "copy_urgent", weight: 9999, priceStroops: "20000000", copyKey: "copy_urgent" },
+        ],
+      }),
+    )
+    const chamber = await resolveChamberExperiment(WALLET)
+    expect(chamber.experimentId).toBe("chamber_copy_v1")
+    const enCopy = pickForgeExperimentCopy("en", chamber.copyKey)
+    const esCopy = pickForgeExperimentCopy("es", chamber.copyKey)
+    expect(enCopy.chamberBanner.length).toBeGreaterThan(0)
+    expect(esCopy.chamberBanner.length).toBeGreaterThan(0)
+    expect(enCopy.chamberCta).not.toBe(esCopy.chamberCta)
   })
 })

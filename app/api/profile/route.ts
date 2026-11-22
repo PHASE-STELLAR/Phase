@@ -5,7 +5,14 @@ import {
   ProfileVersionConflictError,
   saveProfile,
 } from "@/lib/profile-store"
-import { isProfile2faEnabled, touchesHighValueField, verifyProfileChangeConfirmation } from "@/lib/profile-2fa"
+import {
+  isProfile2faEnabled,
+  isProfile2faV2Enabled,
+  requireSep10SessionForWallet,
+  touchesHighValueField,
+  verifyProfileChangeConfirmation,
+  verifySessionBound2faChallenge,
+} from "@/lib/profile-2fa"
 import { isConsent166Enabled, hasAcceptedCurrentLegal } from "@/lib/legal-consent"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 import { readBoundedBody, BoundedBodyError } from "@/lib/bounded-body"
@@ -111,7 +118,36 @@ export async function POST(request: NextRequest) {
 
   // phase-104: require a two-factor confirmation code before applying
   // high-value profile changes (display name / socials)
-  if (isProfile2faEnabled() && touchesHighValueField(body as Record<string, unknown>)) {
+  if (isProfile2faV2Enabled(wallet) && touchesHighValueField(body as Record<string, unknown>)) {
+    const lang = request.headers.get("accept-language")?.split(",")[0]?.split("-")[0]
+    const session = await requireSep10SessionForWallet(request, wallet, lang)
+    if (!session.ok) {
+      return NextResponse.json({ error: session.error, code: session.reason }, { status: session.status })
+    }
+    const confirmation = verifySessionBound2faChallenge(
+      wallet,
+      session.sessionHash,
+      body as Record<string, unknown>,
+      typeof body.confirmation_code === "string" ? body.confirmation_code : undefined,
+      lang,
+    )
+    if (!confirmation.ok) {
+      return NextResponse.json(
+        {
+          error: confirmation.error,
+          code: confirmation.reason,
+          reason: confirmation.reason,
+          hint: "POST /api/profile/request-change first, then resubmit with confirmation_code",
+        },
+        {
+          status: confirmation.status,
+          headers: confirmation.retryAfterSeconds
+            ? { "Retry-After": String(confirmation.retryAfterSeconds) }
+            : undefined,
+        },
+      )
+    }
+  } else if (isProfile2faEnabled() && touchesHighValueField(body as Record<string, unknown>)) {
     const confirmation = verifyProfileChangeConfirmation(
       wallet,
       body as Record<string, unknown>,

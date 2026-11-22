@@ -5,7 +5,7 @@ import {
   fetchOwnedPhaseTokenIdsForWallet,
   phaseProtocolContractIdForServer,
 } from "@/lib/phase-protocol"
-import { mercuryConfigured, fetchTokenIdsOwnedByMercury } from "@/lib/mercury-classic"
+import { mercuryConfigured, fetchTokenIdsOwnedByMercury, fetchTokenIdsWithResilience, isPhase236Enabled } from "@/lib/mercury-classic"
 import {
   getCachedWalletNftIndex,
   setCachedWalletNftIndex,
@@ -76,6 +76,18 @@ export async function GET(request: NextRequest) {
     cacheHit = true
   } else {
     const runLiveScan = async (): Promise<{ tokenIds: number[]; indexedVia: string }> => {
+      if (isPhase236Enabled()) {
+        const res = await fetchTokenIdsWithResilience(
+          contractId,
+          address,
+          () => fetchOwnedPhaseTokenIdsForWallet(address, {
+            contractId,
+            maxTokenIdCap: scanCap,
+            concurrency: scanConc,
+          })
+        )
+        return { tokenIds: res.tokenIds, indexedVia: res.source }
+      }
       // Mercury Classic es más rápido que RPC scan — úsalo si está configurado
       if (mercuryConfigured()) {
         try {

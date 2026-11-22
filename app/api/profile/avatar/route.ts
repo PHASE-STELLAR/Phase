@@ -7,6 +7,11 @@ import { z } from "zod"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 import { BoundedBodyError, readBoundedBody, readBoundedBytes } from "@/lib/bounded-body"
 import { pickCopy } from "@/lib/phase-copy"
+import {
+  isProfile2faV2Enabled,
+  requireSep10SessionForWallet,
+  verifySessionBound2faChallenge,
+} from "@/lib/profile-2fa"
 
 /** phase-137: emit a structured error body when the taxonomy flag is on, else the legacy generic 500. */
 function respondWithProfileError(
@@ -194,6 +199,36 @@ export async function POST(request: NextRequest) {
     return api.json({ error: "Invalid wallet" }, { status: 400, event: "profile.avatar.validation_failed", metadata: { reason: "wallet" } })
   }
   const language = request.headers.get("accept-language")?.split(",")[0]?.split("-")[0]
+
+  if (isProfile2faV2Enabled(wallet)) {
+    const session = await requireSep10SessionForWallet(request, wallet, language)
+    if (!session.ok) {
+      return api.json(
+        { error: session.error, code: session.reason },
+        { status: session.status, event: "profile.avatar.session_rejected" },
+      )
+    }
+    const confirmationCode = typeof (body as { confirmation_code?: unknown }).confirmation_code === "string"
+      ? (body as { confirmation_code: string }).confirmation_code
+      : undefined
+    const check = verifySessionBound2faChallenge(
+      wallet,
+      session.sessionHash,
+      body as Record<string, unknown>,
+      confirmationCode,
+      language,
+    )
+    if (!check.ok) {
+      return api.json(
+        { error: check.error, code: check.reason },
+        {
+          status: check.status,
+          event: "profile.avatar.2fa_rejected",
+          headers: check.retryAfterSeconds ? { "Retry-After": String(check.retryAfterSeconds) } : undefined,
+        },
+      )
+    }
+  }
   const expectedVersion = typeof body.expected_version === "number" ? body.expected_version : undefined
   if (phase262Enabled && (
     typeof body.expected_version !== "number" ||

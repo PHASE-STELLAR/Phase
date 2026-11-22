@@ -60,3 +60,45 @@ export async function fetchArtistAlias(walletAddress: string): Promise<string | 
   inFlight.set(walletAddress, request)
   return request
 }
+
+export type ArtistAliasDetails = {
+  alias: string | null
+  version: number
+  attested: boolean
+  updatedAt: number | null
+  audit?: Array<{
+    id: string
+    action: "created" | "updated" | "attested"
+    alias: string
+    version: number
+    createdAt: number
+  }>
+}
+
+export function invalidateArtistAliasCache(walletAddress?: string): void {
+  if (walletAddress) aliasCache.delete(walletAddress)
+  else aliasCache.clear()
+}
+
+export async function fetchArtistAliasDetails(
+  walletAddress: string,
+  includeAudit = false,
+): Promise<ArtistAliasDetails | null> {
+  if (!walletAddress) return null
+  try {
+    const qs = new URLSearchParams({ walletAddress })
+    if (includeAudit) qs.set("audit", "1")
+    const res = await fetch(`/api/artist-profile?${qs.toString()}`, { cache: "no-store" })
+    if (!res.ok) return null
+    const data = (await res.json().catch(() => ({}))) as Partial<ArtistAliasDetails>
+    return {
+      alias: typeof data.alias === "string" ? data.alias.trim() || null : null,
+      version: typeof data.version === "number" ? data.version : 0,
+      attested: Boolean(data.attested),
+      updatedAt: typeof data.updatedAt === "number" ? data.updatedAt : null,
+      audit: Array.isArray(data.audit) ? data.audit : undefined,
+    }
+  } catch {
+    return null
+  }
+}

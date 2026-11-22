@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Keypair } from "@stellar/stellar-sdk"
 import { getDb, resetDbForTests } from "@/lib/sqlite-db"
-import { recordTaxEvent, taxCsv, csvCell, verifyTaxExport, taxExportRateLimited } from "@/lib/tax-report"
+import { recordTaxEvent, taxCsv, csvCell, verifyTaxExport, taxExportRateLimited, recordTaxExportAudit, getTaxExportAudits } from "@/lib/tax-report"
 import { taxExportMessage, type TaxExportRequest } from "@/lib/tax-export-proof"
 import { decimalToStroops, formatStroops } from "@/lib/decimal-amount"
 import { createListing, createOffer, decideOfferAtomic, getListing } from "@/lib/market-store"
@@ -109,5 +109,16 @@ describe("durable transaction exports", () => {
     expect(getDb().prepare("SELECT status FROM offers WHERE id=?").get(offer.id)).toMatchObject({ status: "pending" })
     expect(getDb().prepare("SELECT * FROM tax_events").all()).toHaveLength(1)
     expect(getSecurityCounter("tax_event_recorded")).toBe(0)
+  })
+  it("appends an audit event per tax export and isolates by wallet", () => {
+    recordTaxExportAudit({ wallet, snapshot: 5, policy: "FIFO", nonce: "nonce-12345678901" })
+    recordTaxExportAudit({ wallet: buyer, snapshot: 6, policy: "HIFO", nonce: "nonce-98765432101" })
+    const all = getTaxExportAudits()
+    expect(all).toHaveLength(2)
+    const walletAudits = getTaxExportAudits(wallet)
+    expect(walletAudits).toHaveLength(1)
+    expect(walletAudits[0].wallet).toBe(wallet)
+    expect(walletAudits[0].policy).toBe("FIFO")
+    expect(walletAudits[0].snapshot).toBe(5)
   })
 })
