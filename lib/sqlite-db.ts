@@ -448,6 +448,29 @@ CREATE TABLE IF NOT EXISTS artist_alias_audit (
 );
 CREATE INDEX IF NOT EXISTS idx_artist_alias_audit_wallet_time
   ON artist_alias_audit (wallet, created_at DESC);
+CREATE TABLE IF NOT EXISTS wash_decisions (
+  id TEXT PRIMARY KEY,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  actor_wallet TEXT NOT NULL,
+  target_wallet TEXT,
+  decision TEXT NOT NULL,
+  reason TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wash_decisions_entity ON wash_decisions(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_wash_decisions_actor ON wash_decisions(actor_wallet, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS leaderboard_integrity_decisions (
+  id TEXT PRIMARY KEY,
+  wallet TEXT NOT NULL,
+  score REAL NOT NULL,
+  signals TEXT NOT NULL,
+  excluded INTEGER NOT NULL DEFAULT 0,
+  reason_code TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_leaderboard_integrity_wallet ON leaderboard_integrity_decisions(wallet);
 `;
 
 // Issue #89 (phase-140): `listings` predates the creator/royalty concept, so

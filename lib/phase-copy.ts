@@ -630,6 +630,7 @@ export const phaseCopy: Record<
         /** Índice 0 vacío; 1..13 = PhaseError on-chain (ver contracts/phase-protocol). */
         phaseHostContractErrors: readonly string[]
         phaseHostContractUnknown: string
+        forgeQuotaExceeded: string
       }
       placeholders: {
         collectionName: string
@@ -856,6 +857,7 @@ export const phaseCopy: Record<
       /** Índice 0 vacío; 1..13 = PhaseError on-chain. */
       phaseHostContractErrors: readonly string[]
       phaseHostContractUnknown: string
+        forgeQuotaExceeded: string
       logs: ChamberLogsCopy
       artifact: ArtifactLabelsCopy
     }
@@ -1256,6 +1258,7 @@ export const phaseCopy: Record<
           "[ PROTOCOL_HALTED: ERROR_IN_FUSION_CHAMBER ] — Check PHASELQ balance, contract IDs, IPFS config, and the browser console for the underlying error.",
         phaseHostContractErrors: PHASE_HOST_CONTRACT_ERRORS_EN,
         phaseHostContractUnknown: PHASE_HOST_CONTRACT_UNKNOWN_EN,
+        forgeQuotaExceeded: "Daily Forge quota reached for this wallet tier. Please wait for the daily reset at 00:00 UTC or upgrade your tier.",
       },
       placeholders: {
         collectionName: "Crypto-Art 2026",
@@ -1448,6 +1451,7 @@ export const phaseCopy: Record<
       paymentGateExplainer: "Pay {amount} PHASELQ to the Forge Agent — your artifact is generated and minted on the Stellar ledger automatically.",
       phaseHostContractErrors: PHASE_HOST_CONTRACT_ERRORS_EN,
       phaseHostContractUnknown: PHASE_HOST_CONTRACT_UNKNOWN_EN,
+        forgeQuotaExceeded: "Daily Forge quota reached for this wallet tier. Please wait for the daily reset at 00:00 UTC or upgrade your tier.",
       logs: {
         chamberOnline: "Chamber online — waiting for wallet…",
         walletRequest: "Connecting wallet…",
@@ -2094,6 +2098,7 @@ export const phaseCopy: Record<
           "[ PROTOCOL_HALTED: ERROR_IN_FUSION_CHAMBER ] — Revisá saldo PHASELQ, IDs de contrato, configuración IPFS y la consola del navegador para el error concreto.",
         phaseHostContractErrors: PHASE_HOST_CONTRACT_ERRORS_ES,
         phaseHostContractUnknown: PHASE_HOST_CONTRACT_UNKNOWN_ES,
+        forgeQuotaExceeded: "Cuota diaria de Forja alcanzada para el nivel de esta billetera. Espere el reinicio diario a las 00:00 UTC o mejore su nivel.",
       },
       placeholders: {
         collectionName: "Cripto-Arte 2026",
@@ -2287,6 +2292,7 @@ export const phaseCopy: Record<
       paymentGateExplainer: "Pagá {amount} PHASELQ al Forge Agent — tu artefacto se genera y se mintea en el ledger de Stellar automáticamente.",
       phaseHostContractErrors: PHASE_HOST_CONTRACT_ERRORS_ES,
       phaseHostContractUnknown: PHASE_HOST_CONTRACT_UNKNOWN_ES,
+        forgeQuotaExceeded: "Cuota diaria de Forja alcanzada para el nivel de esta billetera. Espere el reinicio diario a las 00:00 UTC o mejore su nivel.",
       logs: {
         chamberOnline: "Cámara en línea — esperando wallet…",
         walletRequest: "Conectando wallet…",
@@ -2578,4 +2584,10 @@ export function pickForgeExperimentCopy(lang: unknown, copyKey: string): ForgeEx
   const registry = pickCopy(lang).forgeExperiment.variants
   const key = copyKey.trim() || "control"
   return registry[key] ?? registry.control!
+}
+
+export function forgeQuotaErrorMessage(locale: "en" | "es" = "en"): string {
+  return locale === "es"
+    ? phaseCopyEs.forge.errors.forgeQuotaExceeded
+    : phaseCopyEn.forge.errors.forgeQuotaExceeded
 }

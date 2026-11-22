@@ -1,3 +1,4 @@
+import { isFeatureEnabled } from "@/lib/feature-flags"
 "use client"
 
 import { IpfsDisplayImg } from "@/components/ipfs-display-img"
@@ -44,6 +45,10 @@ export type PhaseProtectedPreviewLabels = {
  * against the connected viewer's own address using the same truncation.
  * UI signal only — not a security gate.
  */
+export function isPhase234Enabled(): boolean {
+  return isFeatureEnabled("phase-234")
+}
+
 export function resolvePhaseProtectedPreviewVerified(
   chainVerified: boolean | undefined,
   ownerTruncated: string | undefined,
@@ -90,16 +95,29 @@ export function PhaseProtectedPreview({ uri, className, chainVerified, ownerTrun
         className,
       )}
     >
-      <IpfsDisplayImg
-        uri={displayUri || uri}
-        className={cn(
-          "relative z-0 max-h-full max-w-full object-contain p-2 transition-[filter] duration-300",
-          verified
-            ? "max-h-[min(100%,220px)] [image-rendering:auto]"
-            : "phase-protected-preview--lowres max-h-[120px] scale-[1.35] opacity-90 [image-rendering:crisp-edges]",
-        )}
-        loading="lazy"
-      />
+      {isPhase234Enabled() && !verified ? (
+        <div className="relative z-0 flex h-full w-full items-center justify-center bg-black/60 backdrop-blur-xl p-4 text-center">
+          <div className="flex flex-col items-center gap-1.5">
+            <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-amber-400/90 border border-amber-500/40 bg-amber-950/60 px-2 py-1">
+              PREVIEW LOCKED · VIEWER GRANT REQUIRED
+            </span>
+            <span className="font-mono text-[7px] text-zinc-400">
+              Protected content withheld until viewer signature verified
+            </span>
+          </div>
+        </div>
+      ) : (
+        <IpfsDisplayImg
+          uri={displayUri || uri}
+          className={cn(
+            "relative z-0 max-h-full max-w-full object-contain p-2 transition-[filter] duration-300",
+            verified
+              ? "max-h-[min(100%,220px)] [image-rendering:auto]"
+              : "phase-protected-preview--lowres max-h-[120px] scale-[1.35] opacity-90 [image-rendering:crisp-edges]",
+          )}
+          loading="lazy"
+        />
+      )}
       {isDelta ? (
         <div className="pointer-events-none absolute left-1.5 top-1.5 z-[4] rounded-sm border border-cyan-500/40 bg-black/80 px-1 py-0.5 font-mono text-[6px] font-bold uppercase tracking-widest text-cyan-300/90">
           Δ off-chain
