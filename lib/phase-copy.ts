@@ -874,6 +874,50 @@ export const phaseCopy: Record<
     dependencyCadence: Record<"title" | "sdkAligned" | "skewDetected" | "bytecodeGateBlocked", string>
     searchAnalytics: Record<"zeroResultsTitle" | "zeroResultsHint" | "didYouMean" | "clickthroughLabel" | "zeroResultRateLabel" | "typoSuccessLabel", string>
     loreVersioning: Record<"historyTitle" | "versionLabel" | "rollbackAction" | "rolledBackFrom" | "conflictError" | "authorProofLabel", string>
+    gasEstimatePreview: Record<
+      | "title"
+      | "estimatedFeeLabel"
+      | "maxBoundLabel"
+      | "baseFeeLabel"
+      | "resourceFeeLabel"
+      | "updatedAtLabel"
+      | "staleBadge"
+      | "refreshAction"
+      | "simulatingLabel"
+      | "fallbackNotice"
+      | "disclaimer",
+      string
+    >
+    referralQuest: Record<
+      | "title"
+      | "subtitle"
+      | "issueCodeAction"
+      | "enrollAction"
+      | "codeLabel"
+      | "selfReferralError"
+      | "alreadyEnrolledError"
+      | "codeUsedError"
+      | "capReachedError"
+      | "versionConflictError"
+      | "authRequiredError"
+      | "enrolledSuccess",
+      string
+    >
+    watchlist: Record<
+      | "title"
+      | "emptyState"
+      | "addAction"
+      | "removeAction"
+      | "targetPriceLabel"
+      | "dropPctLabel"
+      | "armedStatus"
+      | "alertedStatus"
+      | "alertTitle"
+      | "alertBody"
+      | "conflictError"
+      | "authRequiredError",
+      string
+    >
   }
 > = {
   en: {
@@ -1711,6 +1755,47 @@ export const phaseCopy: Record<
       rolledBackFrom: "Restored from v{version}",
       conflictError: "Edit conflict: narrative was updated by another collaborator (409).",
       authorProofLabel: "Author proof",
+    },
+    gasEstimatePreview: {
+      title: "Estimated Network Fee",
+      estimatedFeeLabel: "Estimated fee",
+      maxBoundLabel: "Bounded max",
+      baseFeeLabel: "Base fee",
+      resourceFeeLabel: "Soroban resource fee",
+      updatedAtLabel: "Simulated {seconds}s ago",
+      staleBadge: "Estimate may be stale — refresh before signing",
+      refreshAction: "Re-simulate",
+      simulatingLabel: "Simulating transaction…",
+      fallbackNotice: "Live simulation unavailable ({reason}). Showing conservative bounded fallback.",
+      disclaimer: "Estimate only — not a guarantee. Final network fee is determined by the Stellar ledger at execution.",
+    },
+    referralQuest: {
+      title: "Referral Quest",
+      subtitle: "Share a one-use signed referral code. Attribution is bound to your SEP-10 session wallet.",
+      issueCodeAction: "Generate one-use code",
+      enrollAction: "Claim referral",
+      codeLabel: "Referral code",
+      selfReferralError: "Self-referral is not allowed.",
+      alreadyEnrolledError: "This wallet has already enrolled in a referral quest.",
+      codeUsedError: "This one-use referral code has already been redeemed.",
+      capReachedError: "Referrer has reached the maximum reward cap.",
+      versionConflictError: "Referral state changed concurrently (409). Please retry.",
+      authRequiredError: "Connect and verify your SEP-10 wallet session first.",
+      enrolledSuccess: "Referral attributed and bonus recorded.",
+    },
+    watchlist: {
+      title: "Watchlist & Price-Drop Alerts",
+      emptyState: "No watched artifacts yet. Add a token to get notified when its price drops.",
+      addAction: "Watch item",
+      removeAction: "Remove",
+      targetPriceLabel: "Target price (PHASELQ)",
+      dropPctLabel: "Drop threshold (%)",
+      armedStatus: "Armed",
+      alertedStatus: "Alerted",
+      alertTitle: "Price drop alert for {token}",
+      alertBody: "Price dropped from {previousPrice} to {newPrice} PHASELQ (-{dropPct}%).",
+      conflictError: "Watchlist changed concurrently (409). Please refresh and retry.",
+      authRequiredError: "Connect and verify your SEP-10 wallet session to manage your watchlist.",
     },
   },
 
@@ -2552,6 +2637,47 @@ export const phaseCopy: Record<
       rolledBackFrom: "Restaurada desde v{version}",
       conflictError: "Conflicto de edición: la narrativa fue actualizada por otro colaborador (409).",
       authorProofLabel: "Prueba de autoría",
+    },
+    gasEstimatePreview: {
+      title: "Tarifa de Red Estimada",
+      estimatedFeeLabel: "Tarifa estimada",
+      maxBoundLabel: "Máximo acotado",
+      baseFeeLabel: "Tarifa base",
+      resourceFeeLabel: "Tarifa de recursos Soroban",
+      updatedAtLabel: "Simulado hace {seconds}s",
+      staleBadge: "La estimación puede estar desactualizada — volvé a simular antes de firmar",
+      refreshAction: "Re-simular",
+      simulatingLabel: "Simulando transacción…",
+      fallbackNotice: "Simulación en vivo no disponible ({reason}). Mostrando estimación acotada de respaldo.",
+      disclaimer: "Solo una estimación — no es una garantía. La tarifa final la determina el ledger de Stellar al ejecutarse.",
+    },
+    referralQuest: {
+      title: "Misión de Referidos",
+      subtitle: "Compartí un código de un solo uso. La atribución queda vinculada a tu sesión SEP-10.",
+      issueCodeAction: "Generar código de un solo uso",
+      enrollAction: "Reclamar referido",
+      codeLabel: "Código de referido",
+      selfReferralError: "No podés referirte a vos mismo.",
+      alreadyEnrolledError: "Esta billetera ya participó en una misión de referidos.",
+      codeUsedError: "Este código de referido de un solo uso ya fue utilizado.",
+      capReachedError: "El referente alcanzó el límite máximo de recompensas.",
+      versionConflictError: "El estado de referidos cambió concurrentemente (409). Intentá de nuevo.",
+      authRequiredError: "Conectá y verificá tu sesión de billetera SEP-10 primero.",
+      enrolledSuccess: "Referido atribuido y bonificación registrada.",
+    },
+    watchlist: {
+      title: "Lista de Seguimiento y Alertas de Precio",
+      emptyState: "Todavía no seguís ningún artefacto. Agregá un token para recibir alertas de baja.",
+      addAction: "Seguir ítem",
+      removeAction: "Quitar",
+      targetPriceLabel: "Precio objetivo (PHASELQ)",
+      dropPctLabel: "Umbral de baja (%)",
+      armedStatus: "Activa",
+      alertedStatus: "Alertada",
+      alertTitle: "Alerta de baja de precio para {token}",
+      alertBody: "El precio bajó de {previousPrice} a {newPrice} PHASELQ (-{dropPct}%).",
+      conflictError: "La lista cambió concurrentemente (409). Actualizá e intentá de nuevo.",
+      authRequiredError: "Conectá y verificá tu sesión SEP-10 para gestionar tu lista.",
     },
   },
 

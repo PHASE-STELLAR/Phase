@@ -88,6 +88,91 @@ async function testDesignTokenModule() {
   console.log("✓ design-token registry loads & resolves monitor theme")
 }
 
+async function testPhase260DeterministicTokensAndFallback() {
+  const { monitorTheme, computeOgThemeDigest } = await import("@/lib/og-design-tokens")
+  const {
+    clearOgImageCache,
+    computeOgInputDigest,
+    isOgDesignTokensEnabled,
+    renderOgWithTimeoutAndCache,
+    renderStaticFallbackTemplate,
+  } = await import("@/lib/og-render-utils")
+
+  // 1. Flag off = static template image
+  delete process.env.NEXT_PUBLIC_FEATURE_PHASE_260
+  delete process.env.FEATURE_PHASE_260
+  assert.equal(isOgDesignTokensEnabled(), false)
+  clearOgImageCache()
+
+  const staticBuf = await renderStaticFallbackTemplate(monitorTheme)
+  const flagOffRes = await renderOgWithTimeoutAndCache({
+    surface: "chamber",
+    theme: monitorTheme,
+    params: { kind: "token", tokenId: 42 },
+    render: async () => Buffer.from("should-not-run"),
+  })
+  assert.equal(flagOffRes.fallbackReason, "flag_disabled")
+  assert.equal(Buffer.compare(flagOffRes.buffer, staticBuf), 0)
+
+  // 2. Flag on: identical inputs yield identical images & digest cache hit
+  process.env.NEXT_PUBLIC_FEATURE_PHASE_260 = "1"
+  assert.equal(isOgDesignTokensEnabled(), true)
+  clearOgImageCache()
+
+  let renderCount = 0
+  const first = await renderOgWithTimeoutAndCache({
+    surface: "profile",
+    theme: monitorTheme,
+    params: { wallet: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF" },
+    render: async () => {
+      renderCount += 1
+      return staticBuf
+    },
+  })
+  const second = await renderOgWithTimeoutAndCache({
+    surface: "profile",
+    theme: monitorTheme,
+    params: { wallet: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF" },
+    render: async () => {
+      renderCount += 1
+      return Buffer.from("different")
+    },
+  })
+  assert.equal(renderCount, 1)
+  assert.equal(first.cacheHit, false)
+  assert.equal(second.cacheHit, true)
+  assert.equal(first.digest, second.digest)
+  assert.equal(Buffer.compare(first.buffer, second.buffer), 0)
+
+  // 3. Token changes affect all surfaces
+  const modifiedTheme = {
+    ...monitorTheme,
+    colors: { ...monitorTheme.colors, primary: "#00ff88" },
+  }
+  assert.notEqual(computeOgThemeDigest(monitorTheme), computeOgThemeDigest(modifiedTheme))
+  assert.notEqual(
+    computeOgInputDigest({ surface: "chamber", theme: monitorTheme, params: { tokenId: 1 } }),
+    computeOgInputDigest({ surface: "chamber", theme: modifiedTheme, params: { tokenId: 1 } }),
+  )
+  assert.notEqual(
+    computeOgInputDigest({ surface: "profile", theme: monitorTheme, params: { wallet: "GAAA" } }),
+    computeOgInputDigest({ surface: "profile", theme: modifiedTheme, params: { wallet: "GAAA" } }),
+  )
+
+  // 4. Generation timeout falls back to static template
+  clearOgImageCache()
+  const timedOut = await renderOgWithTimeoutAndCache({
+    surface: "chamber",
+    theme: monitorTheme,
+    params: { kind: "token", tokenId: 999 },
+    timeoutMs: 10,
+    render: () => new Promise<Buffer>((resolve) => setTimeout(() => resolve(Buffer.from("late")), 200)),
+  })
+  assert.equal(timedOut.fallbackReason, "timeout")
+  assert.equal(Buffer.compare(timedOut.buffer, staticBuf), 0)
+  console.log("✓ phase-260 deterministic tokens, digest cache, timeout & flag-off fallback verified")
+}
+
 async function main() {
   console.log("=== integration tests ===")
   await testOgTemplateExists()
@@ -97,6 +182,7 @@ async function main() {
   await testRouteImportsDoNotThrow()
   await testDesignTokenWiring()
   await testDesignTokenModule()
+  await testPhase260DeterministicTokensAndFallback()
   console.log("=== integration all passed ===")
 }
 

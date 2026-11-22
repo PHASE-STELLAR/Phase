@@ -6,6 +6,7 @@
  * across the route files into typed, validated design tokens. Changing a
  * theme is now a single-point edit instead of hunting through route bodies.
  */
+import { createHash } from "node:crypto"
 import { z } from "zod"
 
 // ─── Raw color tokens ─────────────────────────────────────────────────────────
@@ -48,6 +49,37 @@ export const OgCanvasSchema = z.object({
 
 export type OgCanvas = z.infer<typeof OgCanvasSchema>
 
+export const OgChamberSurfaceTokensSchema = z.object({
+  badgeWidth: z.number().int().positive(),
+  nameHeight: z.number().int().positive(),
+  collectionNameHeight: z.number().int().positive(),
+  nameLetterSpacing: z.number().nonnegative(),
+  chartWidth: z.number().int().positive(),
+  chartHeight: z.number().int().positive(),
+  chartRightOffset: z.number().int().positive(),
+  chartBottomOffset: z.number().int().positive(),
+  chartPadding: z.number().int().nonnegative(),
+  chartStrokeWidth: z.number().positive(),
+})
+
+export const OgProfileSurfaceTokensSchema = z.object({
+  paddingX: z.number().int().nonnegative(),
+  phaseTop: z.number().int().nonnegative(),
+  phaseFontSize: z.number().positive(),
+  nameOffsetY: z.number().int(),
+  nameFontSize: z.number().positive(),
+  maxNameChars: z.number().int().positive(),
+  addrOffsetY: z.number().int(),
+  addrFontSize: z.number().positive(),
+  handlesBottomOffset: z.number().int().nonnegative(),
+  handlesFontSize: z.number().positive(),
+  chartWidth: z.number().int().positive(),
+  chartHeight: z.number().int().positive(),
+  chartRightOffset: z.number().int().positive(),
+  chartTop: z.number().int().nonnegative(),
+  chartPadding: z.number().int().nonnegative(),
+})
+
 export const OgDimensionTokensSchema = z.object({
   canvas: OgCanvasSchema,
   nameTop: z.number().int(),
@@ -60,6 +92,8 @@ export const OgDimensionTokensSchema = z.object({
   nftWidth: z.number().int().positive(),
   nftHeight: z.number().int().positive(),
   maxNameChars: z.number().int().positive(),
+  chamber: OgChamberSurfaceTokensSchema.optional(),
+  profile: OgProfileSurfaceTokensSchema.optional(),
 })
 
 export type OgDimensionTokens = z.infer<typeof OgDimensionTokensSchema>
@@ -109,6 +143,35 @@ export const monitorTheme: OgTheme = {
     nftWidth: 150,
     nftHeight: 210,
     maxNameChars: 30,
+    chamber: {
+      badgeWidth: 160,
+      nameHeight: 28,
+      collectionNameHeight: 32,
+      nameLetterSpacing: 3,
+      chartWidth: 200,
+      chartHeight: 80,
+      chartRightOffset: 220,
+      chartBottomOffset: 100,
+      chartPadding: 10,
+      chartStrokeWidth: 2,
+    },
+    profile: {
+      paddingX: 60,
+      phaseTop: 60,
+      phaseFontSize: 11,
+      nameOffsetY: -40,
+      nameFontSize: 32,
+      maxNameChars: 28,
+      addrOffsetY: 16,
+      addrFontSize: 13,
+      handlesBottomOffset: 80,
+      handlesFontSize: 11,
+      chartWidth: 180,
+      chartHeight: 60,
+      chartRightOffset: 200,
+      chartTop: 60,
+      chartPadding: 5,
+    },
   },
   canvasBackground: { r: 9, g: 9, b: 11, alpha: 1 },
   accentStrip: { r: 139, g: 92, b: 246, alpha: 1 },
@@ -146,6 +209,32 @@ export function getOgTheme(id?: string | null): OgTheme {
     if (theme) return theme
   }
   return monitorTheme
+}
+
+/** Convert an RgbaToken into a CSS rgba(...) string for SVG/markup. */
+export function rgbaToCss(token: RgbaToken): string {
+  return `rgba(${token.r}, ${token.g}, ${token.b}, ${token.alpha})`
+}
+
+function sortKeysCanonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeysCanonical)
+  if (value && typeof value === "object") {
+    const sorted: Record<string, unknown> = {}
+    for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+      sorted[k] = sortKeysCanonical((value as Record<string, unknown>)[k])
+    }
+    return sorted
+  }
+  return value
+}
+
+/**
+ * Deterministic SHA-256 digest of a theme token table. Any token edit changes
+ * this digest across all OG surfaces so cached renders are invalidated cleanly.
+ */
+export function computeOgThemeDigest(theme: OgTheme): string {
+  const canonical = JSON.stringify(sortKeysCanonical(theme))
+  return createHash("sha256").update(canonical).digest("hex")
 }
 
 /** Returns the full set of currently registered theme ids (for tests/observability). */

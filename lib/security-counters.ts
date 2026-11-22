@@ -156,6 +156,8 @@ export const SECURITY_COUNTER_REGISTRY = {
   winback_dormant_detected: { surface: "growth", reasons: NO_REASONS },
   winback_experiment_dispatched: { surface: "growth", reasons: NO_REASONS },
   winback_fatigue_suppressed: { surface: "growth", reasons: NO_REASONS },
+  referral_quest_code_issued: { surface: "growth", reasons: NO_REASONS },
+  referral_quest_enrollment: { surface: "growth", reasons: REFERRAL_QUEST_REASONS },
   ve_lock_created: { surface: "governance", reasons: NO_REASONS },
   ve_lock_extended: { surface: "governance", reasons: NO_REASONS },
   ve_fee_distributed: { surface: "governance", reasons: NO_REASONS },
