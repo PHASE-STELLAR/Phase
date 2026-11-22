@@ -26,7 +26,7 @@ import {
   TransactionBuilder,
   nativeToScVal,
 } from "@stellar/stellar-sdk";
-import { incSecurityCounter } from "@/lib/security-counters";
+import { incSecurityCounter } from "./security-counters";
 import {
   CANONICAL_SOROBAN_ABI_VERSION,
   CANONICAL_SOROBAN_SDK_MAJOR,
@@ -35,7 +35,7 @@ import {
   CANONICAL_WASM_TARGET,
   flag175RollbackNote,
   isDependencyCadenceEnabled,
-} from "@/lib/dependency-cadence-shared";
+} from "./dependency-cadence-shared";
 
 export {
   CANONICAL_SOROBAN_ABI_VERSION,

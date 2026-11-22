@@ -4,7 +4,7 @@
  * `lib/phase-protocol.ts`, loaded by client and edge code, stays Node-free.
  */
 
-import { flagRollbackNote, isFeatureEnabled } from "@/lib/feature-flags";
+import { flagRollbackNote, isFeatureEnabled } from "./feature-flags";
 
 export const CANONICAL_WASM_TARGET = "wasm32-unknown-unknown" as const;
 export const CANONICAL_SOROBAN_SDK_MAJOR = 22 as const;

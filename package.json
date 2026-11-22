@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "deps:cadence": "tsx scripts/check-dependency-cadence.ts",
+    "mainnet:cutover": "tsx scripts/mainnet-cutover.ts",
     "env:check": "tsx scripts/check-env-coverage.cts",
     "env:docs": "tsx scripts/check-env-coverage.cts --write",
     "edge:check": "tsx scripts/check-edge-runtime.cts",
