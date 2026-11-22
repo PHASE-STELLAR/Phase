@@ -88,6 +88,7 @@ import { incSecurityCounter } from "@/lib/security-counters"
  * - phase-171: backup and disaster-recovery snapshots for sidecars, SQLite and the secrets map (spike 605 / issue #469)
  * - phase-172: SQLite to Postgres migration rehearsal with dual-write, parity and rollback (spike 604 / issue #468)
  * - phase-173: Vercel preview-environment isolation for data roots, secrets, contracts and cron (spike 603 / issue #467)
+ * - phase-228: per-PR Soroban contract deploy, preview CI job, branch-DB seeding and env collision guard (issue #655)
  * - phase-178: leaderboard integrity with anti-farm scoring, time decay and sybil discount (spike 616 / issue #479)
  * - phase-179: data retention and GDPR erasure with TTL sweeps and wallet deletion (spike 617 / issue #480)
  * - phase-180: analytics warehouse export with Parquet and NDJSON, schema-versioned and redacted (spike 618 / issue #481)
@@ -271,6 +272,7 @@ export type PhaseFeatureFlag =
   | "phase-287"
   | "phase-288"
   | "phase-289"
+  | "phase-228"
   | "phase-251"
   | "phase-252"
   | "phase-248"
@@ -410,6 +412,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-287": ["NEXT_PUBLIC_FEATURE_PHASE_287", "FEATURE_PHASE_287"],
   "phase-288": ["NEXT_PUBLIC_FEATURE_PHASE_288", "FEATURE_PHASE_288"],
   "phase-289": ["NEXT_PUBLIC_FEATURE_PHASE_289", "FEATURE_PHASE_289"],
+  "phase-228": ["NEXT_PUBLIC_FEATURE_PHASE_228", "FEATURE_PHASE_228"],
   "phase-251": ["NEXT_PUBLIC_FEATURE_PHASE_251", "FEATURE_PHASE_251"],
   "phase-252": ["NEXT_PUBLIC_FEATURE_PHASE_252", "FEATURE_PHASE_252"],
   "phase-248": ["NEXT_PUBLIC_FEATURE_PHASE_248", "FEATURE_PHASE_248"],
@@ -540,6 +543,7 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-287",
   "phase-288",
   "phase-289",
+  "phase-228",
   "phase-251",
   "phase-252",
   "phase-248",
