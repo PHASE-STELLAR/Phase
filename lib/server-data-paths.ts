@@ -63,6 +63,7 @@ const FILES = {
   artifactMetadataDrafts: "artifact-metadata-drafts.json",
   bountyClaimLedger: "bounty-claim-ledger.json",
   pushEventDedupe: "push-event-dedupe.json",
+  fractionalListings: "fractional-listings.json",
 } as const
 
 
