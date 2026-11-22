@@ -348,6 +348,10 @@ export const SECURITY_COUNTER_REGISTRY = {
   x402_replay_rejected: { surface: "operations", reasons: NO_REASONS },
   nft_index_invalidated: { surface: "operations", reasons: NO_REASONS },
   nft_index_event_malformed: { surface: "operations", reasons: NO_REASONS },
+  sep41_allowance_read: { surface: "liquidity", reasons: NO_REASONS },
+  sep41_balance_read: { surface: "liquidity", reasons: NO_REASONS },
+  sep41_sac_misuse_blocked: { surface: "liquidity", reasons: NO_REASONS },
+  sep41_tx_proof_recorded: { surface: "liquidity", reasons: NO_REASONS },
 } as const satisfies Record<string, CounterSpec>
 
 export type SecurityCounterName = keyof typeof SECURITY_COUNTER_REGISTRY
