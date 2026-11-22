@@ -208,3 +208,41 @@ export const FetchDeltaQuerySchema = z.object({
   tokenId: z.coerce.number().int().min(1),
   c: z.string().length(56).regex(/^C[A-Z2-7]{55}$/).optional(),
 })
+
+export type ReconstructResult =
+  | { ok: true; metadata: Record<string, unknown>; degraded?: boolean }
+  | { ok: false; error: string; code: "FLAG_DISABLED" | "DIGEST_MISMATCH" | "TAMPERED_DELTA" }
+
+export function reconstructMetadata(
+  baseMetadata: Record<string, unknown>,
+  delta: Record<string, unknown> | null | undefined,
+  committedDigest: string,
+): ReconstructResult {
+  if (!isFeatureEnabled("phase-122")) {
+    return { ok: false, error: "Off-chain delta storage is disabled (phase-122 flag off).", code: "FLAG_DISABLED" }
+  }
+
+  // Missing delta degrades cleanly to base metadata
+  if (!delta || Object.keys(delta).length === 0) {
+    const baseDigest = sha256Hex(stableStringify(baseMetadata))
+    if (committedDigest && baseDigest !== committedDigest) {
+      // Degraded state: delta missing, return base
+      return { ok: true, metadata: baseMetadata, degraded: true }
+    }
+    return { ok: true, metadata: baseMetadata, degraded: true }
+  }
+
+  // Reconstruct by merging delta onto base
+  const reconstructed = { ...baseMetadata, ...delta }
+  const computedDigest = sha256Hex(stableStringify(reconstructed))
+
+  if (committedDigest && computedDigest !== committedDigest) {
+    return {
+      ok: false,
+      error: `Reconstructed metadata digest mismatch: expected ${committedDigest.slice(0, 8)}… got ${computedDigest.slice(0, 8)}…`,
+      code: "DIGEST_MISMATCH",
+    }
+  }
+
+  return { ok: true, metadata: reconstructed }
+}
