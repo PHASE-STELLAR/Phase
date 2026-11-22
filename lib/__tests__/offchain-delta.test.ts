@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from "vitest"
 import * as assert from "node:assert/strict"
-import { computeDeltaHash, buildOnChainStub, parseOnChainStub, storeOffchainDelta, fetchOffchainDelta, clearDeltaMemoryStore } from "@/lib/offchain-delta"
+import { computeDeltaHash, buildOnChainStub, parseOnChainStub, storeOffchainDelta, fetchOffchainDelta, clearDeltaMemoryStore, reconstructMetadata } from "@/lib/offchain-delta"
 
 describe("phase-122 off-chain delta", () => {
   beforeEach(() => {
@@ -39,6 +39,37 @@ describe("phase-122 off-chain delta", () => {
     const fetched = await fetchOffchainDelta(contractId, tokenId)
     assert.equal(fetched.ok, true)
     if (fetched.ok) assert.deepEqual(fetched.data, payload)
+  })
+
+  it("reconstructs metadata and verifies against committed digest", () => {
+    const base = { name: "Artifact #1", description: "Base" }
+    const delta = { description: "Updated via delta", attributes: [{ trait: "rare" }] }
+    const expected = { ...base, ...delta }
+    const digest = computeDeltaHash(expected)
+
+    const res = reconstructMetadata(base, delta, digest)
+    assert.equal(res.ok, true)
+    if (res.ok) assert.deepEqual(res.metadata, expected)
+  })
+
+  it("fails closed on reconstructed digest mismatch or tampered delta", () => {
+    const base = { name: "Artifact #1", description: "Base" }
+    const tamperedDelta = { description: "Tampered" }
+    const digest = "0".repeat(64)
+
+    const res = reconstructMetadata(base, tamperedDelta, digest)
+    assert.equal(res.ok, false)
+    if (!res.ok) assert.equal(res.code, "DIGEST_MISMATCH")
+  })
+
+  it("missing delta cleanly degrades to base metadata", () => {
+    const base = { name: "Artifact #1", description: "Base" }
+    const res = reconstructMetadata(base, null, "")
+    assert.equal(res.ok, true)
+    if (res.ok) {
+      assert.deepEqual(res.metadata, base)
+      assert.equal(res.degraded, true)
+    }
   })
 
   it("detects hash mismatch", async () => {
