@@ -32,5 +32,16 @@
     "networkError": "Network error. Please check your connection.",
     "unknownError": "An unknown error occurred",
     "walletRequired": "Please connect your wallet to continue"
+  },
+  "royalty": {
+    "label": "Creator Royalty",
+    "bpsLabel": "Royalty (basis points)",
+    "bpsHint": "0–10 000 basis points (100 bps = 1 %)",
+    "creatorWalletLabel": "Creator Wallet",
+    "creatorWalletHint": "Original minter's Stellar public key",
+    "splitSummary": "{{royaltyPct}}% goes to the creator · {{sellerPct}}% goes to you",
+    "primarySale": "Primary sale — no royalty deducted",
+    "payoutRecorded": "Royalty payout recorded",
+    "disabled": "Royalty enforcement is not enabled on this platform"
   }
 }

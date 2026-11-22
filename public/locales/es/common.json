@@ -32,5 +32,16 @@
     "networkError": "Error de red. Por favor verifica tu conexión.",
     "unknownError": "Ocurrió un error desconocido",
     "walletRequired": "Por favor conecta tu billetera para continuar"
+  },
+  "royalty": {
+    "label": "Regalía del Creador",
+    "bpsLabel": "Regalía (puntos base)",
+    "bpsHint": "0–10 000 puntos base (100 pb = 1 %)",
+    "creatorWalletLabel": "Billetera del Creador",
+    "creatorWalletHint": "Clave pública Stellar del acuñador original",
+    "splitSummary": "{{royaltyPct}}% para el creador · {{sellerPct}}% para ti",
+    "primarySale": "Venta primaria — sin regalía deducida",
+    "payoutRecorded": "Pago de regalía registrado",
+    "disabled": "La aplicación de regalías no está habilitada en esta plataforma"
   }
 }
