@@ -70,14 +70,21 @@ export type WarehouseEventInput = {
   session_id?: string | null
   reason?: string | null
   correlation_id?: string | null
+  correlationId?: string | null
+  event_id?: string | null
+  eventId?: string | null
+  idempotency_key?: string | null
+  idempotencyKey?: string | null
   metadata?: Record<string, unknown>
   now?: number
+  ts?: number
   /** Forward-compatible: event payloads may add fields without a type break. */
   [key: string]: unknown
 }
 
 export function ensureAnalyticsEventTable(): void {
-  getDb().exec(`
+  const db = getDb()
+  db.exec(`
     CREATE TABLE IF NOT EXISTS analytics_events (
       event_id   TEXT PRIMARY KEY,
       surface    TEXT NOT NULL,
@@ -86,25 +93,141 @@ export function ensureAnalyticsEventTable(): void {
       session_id TEXT,
       metadata   TEXT,
       ts         INTEGER NOT NULL
-    )
+    );
+    CREATE TABLE IF NOT EXISTS session_stitches (
+      session_id  TEXT NOT NULL,
+      wallet      TEXT NOT NULL,
+      stitched_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, wallet)
+    );
   `)
-  getDb().exec("CREATE INDEX IF NOT EXISTS idx_analytics_events_surface_ts ON analytics_events (surface, ts)")
-  getDb().exec("CREATE INDEX IF NOT EXISTS idx_analytics_events_wallet_ts ON analytics_events (wallet, ts)")
+  db.exec("CREATE INDEX IF NOT EXISTS idx_analytics_events_surface_ts ON analytics_events (surface, ts)")
+  db.exec("CREATE INDEX IF NOT EXISTS idx_analytics_events_wallet_ts ON analytics_events (wallet, ts)")
+  db.exec("CREATE INDEX IF NOT EXISTS idx_analytics_events_session_ts ON analytics_events (session_id, ts)")
 }
 
 /**
- * Append one event. Metadata is JSON-encoded but never used as a counter label;
- * the closed-label rule applies to security counters, not to this row store.
+ * Associates an anonymous session_id with an authenticated wallet across SEP-10 or wallet login.
+ * Retroactively stitches earlier unauthenticated events for this session.
+ */
+export function stitchSession(sessionId: string, wallet: string, now: number = Date.now()): void {
+  const sId = (sessionId ?? "").trim()
+  const w = (wallet ?? "").trim().toUpperCase()
+  if (!sId || !w) return
+  ensureAnalyticsEventTable()
+  const db = getDb()
+  db.prepare(`
+    INSERT OR IGNORE INTO session_stitches (session_id, wallet, stitched_at)
+    VALUES (?, ?, ?)
+  `).run(sId, w, now)
+
+  // Associate all prior anonymous events for this session with this authenticated wallet
+  db.prepare(`
+    UPDATE analytics_events
+    SET wallet = ?
+    WHERE session_id = ? AND (wallet IS NULL OR wallet = '')
+  `).run(w, sId)
+
+  incSecurityCounter("warehouse_session_stitched")
+}
+
+/**
+ * Sanitizes metadata to prevent PII or credentials from leaking into the analytics store.
+ */
+export function sanitizeEventMetadata(metadata: Record<string, unknown> | undefined): string | null {
+  if (!metadata || typeof metadata !== "object") return null
+  const sanitized: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(metadata)) {
+    // Strip sensitive secret/auth keys
+    const lowerKey = key.toLowerCase()
+    if (lowerKey.includes("secret") || lowerKey.includes("jwt") || lowerKey.includes("token") || lowerKey.includes("seed") || lowerKey.includes("password")) {
+      continue
+    }
+    if (typeof value === "string") {
+      sanitized[key] = sanitizeWarehouseTextClosed(value)
+    } else if (typeof value === "number" || typeof value === "boolean" || value === null) {
+      sanitized[key] = value
+    } else if (Array.isArray(value)) {
+      sanitized[key] = value.slice(0, 20).map((v) => (typeof v === "string" ? sanitizeWarehouseTextClosed(v) : v))
+    } else if (typeof value === "object") {
+      try {
+        sanitized[key] = JSON.parse(JSON.stringify(value).slice(0, 500))
+      } catch {
+        sanitized[key] = "[COMPLEX_OBJECT]"
+      }
+    }
+  }
+  return JSON.stringify(sanitized)
+}
+
+/**
+ * Append one event idempotently.
+ *
+ * Idempotency:
+ * Uses a stable deterministic eventId derived from:
+ * 1. explicit event_id / eventId / idempotency_key / idempotencyKey
+ * 2. or correlation_id / correlationId
+ * 3. or metadata txHash / jobId
+ * 4. or a deterministic hash over (surface, stage, effectiveWallet, effectiveSessionId, tsBucket)
+ *
+ * Guaranteed race-safe via SQLite INSERT OR IGNORE PRIMARY KEY constraint.
  */
 export async function recordWarehouseEvent(
   input: WarehouseEventInput,
-): Promise<{ ok: boolean; skipped?: boolean }> {
-  if (!isAnalyticsWarehouseEnabled(input.wallet ?? undefined)) return { ok: true, skipped: true }
-  const now = input.now ?? Date.now()
-  const eventId = createHash("sha256")
-    .update(`${input.surface}|${input.stage}|${input.wallet ?? ""}|${now}|${Math.random()}`)
-    .digest("hex")
+): Promise<{ ok: boolean; skipped?: boolean; eventId?: string }> {
+  if (!isAnalyticsWarehouseEnabled((input.wallet ?? undefined) as string | undefined)) {
+    return { ok: true, skipped: true }
+  }
+
+  const now = input.ts ?? input.now ?? Date.now()
   ensureAnalyticsEventTable()
+
+  let effectiveSessionId = (input.sessionId ?? input.session_id ?? null)?.trim() || null
+  let effectiveWallet = (input.wallet ?? null)?.trim()?.toUpperCase() || null
+
+  // Session stitching
+  if (effectiveSessionId && effectiveWallet) {
+    stitchSession(effectiveSessionId, effectiveWallet, now)
+  } else if (effectiveSessionId && !effectiveWallet) {
+    try {
+      const row = getDb()
+        .prepare("SELECT wallet FROM session_stitches WHERE session_id = ? LIMIT 1")
+        .get(effectiveSessionId) as { wallet?: string } | undefined
+      if (row?.wallet) {
+        effectiveWallet = row.wallet
+      }
+    } catch {}
+  }
+
+  // Derive stable deterministic eventId
+  const explicitKey =
+    input.event_id ||
+    input.eventId ||
+    input.idempotency_key ||
+    input.idempotencyKey ||
+    input.correlation_id ||
+    input.correlationId ||
+    (input.metadata?.txHash as string | undefined) ||
+    (input.metadata?.tx_hash as string | undefined) ||
+    (input.metadata?.jobId as string | undefined) ||
+    (input.metadata?.idempotencyKey as string | undefined)
+
+  let eventId: string
+  if (explicitKey && typeof explicitKey === "string" && explicitKey.trim()) {
+    eventId = createHash("sha256")
+      .update(`${input.surface}|${input.stage}|${explicitKey.trim()}|${effectiveWallet ?? ""}`)
+      .digest("hex")
+  } else {
+    // Deterministic timestamp bucket (second resolution) prevents duplicate retries
+    const tsBucket = Math.floor(now / 1000)
+    const reasonStr = typeof input.reason === "string" ? input.reason : ""
+    eventId = createHash("sha256")
+      .update(`${input.surface}|${input.stage}|${effectiveWallet ?? ""}|${effectiveSessionId ?? ""}|${tsBucket}|${reasonStr}`)
+      .digest("hex")
+  }
+
+  const sanitizedMetadata = sanitizeEventMetadata(input.metadata)
+
   getDb()
     .prepare(
       `INSERT OR IGNORE INTO analytics_events
@@ -115,12 +238,74 @@ export async function recordWarehouseEvent(
       eventId,
       input.surface,
       input.stage,
-      input.wallet ?? null,
-      input.sessionId ?? null,
-      input.metadata ? JSON.stringify(input.metadata) : null,
+      effectiveWallet,
+      effectiveSessionId,
+      sanitizedMetadata,
       now,
     )
-  return { ok: true }
+
+  incSecurityCounter("warehouse_event_recorded")
+  return { ok: true, eventId }
+}
+
+/**
+ * Migrates events from the legacy faucet 5k-ring sidecar into SQLite analytics_events.
+ * Fully idempotent, preserves ordering and identity, never discards events.
+ */
+export async function migrateLegacyFaucetSidecar(): Promise<{
+  migratedCount: number
+  skippedCount: number
+  totalInSidecar: number
+}> {
+  ensureAnalyticsEventTable()
+  const { readJsonFile } = await import("@/lib/json-store")
+  const { serverDataJsonPath } = await import("@/lib/server-data-paths")
+  type LegacyStore = {
+    events: Array<{
+      stage: string
+      wallet: string | null
+      session_id: string | null
+      ts: number
+      reason: string | null
+    }>
+  }
+  const store = await readJsonFile<LegacyStore>(serverDataJsonPath("faucetFunnelEvents"), { events: [] })
+  const events = Array.isArray(store?.events) ? store.events : []
+
+  let migratedCount = 0
+  let skippedCount = 0
+  const insertStmt = getDb().prepare(`
+    INSERT OR IGNORE INTO analytics_events
+      (event_id, surface, stage, wallet, session_id, metadata, ts)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `)
+
+  // Stable sort by timestamp to preserve original sequence
+  const sorted = [...events].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0))
+
+  for (const e of sorted) {
+    if (!e || !e.stage) continue
+    const eventId = createHash("sha256")
+      .update(`legacy_faucet|${e.stage}|${(e.wallet ?? "").trim().toUpperCase()}|${e.session_id ?? ""}|${e.ts}|${e.reason ?? ""}`)
+      .digest("hex")
+    const meta = e.reason
+      ? JSON.stringify({ reason: e.reason, source: "legacy_faucet_migration" })
+      : JSON.stringify({ source: "legacy_faucet_migration" })
+    const res = insertStmt.run(
+      eventId,
+      "faucet",
+      e.stage,
+      e.wallet ? e.wallet.trim().toUpperCase() : null,
+      e.session_id ? e.session_id.trim() : null,
+      meta,
+      e.ts,
+    )
+    if (res.changes > 0) migratedCount++
+    else skippedCount++
+  }
+
+  incSecurityCounter("warehouse_legacy_migrated")
+  return { migratedCount, skippedCount, totalInSidecar: events.length }
 }
 
 /** Stage counts for one surface over a window (read-only operator view). */

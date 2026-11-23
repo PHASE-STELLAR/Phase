@@ -21,6 +21,8 @@ import { assessWalletSybilRisk, isSybilResistanceEnabled } from "@/lib/sybil-res
 import { readJsonFile, updateStore } from "@/lib/json-store"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
 import { incSecurityCounter } from "@/lib/security-counters"
+import { getDb } from "@/lib/sqlite-db"
+import { isAnalyticsWarehouseEnabled, recordWarehouseEvent } from "@/lib/analytics-warehouse"
 
 const FLAG: "phase-132" = "phase-132"
 
@@ -135,28 +137,52 @@ export async function recordReferral(
   referredWallet: string,
   originFingerprint?: string,
 ): Promise<{ bonus: string | null; error?: string }> {
-  if (!isReferralQuestEnabled(referredWallet)) return { bonus: null }
-  if (!referralCode || !referredWallet) return { bonus: null }
+  const normWallet = (referredWallet ?? "").trim().toUpperCase()
+  const normCode = (referralCode ?? "").trim().toUpperCase()
+  if (!isReferralQuestEnabled(normWallet)) return { bonus: null }
+  if (!normCode || !normWallet) return { bonus: null }
 
   // Sybil check before taking lock
   if (isSybilResistanceEnabled()) {
-    const risk = await assessWalletSybilRisk(referredWallet)
+    const risk = await assessWalletSybilRisk(normWallet)
     if (risk?.suspect) return { bonus: null, error: "Wallet failed referral trust checks." }
   }
+
+  // SQLite-level uniqueness check to prevent duplicate attribution under concurrent load
+  try {
+    const db = getDb()
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS referral_attributions (
+        referred_wallet TEXT PRIMARY KEY,
+        referrer_wallet TEXT NOT NULL,
+        referral_code   TEXT NOT NULL,
+        bonus_stroops   TEXT NOT NULL,
+        created_at      INTEGER NOT NULL
+      )
+    `)
+    const existing = db
+      .prepare("SELECT referrer_wallet FROM referral_attributions WHERE referred_wallet = ?")
+      .get(normWallet)
+    if (existing) {
+      return { bonus: null, error: "Wallet already referred." }
+    }
+  } catch {}
 
   return updateStore<ReferralStore, { bonus: string | null; error?: string }>(
     "referralQuests",
     (store) => {
-      const record = hasOwn(store.recordsByCode, referralCode) ? store.recordsByCode[referralCode] : undefined
+      const record = hasOwn(store.recordsByCode, normCode) ? store.recordsByCode[normCode] : undefined
       if (!record) return { bonus: null, error: "Invalid referral code." }
 
+      const normReferrer = record.referrer.trim().toUpperCase()
+
       // Self-referral check
-      if (record.referrer === referredWallet) {
+      if (normReferrer === normWallet) {
         return { bonus: null, error: "Cannot refer yourself." }
       }
 
-      // Already referred check
-      if (hasOwn(store.referredByWallet, referredWallet)) {
+      // Already referred check in store
+      if (hasOwn(store.referredByWallet, normWallet) || record.referred.map((w) => w.toUpperCase()).includes(normWallet)) {
         return { bonus: null, error: "Wallet already referred." }
       }
 
@@ -183,10 +209,36 @@ export async function recordReferral(
         })
       }
 
-      // Record the referral
-      record.referred.push(referredWallet)
-      record.referredAt.push(Date.now())
-      store.referredByWallet[referredWallet] = referralCode
+      const now = Date.now()
+
+      // Atomic SQLite record
+      try {
+        const db = getDb()
+        db.prepare(
+          `INSERT OR IGNORE INTO referral_attributions
+            (referred_wallet, referrer_wallet, referral_code, bonus_stroops, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        ).run(normWallet, normReferrer, normCode, REFERRAL_BONUS_STROOPS, now)
+      } catch {}
+
+      // Record the referral in sidecar store
+      record.referred.push(normWallet)
+      record.referredAt.push(now)
+      store.referredByWallet[normWallet] = normCode
+      store.version = (store.version ?? 0) + 1
+
+      if (isAnalyticsWarehouseEnabled(normWallet)) {
+        void recordWarehouseEvent({
+          surface: "referral",
+          stage: "referral_confirmed",
+          wallet: normWallet,
+          metadata: {
+            referrer: normReferrer,
+            referralCode: normCode,
+            bonus: REFERRAL_BONUS_STROOPS,
+          },
+        }).catch(() => {})
+      }
 
       return { bonus: REFERRAL_BONUS_STROOPS }
     },

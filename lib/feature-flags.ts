@@ -294,7 +294,8 @@ export type PhaseFeatureFlag =
   | "phase-240"
   | "phase-241"
   | "phase-242"
-  | "phase-243";
+  | "phase-243"
+  | "phase-227";
 
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
@@ -437,6 +438,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-241": ["NEXT_PUBLIC_FEATURE_PHASE_241", "FEATURE_PHASE_241"],
   "phase-242": ["NEXT_PUBLIC_FEATURE_PHASE_242", "FEATURE_PHASE_242"],
   "phase-243": ["NEXT_PUBLIC_FEATURE_PHASE_243", "FEATURE_PHASE_243"],
+  "phase-227": ["NEXT_PUBLIC_FEATURE_PHASE_227", "FEATURE_PHASE_227"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -569,6 +571,7 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-241",
   "phase-242",
   "phase-243",
+  "phase-227",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {
@@ -704,6 +707,7 @@ export function getEnabledFeatureFlags(): PhaseFeatureFlag[] {
     "phase-266",
     "phase-267",
     "phase-268",
+    "phase-227",
   ];
 
   // Filtering is evaluated at call time, allowing runtime test overrides.
@@ -811,6 +815,7 @@ function envFlagState(flag: PhaseFeatureFlag): {
     "phase-266": process.env.NEXT_PUBLIC_FEATURE_PHASE_266,
     "phase-267": process.env.NEXT_PUBLIC_FEATURE_PHASE_267,
     "phase-268": process.env.NEXT_PUBLIC_FEATURE_PHASE_268,
+    "phase-227": process.env.NEXT_PUBLIC_FEATURE_PHASE_227,
   }
   const keys = FLAG_ENV_MAP[flag] ?? [
     `NEXT_PUBLIC_FEATURE_${flag.replace(/-/g, "_").toUpperCase()}`,
@@ -1344,6 +1349,17 @@ export function isFunnelRetentionEnabled(wallet?: string): boolean {
 
 export function phase177RollbackNote(): string {
   return flagRollbackNote("phase-177");
+}
+
+/**
+ * Issue #654 / phase-227: Backup and disaster recovery: off-box shipping and scheduled snapshots.
+ */
+export function isPhase227Enabled(): boolean {
+  return isFeatureEnabled("phase-227");
+}
+
+export function phase227RollbackNote(): string {
+  return flagRollbackNote("phase-227");
 }
 
 
