@@ -29,17 +29,17 @@ const event = (id: string): TimelineEvent => ({
   occurred_at: "2026-01-01T00:00:00Z",
 });
 
-const originalFlag = process.env.FEATURE_PHASE_173;
+const originalFlag = process.env.FEATURE_PHASE_226;
 
 afterEach(() => {
-  if (originalFlag === undefined) delete process.env.FEATURE_PHASE_173;
-  else process.env.FEATURE_PHASE_173 = originalFlag;
+  if (originalFlag === undefined) delete process.env.FEATURE_PHASE_226;
+  else process.env.FEATURE_PHASE_226 = originalFlag;
 });
 
 describe("wallet timeline cache (Spike 629)", () => {
   beforeEach(() => {
     clearWalletHistoryCache();
-    process.env.FEATURE_PHASE_173 = "1";
+    process.env.FEATURE_PHASE_226 = "1";
   });
 
   it("round-trips events and next_cursor per wallet+cursor key", () => {
@@ -116,13 +116,13 @@ describe("isWalletHistoryCacheEnabled — flag gate (Spike 629 rollback)", () =>
     clearWalletHistoryCache();
   });
 
-  it("is off when phase-173 is unset", () => {
-    delete process.env.FEATURE_PHASE_173;
+  it("is off when phase-226 is unset", () => {
+    delete process.env.FEATURE_PHASE_226;
     expect(isWalletHistoryCacheEnabled()).toBe(false);
   });
 
-  it("is on when FEATURE_PHASE_173=1", () => {
-    process.env.FEATURE_PHASE_173 = "1";
+  it("is on when FEATURE_PHASE_226=1", () => {
+    process.env.FEATURE_PHASE_226 = "1";
     expect(isWalletHistoryCacheEnabled()).toBe(true);
   });
 });

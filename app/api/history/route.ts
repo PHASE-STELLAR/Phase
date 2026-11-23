@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getHorizonBulkheadMetrics } from "@/lib/horizon-bulkhead";
 import {
+  countWalletHistoryOutcome,
+  getWalletHistoryCounters,
   getWalletTimeline,
   isValidStellarAddress,
-  isWalletHistory173Enabled,
+  isWalletHistoryEnabled,
   WalletHistoryError,
 } from "@/lib/wallet-history";
 
@@ -14,16 +17,28 @@ export const dynamic = "force-dynamic";
  * GET /api/history?address=G...&cursor=...&limit=...
  * Serves the merged transactions + effects timeline with settle ↔ forge
  * correlation, backed by the per-wallet index-cache (stale-on-error).
+ *
+ * GET /api/history?stats=1 returns the closed outcome counters and the
+ * history bulkhead partition's load (#650).
+ *
+ * Flag phase-226 off → 404, and the cache is neither read nor written.
  */
 export async function GET(request: NextRequest) {
-  if (!isWalletHistory173Enabled()) {
+  if (!isWalletHistoryEnabled()) {
+    countWalletHistoryOutcome("flag_off");
     return NextResponse.json(
-      { error: "Wallet history is disabled (set NEXT_PUBLIC_FEATURE_PHASE_173=1)" },
+      { error: "Wallet history is disabled (set NEXT_PUBLIC_FEATURE_PHASE_226=1)" },
       { status: 404 },
     );
   }
 
   const { searchParams } = request.nextUrl;
+  if (searchParams.get("stats") === "1") {
+    return NextResponse.json({
+      counters: getWalletHistoryCounters(),
+      bulkhead: getHorizonBulkheadMetrics("history"),
+    });
+  }
   const address = searchParams.get("address")?.trim() ?? "";
   if (!address) {
     return NextResponse.json(
@@ -32,6 +47,7 @@ export async function GET(request: NextRequest) {
     );
   }
   if (!isValidStellarAddress(address)) {
+    countWalletHistoryOutcome("invalid");
     return NextResponse.json(
       { error: "Invalid Stellar address (expected G… base32, 56 chars)" },
       { status: 400 },
@@ -63,7 +79,7 @@ export async function GET(request: NextRequest) {
       if (err.code === "INVALID_ADDRESS") {
         return NextResponse.json({ error: err.message }, { status: 400 });
       }
-      if (err.code === "HORIZON_RATE_LIMITED") {
+      if (err.code === "HORIZON_RATE_LIMITED" || err.code === "HORIZON_BUSY") {
         return NextResponse.json({ error: err.message, code: err.code }, { status: 503 });
       }
       return NextResponse.json(

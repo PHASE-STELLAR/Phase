@@ -387,6 +387,8 @@ export const phaseCopy: Record<
       cancelListing: string
       listingLoadError: string
       transferWasmHint: string
+      /** Wallet history timeline (#650, phase-226). */
+      wallet_history: Record<"historyTitle" | "historyCached" | "historyRefresh" | "historyLoading" | "historyEmpty" | "historyUnavailable" | "historyLoadOlder" | "historySent" | "historyReceived" | "historyTrade" | "historyTrustline" | "historyAccount" | "historySettlement" | "historyForge" | "historyTx" | "historyTxFailed", string>
       /** Bóveda PHASE: lista por RPC (owner_of), sin indexador de terceros. */
       vaultRpcTitle: string
       vaultRpcBlurb: string
@@ -1061,6 +1063,24 @@ export const phaseCopy: Record<
       listingLoadError: "Could not load listings.",
       transferWasmHint:
         "If simulation fails, redeploy the PHASE WASM with transfer_phase_nft and update CONTRACT_ID.",
+      wallet_history: {
+        historyTitle: "[ HISTORY // HORIZON ]",
+        historyCached: "cached",
+        historyRefresh: "refresh",
+        historyLoading: "Loading…",
+        historyEmpty: "No activity yet.",
+        historyUnavailable: "History unavailable",
+        historyLoadOlder: "load older",
+        historySent: "Sent",
+        historyReceived: "Received",
+        historyTrade: "Trade",
+        historyTrustline: "Trustline",
+        historyAccount: "Account",
+        historySettlement: "Settlement",
+        historyForge: "Forge invoice",
+        historyTx: "Transaction",
+        historyTxFailed: "Failed transaction",
+      },
       vaultRpcTitle: "[ PHASE_VAULT // SOROBAN_RPC ]",
       vaultRpcBlurb:
         "Your PHASE utility NFTs listed by this app via Soroban simulation (total_supply + owner_of). No third-party indexer required for this view.",
@@ -1941,6 +1961,24 @@ export const phaseCopy: Record<
       listingLoadError: "No se pudieron cargar los anuncios.",
       transferWasmHint:
         "Si falla la simulación, redesplegá el WASM PHASE con transfer_phase_nft y actualizá CONTRACT_ID.",
+      wallet_history: {
+        historyTitle: "[ HISTORIAL // HORIZON ]",
+        historyCached: "en caché",
+        historyRefresh: "actualizar",
+        historyLoading: "Cargando…",
+        historyEmpty: "Aún no hay actividad.",
+        historyUnavailable: "Historial no disponible",
+        historyLoadOlder: "cargar anteriores",
+        historySent: "Enviado",
+        historyReceived: "Recibido",
+        historyTrade: "Intercambio",
+        historyTrustline: "Línea de confianza",
+        historyAccount: "Cuenta",
+        historySettlement: "Liquidación",
+        historyForge: "Factura de forja",
+        historyTx: "Transacción",
+        historyTxFailed: "Transacción fallida",
+      },
       vaultRpcTitle: "[ BÓVEDA_PHASE // RPC_SOROBAN ]",
       vaultRpcBlurb:
         "Tus NFT de utilidad PHASE listados por esta app vía simulación Soroban (total_supply + owner_of). Esta vista no depende de un indexador de terceros.",
