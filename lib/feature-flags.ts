@@ -286,6 +286,7 @@ export type PhaseFeatureFlag =
   | "phase-247"
   | "phase-244"
   | "phase-245"
+  | "phase-232"
   | "phase-233"
   | "phase-234"
   | "phase-235"
@@ -427,6 +428,7 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-247": ["NEXT_PUBLIC_FEATURE_PHASE_247", "FEATURE_PHASE_247"],
   "phase-244": ["NEXT_PUBLIC_FEATURE_PHASE_244", "FEATURE_PHASE_244"],
   "phase-245": ["NEXT_PUBLIC_FEATURE_PHASE_245", "FEATURE_PHASE_245"],
+  "phase-232": ["NEXT_PUBLIC_FEATURE_PHASE_232", "FEATURE_PHASE_232"],
   "phase-233": ["NEXT_PUBLIC_FEATURE_PHASE_233", "FEATURE_PHASE_233"],
   "phase-234": ["NEXT_PUBLIC_FEATURE_PHASE_234", "FEATURE_PHASE_234"],
   "phase-235": ["NEXT_PUBLIC_FEATURE_PHASE_235", "FEATURE_PHASE_235"],
@@ -558,6 +560,7 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-247",
   "phase-244",
   "phase-245",
+  "phase-232",
   "phase-233",
   "phase-234",
   "phase-235",

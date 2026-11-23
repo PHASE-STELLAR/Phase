@@ -15,7 +15,7 @@
  */
 
 import { createHash } from "node:crypto"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { z } from "zod"
 import { isFeatureEnabled } from "@/lib/feature-flags"
@@ -28,6 +28,67 @@ export function isPhase119Enabled(): boolean {
 
 export function flag119RollbackNote(): string {
   return `Rollback phase-119: unset NEXT_PUBLIC_FEATURE_PHASE_119 / FEATURE_PHASE_119 or set to 0/false and restart. Cache files remain inert.`
+
+// ─── phase-232: CID poison and content-integrity enforcement ─────────────────
+//
+// Spike 035 identified that a poisoned cache entry served under gateway failover
+// could bypass integrity checks.  When phase-232 is on:
+//  - Every cache read re-verifies the stored sha256 against the raw bytes.
+//  - Only gateways in ALLOWED_IPFS_GATEWAYS are permitted; requests to any
+//    other origin fail closed before any bytes are examined.
+//  - Poison detection (hash mismatch on read) atomically invalidates only the
+//    affected CID (mem + file) and re-throws CidIntegrityError.
+//  - Flag off: verification on read is skipped (phase-119 behaviour).
+//  - Rollback: unset NEXT_PUBLIC_FEATURE_PHASE_232 / FEATURE_PHASE_232.
+}
+
+export function isPhase232Enabled(): boolean {
+  return isFeatureEnabled("phase-232")
+}
+
+/**
+ * Closed set of allowed IPFS gateway origins.  Any URL whose origin is not in
+ * this set is rejected before any network request is made.  Operators may
+ * extend the set via ALLOWED_IPFS_GATEWAY_ORIGINS (comma-separated origins).
+ */
+export const ALLOWED_IPFS_GATEWAY_ORIGINS = new Set<string>([
+  "https://w3s.link",
+  "https://dweb.link",
+  "https://ipfs.io",
+  "https://cloudflare-ipfs.com",
+  // operator extension via env var
+  ...((process.env.ALLOWED_IPFS_GATEWAY_ORIGINS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)),
+])
+
+export class GatewayNotAllowedError extends Error {
+  gateway: string
+  constructor(gateway: string) {
+    super(`gateway not in allowlist: ${gateway}`)
+    this.name = "GatewayNotAllowedError"
+    this.gateway = gateway
+  }
+}
+
+/**
+ * Assert that `url` resolves to an allowed gateway origin.
+ * Throws `GatewayNotAllowedError` when phase-232 is on and the origin is not
+ * in `ALLOWED_IPFS_GATEWAY_ORIGINS`.
+ */
+export function assertGatewayAllowed(url: string): void {
+  if (!isPhase232Enabled()) return
+  try {
+    const origin = new URL(url).origin
+    if (!ALLOWED_IPFS_GATEWAY_ORIGINS.has(origin)) {
+      throw new GatewayNotAllowedError(origin)
+    }
+  } catch (e) {
+    if (e instanceof GatewayNotAllowedError) throw e
+    throw new GatewayNotAllowedError(url)
+  }
+}
 }
 
 // ─── schemas ─────────────────────────────────────────────────────────────────
@@ -205,6 +266,22 @@ export function clearCidMemoryCache(): void {
   memCache.clear()
 }
 
+/**
+ * Atomically remove a single CID from the memory cache and its file-backed
+ * entry.  Used by phase-232 poison detection: only the affected CID is
+ * evicted — all other cached entries remain intact.
+ */
+export async function invalidateCachedCid(cid: string): Promise<void> {
+  const cleanCid = normalizeCid(cid)
+  memCache.delete(cleanCid)
+  try {
+    const fp = await cidCacheFilePath(cleanCid)
+    await unlink(fp)
+  } catch {
+    // best-effort — file may not exist
+  }
+}
+
 export function getCidCacheStats(): { entries: number; totalBytes: number; enabled: boolean } {
   let totalBytes = 0
   for (const e of memCache.values()) totalBytes += e.entry.byteLength
@@ -259,11 +336,13 @@ export async function getCachedCid(
   if (mem) {
     if (!isExpired(mem)) {
       if (opts.verifyIntegrity !== false && opts.expectedSha256 && !verifyBytesIntegrity(mem.bytes, opts.expectedSha256)) {
+        if (isPhase232Enabled()) await invalidateCachedCid(cleanCid)
         throw new CidIntegrityError("TAMPERED", cleanCid, `Cached bytes for ${cleanCid.slice(0, 8)}… fail integrity check`)
       }
-      if (opts.verifyIntegrity !== false && opts.expectedSha256 == null) {
-        // also verify stored sha matches bytes (tamper-evident)
+      // phase-232: re-verify stored sha against bytes on every read (not just when expectedSha256 supplied)
+      if (isPhase232Enabled() || (opts.verifyIntegrity !== false && opts.expectedSha256 == null)) {
         if (!verifyBytesIntegrity(mem.bytes, mem.entry.sha256)) {
+          if (isPhase232Enabled()) await invalidateCachedCid(cleanCid)
           throw new CidIntegrityError("TAMPERED", cleanCid, `Cached entry hash does not match bytes (tamper) for ${cleanCid.slice(0, 8)}…`)
         }
       }
@@ -342,14 +421,23 @@ export async function fetchWithCidCache(
     }
   }
 
-  // cache miss: fetch
+  // cache miss: fetch (phase-232: validate gateways before any network call)
   try {
     const path = cidOrPath.replace(/^\/+/, "")
-    const { fetchWithIpfsFallback } = await import("@/lib/phase-nft-metadata-build")
+    const { fetchWithIpfsFallback, PHASE_IPFS_GATEWAYS } = await import("@/lib/phase-nft-metadata-build")
+    if (isPhase232Enabled()) {
+      for (const gw of PHASE_IPFS_GATEWAYS) {
+        try { assertGatewayAllowed(gw) } catch (e) {
+          return { ok: false, error: (e as Error).message, code: "GATEWAY_NOT_ALLOWED" }
+        }
+      }
+    }
     const res = await fetchWithIpfsFallback(path, { signal: opts.signal } as any)
     if (!res.ok) return { ok: false, error: res.error, code: "FETCH_FAILED" }
     const sha = sha256Hex(res.bytes)
     if (opts.expectedSha256 && sha !== opts.expectedSha256) {
+      // phase-232: also invalidate any stale cache entry for this CID
+      if (isPhase232Enabled()) await invalidateCachedCid(cid)
       return { ok: false, error: `Fetched bytes hash mismatch (tamper): expected ${opts.expectedSha256.slice(0, 8)}… got ${sha.slice(0, 8)}…`, code: "HASH_MISMATCH" }
     }
     // store verified bytes
