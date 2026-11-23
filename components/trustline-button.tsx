@@ -8,6 +8,7 @@ import {
 } from "@/lib/albedo-intent-client"
 import { albedoRetiredMessage, isAlbedoRetired } from "@/lib/albedo-sunset"
 import { isFreighterMobile171Enabled, openFriendbot } from "@/lib/freighter-mobile"
+import { isXBullEnabled, isXBullSelected, recordXBullTrustlineSigned } from "@/lib/xbull-adapter"
 import { signTransaction } from "@/lib/stellar-wallet-kit"
 import { useLang } from "@/components/lang-context"
 import { TokenIcon } from "@/components/token-icon"
@@ -219,6 +220,11 @@ export function TrustlineButton({ address, onRequestConnect, onReady, className,
       if (signed.error) throw new Error(signed.error.message || "SIGN_REJECTED")
       const signedXdr = parseSignedTxXdr(signed)
       if (!signedXdr) throw new Error("Missing signed transaction.")
+
+      // Issue #646 (phase-168): record xBull trustline telemetry when flag is on.
+      if (isXBullEnabled() && isXBullSelected()) {
+        recordXBullTrustlineSigned()
+      }
 
       setUiState("SYNCING")
       const submitRes = await fetch("/api/classic-liq/trustline", {

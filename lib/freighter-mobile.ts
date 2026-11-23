@@ -41,6 +41,15 @@ export function isFreighterMobile171Enabled(): boolean {
   return isFeatureEnabled("phase-171");
 }
 
+/**
+ * Returns true when phase-224 (issue #648) or its legacy phase-171 alias is
+ * enabled. Callers should prefer this helper so they resolve the canonical
+ * issue flag; phase-171 stays registered for backward compatibility.
+ */
+export function isFreighterMobileEnabled(): boolean {
+  return isFeatureEnabled("phase-224") || isFeatureEnabled("phase-171");
+}
+
 const MOBILE_TOKENS = ["iphone", "ipad", "ipod", "android", "mobile"];
 const IOS_TOKENS = ["iphone", "ipad", "ipod", "ios"];
 const ANDROID_TOKENS = ["android"];
