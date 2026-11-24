@@ -17,7 +17,10 @@
     "seed:phaser-prueba": "cd scripts && npx tsx seed-phaser-prueba.ts",
     "start": "next start",
     "security:audit": "npm audit --audit-level=high",
-    "security:secret-rotation": "tsx scripts/check-secret-rotation.ts"
+    "security:secret-rotation": "tsx scripts/check-secret-rotation.ts",
+    "flags:check": "tsx tools/check-flags.ts",
+    "drill:kill-switch": "tsx tools/kill-switch-drill.ts",
+    "test": "tsx --test tests/*.test.ts"
   },
   "dependencies": {
     "@albedo-link/intent": "0.12.0",

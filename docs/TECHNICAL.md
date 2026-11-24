@@ -168,6 +168,8 @@ Critical groups:
 - Classic asset configuration (`CLASSIC_LIQ_*`, `NEXT_PUBLIC_CLASSIC_*`)
 - Gemini runtime (`GEMINI_API_KEY`)
 - Writable server data directory (`PHASE_SERVER_DATA_DIR`)
+- Feature flags (`PHASE_FLAG_*`) and ops kill switch (`PHASE_OPS_KILL_SWITCH`) — see [`FLAGS.md`](FLAGS.md)
+- Flagged adapter configuration (`PHASE_SEP50_*`, `PHASE_BRIDGE_*`, `PHASE_NETWORK`) — see [`FLAGGED_ADAPTERS.md`](FLAGGED_ADAPTERS.md)
 
 ---
 
@@ -202,3 +204,37 @@ Contract commands are documented in [`contracts/README.md`](../contracts/README.
 - [SEP-0001](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0001.md)
 - [Freighter Docs](https://docs.freighter.app/)
 - [Stellar x402](https://developers.stellar.org/docs/build/agentic-payments/x402)
+
+---
+
+## 13. Feature Flags
+
+- Canonical registry: `lib/flags/registry.ts`; full table: [`FLAGS.md`](FLAGS.md).
+- IDs are unique per feature. Historical duplicate IDs survive only as aliases
+  in `FLAG_ENV_MAP` for rollback.
+- Evaluation is a frozen snapshot taken at import time — flags are never read
+  from `process.env` per request.
+- `npm run flags:check` rejects duplicate IDs/env vars/aliases; CI enforces it.
+- `npm run drill:kill-switch` runs a non-destructive drill for distributor
+  auto-refill halt and `faucetPending` mid-poll idempotency.
+
+## 14. Flagged Adapters
+
+| Adapter | Flag | Boundary | Failure mode |
+| --- | --- | --- | --- |
+| SEP-50 attestation | `phase-217` | Server verification, SEP-10 binding, hashed subjects | 503 + `Retry-After` on outage |
+| EVM bridge | `phase-218` | Client signs Stellar; server custody on EVM | 404 when off; 403 if not testnet |
+| Cross-chain verifier | `phase-219` | Read-only proof verification | `invalid` / `disabled`, never writes |
+
+Details and custody recovery procedure: [`FLAGGED_ADAPTERS.md`](FLAGGED_ADAPTERS.md).
+Root spikes: `SPIKE_645_SEP50_CONFORMANCE.md`, `SPIKE_646_EVM_BRIDGE.md`,
+`SPIKE_647_CROSS_CHAIN_VERIFICATION.md`.
+
+## 15. Verification Commands
+
+```bash
+npm run flags:check
+npm run drill:kill-switch
+npm run test
+```
+

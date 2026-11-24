@@ -129,3 +129,48 @@ Owns:
   - `docs/TECHNICAL.md`
   - relevant API docs
 - Contract/address changes require synchronized env and docs updates.
+
+## 11) Feature-flag architecture
+
+- Flags live in `lib/flags/registry.ts`. Every feature owns exactly one
+  canonical ID and exactly one env var (`PHASE_FLAG_*`).
+- IDs `phase-170`…`phase-173` were historically reused for two features each.
+  The second feature now owns a unique ID (`phase-180`…`phase-183`); the old
+  ambiguous tokens remain **aliases** in `FLAG_ENV_MAP` so a rollback can be
+  performed without renaming call sites. See `docs/FLAGS.md`.
+- Flags are evaluated **statically** from a frozen snapshot taken at module
+  load. Runtime mutation of `process.env` never changes a flag.
+- `scripts/check-flags.ts` (`npm run flags:check`) fails CI on duplicate IDs,
+  env vars or aliases. `.github/workflows/flag-integrity.yml` runs it on every
+  PR and push.
+- Ops kill switch (`PHASE_OPS_KILL_SWITCH`) is likewise a static snapshot. The
+  non-destructive drill (`npm run drill:kill-switch`) proves distributor
+  auto-refill halt and `faucetPending` mid-poll idempotency without touching
+  network, secrets or chain state.
+
+## 12) Adapter boundaries
+
+- `lib/adapters/sep50/` — SEP-50 attestation verification, SEP-10 session
+  binding, hashed subjects only, fail-closed 503 + `Retry-After`, testnet mock
+  fence. Behind `phase-217`.
+- `lib/adapters/bridge/` — PHASELQ → EVM bridge. Client-side signing for the
+  Stellar leg, server-side custody for the EVM leg, idempotent relay keyed by
+  source tx hash, configurable finality, orphan recovery, drift/fee fences.
+  Testnet only, behind `phase-218`. See `SPIKE_646_EVM_BRIDGE.md`.
+- `lib/adapters/crosschain/` — read-only light-client-style proof verifier with
+  trust-root, staleness and wrong-network fences. Behind `phase-219`.
+- Every adapter returns a disabled/inert result when its flag is off; no
+  adapter performs writes on the Stellar leg.
+
+## 13) Compliance and integration registry
+
+| Feature | Flag ID | Env var | Rollback |
+| --- | --- | --- | --- |
+| SEP-50 attestation adapter | `phase-217` | `PHASE_FLAG_SEP50_ADAPTER` | Unset flag — checks skipped, route 404 |
+| PHASELQ EVM bridge | `phase-218` | `PHASE_FLAG_EVM_BRIDGE` | Unset flag — routes gone, locked funds recoverable |
+| Cross-chain verifier | `phase-219` | `PHASE_FLAG_CROSSCHAIN_VERIFY` | Unset flag — verification skipped |
+
+Root spikes: `SPIKE_645_SEP50_CONFORMANCE.md`, `SPIKE_646_EVM_BRIDGE.md`,
+`SPIKE_647_CROSS_CHAIN_VERIFICATION.md`. Operational details and the complete
+flag table (including the renamed legacy IDs) are in `docs/FLAGS.md` and
+`docs/FLAGGED_ADAPTERS.md`.
