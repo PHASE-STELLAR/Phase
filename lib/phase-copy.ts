@@ -2755,3 +2755,73 @@ export function forgeQuotaErrorMessage(locale: "en" | "es" = "en"): string {
     ? phaseCopyEs.forge.errors.forgeQuotaExceeded
     : phaseCopyEn.forge.errors.forgeQuotaExceeded
 }
+
+/**
+ * phase-214 — localized messages for transport descriptors. Kept alongside
+ * `pickCopy` so every user-facing string still flows through this module.
+ * Keys are the stable `userMessageKey`s from the phase-161/214 taxonomy.
+ */
+export const PHASE_TRANSPORT_ERROR_COPY: Record<AppLang, Record<string, string>> = {
+  en: {
+    "phase.error.transport_rate_limited": "The network is rate-limiting requests. Please wait a moment and retry.",
+    "phase.error.transport_upstream_5xx": "The Stellar network is temporarily unavailable. Please retry shortly.",
+    "phase.error.transport_timeout": "The network took too long to respond. Please retry.",
+    "phase.error.transport_network_unreachable": "Could not reach the network. Check your connection and retry.",
+  },
+  es: {
+    "phase.error.transport_rate_limited": "La red está limitando las solicitudes. Esperá un momento y reintentá.",
+    "phase.error.transport_upstream_5xx": "La red de Stellar no está disponible temporalmente. Reintentá en breve.",
+    "phase.error.transport_timeout": "La red tardó demasiado en responder. Reintentá.",
+    "phase.error.transport_network_unreachable": "No se pudo alcanzar la red. Revisá tu conexión y reintentá.",
+  },
+}
+
+export function pickTransportErrorCopy(lang: unknown, userMessageKey: string): string | null {
+  const safeLang: AppLang =
+    typeof lang === "string" && (SUPPORTED_LANGS as readonly string[]).includes(lang)
+      ? (lang as AppLang)
+      : "en"
+  return PHASE_TRANSPORT_ERROR_COPY[safeLang][userMessageKey] ?? null
+}
+
+/** phase-215 — copy for the admin webhook subscriber / redelivery panel. */
+export const PHASE_ADMIN_WEBHOOK_COPY: Record<AppLang, Record<string, string>> = {
+  en: {
+    title: "Webhook subscribers",
+    tokenLabel: "Admin token",
+    load: "Load",
+    disabled: "Webhook subscriptions are disabled (flag off).",
+    noSubscriptions: "No subscriptions configured.",
+    events: "Events",
+    endpoint: "Endpoint",
+    status: "Status",
+    deliveries: "Delivery log",
+    redeliver: "Redeliver",
+    redelivered: "Event redelivered.",
+    failed: "Action failed.",
+    emptyLog: "No deliveries recorded yet.",
+  },
+  es: {
+    title: "Suscriptores de webhook",
+    tokenLabel: "Token de administrador",
+    load: "Cargar",
+    disabled: "Las suscripciones de webhook están desactivadas (flag apagado).",
+    noSubscriptions: "No hay suscripciones configuradas.",
+    events: "Eventos",
+    endpoint: "Endpoint",
+    status: "Estado",
+    deliveries: "Registro de entregas",
+    redeliver: "Reenviar",
+    redelivered: "Evento reenviado.",
+    failed: "La acción falló.",
+    emptyLog: "Todavía no hay entregas registradas.",
+  },
+}
+
+export function pickAdminWebhooksCopy(lang: unknown, key: string): string {
+  const safeLang: AppLang =
+    typeof lang === "string" && (SUPPORTED_LANGS as readonly string[]).includes(lang)
+      ? (lang as AppLang)
+      : "en"
+  return PHASE_ADMIN_WEBHOOK_COPY[safeLang][key] ?? PHASE_ADMIN_WEBHOOK_COPY.en[key] ?? key
+}

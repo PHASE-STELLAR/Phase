@@ -87,6 +87,22 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const wallet = typeof body.walletAddress === "string" ? body.walletAddress.trim() : ""
   const tid = Math.floor(tokenId)
+
+  // phase-216: viewer-side age gate (451 on denial, no-op when flag off).
+  if (wallet) {
+    const { AgeRestrictedError, enforceAgeGate216 } = await import("@/lib/age-gate-216")
+    try {
+      await enforceAgeGate216(wallet, "viewer")
+    } catch (error) {
+      if (error instanceof AgeRestrictedError) {
+        return NextResponse.json(
+          { ok: false, code: error.code, detail: error.message, tokenId: tid },
+          { status: error.status, headers: { "Cache-Control": "private, no-store" } },
+        )
+      }
+      throw error
+    }
+  }
   /** Soroban RPC puede ir unos cientos de ms detrás del último ledger tras mint/settle. */
   let owner: string | null = null
   const backoffMs = [0, 400, 900, 1600]

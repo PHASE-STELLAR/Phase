@@ -18,7 +18,7 @@ import { LiquidityFaucetControl } from "@/components/liquidity-faucet-control"
 import { TokenIcon } from "@/components/token-icon"
 import { useWallet } from "@/components/wallet-provider"
 import { fetchArtistAlias } from "@/lib/artist-profile-client"
-import { humanizePhaseHostErrorMessage } from "@/lib/phase-host-error"
+import { humanizePhaseError } from "@/lib/phase-error-presentation"
 import { pickCopy } from "@/lib/phase-copy"
 import { cn } from "@/lib/utils"
 import { GatewayHealthDashboard } from "@/components/gateway-health-dashboard"
@@ -728,7 +728,7 @@ export function FusionChamber() {
       if (isPhaseInsufficientBalanceError(msg)) {
         const ch = pickCopy(lang).chamber
         const friendly =
-          humanizePhaseHostErrorMessage(msg, ch.phaseHostContractErrors, ch.phaseHostContractUnknown) ||
+          humanizePhaseError(msg, ch.phaseHostContractErrors, ch.phaseHostContractUnknown, lang) ||
           ch.phaseHostContractErrors[2] ||
           msg
         const neededLiq = stroopsToLiqDisplay(effectivePriceStroops)
@@ -748,7 +748,7 @@ export function FusionChamber() {
       }
       {
         const ch = pickCopy(lang).chamber
-        const friendly = humanizePhaseHostErrorMessage(msg, ch.phaseHostContractErrors, ch.phaseHostContractUnknown)
+        const friendly = humanizePhaseError(msg, ch.phaseHostContractErrors, ch.phaseHostContractUnknown, lang)
         appendLog(`${logs.runtimeFaultPrefix} ${friendly ?? msg}`)
       }
     },
@@ -848,10 +848,11 @@ export function FusionChamber() {
       } catch (txErr) {
         const txMsg = txErr instanceof Error ? txErr.message : String(txErr)
         const ch = pickCopy(lang).chamber
-        const friendly = humanizePhaseHostErrorMessage(
+        const friendly = humanizePhaseError(
           txMsg,
           ch.phaseHostContractErrors,
           ch.phaseHostContractUnknown,
+          lang,
         )
         if (isPhaseInsufficientBalanceError(txMsg)) {
           throw new Error(friendly ?? ch.phaseHostContractErrors[2] ?? txMsg)
@@ -991,7 +992,7 @@ export function FusionChamber() {
 
   const normalizeToastError = useCallback(
     (msg: string) => {
-      const h = humanizePhaseHostErrorMessage(msg, ch.phaseHostContractErrors, ch.phaseHostContractUnknown)
+      const h = humanizePhaseError(msg, ch.phaseHostContractErrors, ch.phaseHostContractUnknown, lang)
       if (h) return h
       return isPhaseUnauthorizedError(msg) ? ch.biometricTrustGateClosed : msg
     },

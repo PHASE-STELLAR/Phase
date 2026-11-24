@@ -43,6 +43,18 @@ export const MODERATION_DECISIONS = ["auto_allow", "human_review", "auto_hold"] 
 
 const PREVIEW_VERIFY_REASONS = [...PREVIEW_VERIFY_RESULTS, "malformed"] as const
 
+/** phase-132 / phase-267: closed reason set for signed referral enrollment. */
+export const REFERRAL_QUEST_REASONS = [
+  "invalid_code",
+  "sybil_rejected",
+  "version_conflict",
+  "self_referral",
+  "already_enrolled",
+  "code_already_used",
+  "referrer_cap_reached",
+  "enrolled",
+] as const
+
 export const LABEL_REJECTION_REASONS = [
   "unknown_counter",
   "unknown_reason",

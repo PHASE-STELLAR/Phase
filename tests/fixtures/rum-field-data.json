@@ -1,0 +1,282 @@
+[
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 2200,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000000000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 2250,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000001000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 2300,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000002000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 2350,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000003000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 2280,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000004000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 2320,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000005000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 2400,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000006000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 2260,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000007000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 120,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000000000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 140,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000001000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 150,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000002000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 130,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000003000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 160,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000004000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 145,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000005000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 135,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000006000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 155,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000007000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.04,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000000000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.05,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000001000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.045,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000002000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.06,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000003000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.055,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000004000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.042,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000005000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.048,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000006000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.052,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000007000
+  },
+  {
+    "route": "/explore",
+    "metric": "LCP",
+    "value": 2300,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000000000
+  },
+  {
+    "route": "/explore",
+    "metric": "LCP",
+    "value": 2350,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000001000
+  },
+  {
+    "route": "/explore",
+    "metric": "LCP",
+    "value": 2400,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000002000
+  },
+  {
+    "route": "/explore",
+    "metric": "LCP",
+    "value": 2250,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000003000
+  },
+  {
+    "route": "/explore",
+    "metric": "LCP",
+    "value": 2380,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000004000
+  },
+  {
+    "route": "/explore",
+    "metric": "LCP",
+    "value": 2420,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000005000
+  },
+  {
+    "route": "/explore",
+    "metric": "LCP",
+    "value": 2320,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000006000
+  },
+  {
+    "route": "/explore",
+    "metric": "LCP",
+    "value": 2360,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000007000
+  },
+  {
+    "route": "/explore",
+    "metric": "CLS",
+    "value": 0.03,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000000000
+  },
+  {
+    "route": "/explore",
+    "metric": "CLS",
+    "value": 0.035,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000001000
+  },
+  {
+    "route": "/explore",
+    "metric": "CLS",
+    "value": 0.04,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000002000
+  },
+  {
+    "route": "/explore",
+    "metric": "CLS",
+    "value": 0.028,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000003000
+  },
+  {
+    "route": "/explore",
+    "metric": "CLS",
+    "value": 0.042,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000004000
+  },
+  {
+    "route": "/explore",
+    "metric": "CLS",
+    "value": 0.032,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000005000
+  },
+  {
+    "route": "/explore",
+    "metric": "CLS",
+    "value": 0.038,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000006000
+  },
+  {
+    "route": "/explore",
+    "metric": "CLS",
+    "value": 0.036,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000007000
+  }
+]

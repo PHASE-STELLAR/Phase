@@ -17,6 +17,7 @@ import {
   recordCollabSplits,
 } from "@/lib/market-store"
 import { createNotification } from "@/lib/notification-store"
+import { dispatchWebhookEvent } from "@/lib/webhook-delivery"
 import { isPricingOracleEnabled, markSuggestionSold } from "@/lib/pricing-oracle"
 
 export const runtime = "nodejs"
@@ -118,6 +119,19 @@ export async function POST(
 
     void createNotification(offer.buyer_wallet, "offer_accepted", { listing_id: id, token_id: listing.token_id })
       .catch(() => { /* silent */ })
+    // phase-215: one webhook event per accepted offer transition.
+    void dispatchWebhookEvent(
+      "market.offer_accepted",
+      {
+        listing_id: id,
+        offer_id,
+        token_id: listing.token_id,
+        buyer_wallet: offer.buyer_wallet,
+        seller_wallet: listing.seller_wallet,
+        amount_phaselq: offer.amount_phaselq,
+      },
+      `market.offer_accepted:${offer_id}`,
+    ).catch(() => undefined)
   } else {
     void createNotification(offer.buyer_wallet, "offer_rejected", { listing_id: id, token_id: listing.token_id })
       .catch(() => { /* silent */ })

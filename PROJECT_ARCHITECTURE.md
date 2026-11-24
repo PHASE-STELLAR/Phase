@@ -239,6 +239,11 @@ is a fixed-size digest of the canonical payload, keeping it under wallet
 
 
 
+| `phase-213` | `NEXT_PUBLIC_FEATURE_PHASE_213` / `FEATURE_PHASE_213` | Client RUM collector → `POST /api/rum/ingest` (closed label: normalized route + SHA-256 session hash), CI p75 budget gate with PR delta comment | off | Unset var — no observers registered, ingest returns 404, workflow skips; `rum-events.json` can be deleted |
+| `phase-214` | `NEXT_PUBLIC_FEATURE_PHASE_214` / `FEATURE_PHASE_214` | Transport error taxonomy (429/5xx/timeout/network), `Retry-After` parsing and bounded jittered backoff; callers migrate off string helpers | off | Unset var, restart — callers use legacy `phase-host-error.ts` helpers, RPC proxy uses legacy backoff |
+| `phase-215` | `NEXT_PUBLIC_FEATURE_PHASE_215` / `FEATURE_PHASE_215` | Signed webhook events from real mutations, SSRF fence with DNS pinning, delivery log + admin redelivery UI, per-endpoint circuit breaker | off | Unset var — all admin routes return 404, no events emitted, subscription rows inert |
+| `phase-216` | `NEXT_PUBLIC_FEATURE_PHASE_216` / `FEATURE_PHASE_216` | Age gate on viewer/claim paths (HTTP 451), license revocation with listing cascade, license metadata in market + bulk CSV, append-only audit | off | Unset var — gates are no-ops, declarations/attestations inert, CSV fields omitted |
+
 Flags are read via `lib/feature-flags.ts:isFeatureEnabled`. Client flags use `NEXT_PUBLIC_*`, server also accepts `FEATURE_*`. Zero regression when off.
 
 > **Proposed spike batch 550–599 is design-only.** The four spike docs and their

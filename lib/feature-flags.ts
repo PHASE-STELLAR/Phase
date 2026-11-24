@@ -72,6 +72,10 @@ import { incSecurityCounter } from "@/lib/security-counters"
  *   mainnet cutover acknowledgement (spike 640 / issue #502)
  * - phase-164: self-attested age bands with 18+/21+ campaign gating (spike 637 / issue #499)
  * - phase-165: signed creator licensing attestation on world creation (spike 639 / issue #501)
+ * - phase-213: client RUM collector + CI web-vitals budget gate (hashed sessions only)
+ * - phase-214: transport error taxonomy + Retry-After parsing + bounded backoff
+ * - phase-215: signed webhook events, SSRF fence, redelivery UI, circuit breakers
+ * - phase-216: age gate on viewer/claim paths + license revocation cascade
  * - phase-166: QR code flows for receive, offer-claim and referral share with camera scan (spike 622 / issue #485)
  * - phase-167: WalletConnect v2 mobile session resilience with reconnect and chain-switch (spike 623 / issue #486)
  * - phase-168: xBull full support with sign, trustline and Freighter-difference matrix (spike 624 / issue #487)
@@ -255,6 +259,10 @@ export type PhaseFeatureFlag =
   | "phase-170"
   | "phase-171"
   | "phase-172"
+  | "phase-213"
+  | "phase-214"
+  | "phase-215"
+  | "phase-216"
   | "phase-173"
   | "phase-178"
   | "phase-179"
@@ -405,6 +413,10 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-170": ["NEXT_PUBLIC_FEATURE_PHASE_170", "FEATURE_PHASE_170"],
   "phase-171": ["NEXT_PUBLIC_FEATURE_PHASE_171", "FEATURE_PHASE_171"],
   "phase-172": ["NEXT_PUBLIC_FEATURE_PHASE_172", "FEATURE_PHASE_172"],
+  "phase-213": ["NEXT_PUBLIC_FEATURE_PHASE_213", "FEATURE_PHASE_213"],
+  "phase-214": ["NEXT_PUBLIC_FEATURE_PHASE_214", "FEATURE_PHASE_214"],
+  "phase-215": ["NEXT_PUBLIC_FEATURE_PHASE_215", "FEATURE_PHASE_215"],
+  "phase-216": ["NEXT_PUBLIC_FEATURE_PHASE_216", "FEATURE_PHASE_216"],
   "phase-173": ["NEXT_PUBLIC_FEATURE_PHASE_173", "FEATURE_PHASE_173"],
   "phase-280": ["NEXT_PUBLIC_FEATURE_PHASE_280", "FEATURE_PHASE_280"],
   "phase-281": ["NEXT_PUBLIC_FEATURE_PHASE_281", "FEATURE_PHASE_281"],
@@ -532,6 +544,10 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-170",
   "phase-171",
   "phase-172",
+  "phase-213",
+  "phase-214",
+  "phase-215",
+  "phase-216",
   "phase-173",
   "phase-174",
   "phase-175",
@@ -703,6 +719,10 @@ export function getEnabledFeatureFlags(): PhaseFeatureFlag[] {
     "phase-175",
     "phase-176",
     "phase-177",
+    "phase-213",
+    "phase-214",
+    "phase-215",
+    "phase-216",
     "phase-170",
     "phase-171",
     "phase-172",
