@@ -15,7 +15,9 @@ import {
   isAlbedoSelectedInKit,
   requestAlbedoImplicitTxFlow,
 } from "@/lib/albedo-intent-client"
-import { isAlbedoRetired } from "@/lib/albedo-sunset"
+import { isAlbedoRetired, isAlbedoSunset221Enabled } from "@/lib/albedo-sunset"
+import { AlbedoSunsetBanner } from "@/components/albedo-sunset-banner"
+import { isWcResilienceEnabled, restoreWcSession } from "@/lib/walletconnect-resilience"
 import {
   consumePendingReturnFlow,
   isFreighterMobile171Enabled,
@@ -347,6 +349,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       if (addr) startHeartbeat(addr)
     }).catch(() => {})
   }, [refresh, startHeartbeat, syncModuleFlags, gateBiometric])
+
+  /** phase-167: validate a persisted WC session before trusting it on reload. */
+  useEffect(() => {
+    if (!isWcResilienceEnabled()) return
+    const restored = restoreWcSession({ expectedNetwork: "testnet" })
+    if (!restored.restored) return
+    void fetch("/api/wallet/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event: "connect" }),
+      cache: "no-store",
+    }).catch(() => {})
+  }, [])
 
   /** Re-check session when the tab regains focus (catches page navigations). */
   useEffect(() => {
@@ -730,6 +745,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       {children}<InboundLinkReview />
 
       <WalletConnectBanner />
+      {isAlbedoSunset221Enabled() ? <AlbedoSunsetBanner /> : null}
 
       {/* ── Network passphrase mismatch alert (Ledger on wrong network) ──── */}
       {networkMismatch && address && isHardwareWallet && (

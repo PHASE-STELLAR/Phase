@@ -471,6 +471,43 @@ export const phaseCopy: Record<
       textPlaceholder: string
     }
     imageValidation: ImageUriValidationMessages
+    /** phase-220/221/167/182 — copy for the four gated integration surfaces. */
+    gatedIntegrations: {
+      explorer: {
+        label: string
+        viewOnExpert: string
+        enrichmentTitle: string
+        enrichmentLoading: string
+        enrichmentUnavailable: string
+        enrichmentStatus: string
+        enrichmentLedger: string
+        rawHash: string
+        mainnetFenced: string
+      }
+      pool: {
+        title: string
+        quoteReady: string
+        quoteStale: string
+        routerDrift: string
+        signInWallet: string
+        unavailable: string
+      }
+      albedo: {
+        parityFreeze: string
+        retired: string
+        changeWallet: string
+        signBlocked: string
+      }
+      walletconnect: {
+        title: string
+        connectedVia: string
+        openWallet: string
+        reconnect: string
+        reconnecting: string
+        sessionRestored: string
+        chainMismatch: string
+      }
+    }
     forge: {
       exit: string
       title: string
@@ -1167,6 +1204,43 @@ export const phaseCopy: Record<
       quotes: "Image URL cannot contain \" or \\ (on-chain JSON).",
       mustHttpsOrIpfs: "On-chain image must be https://… or ipfs://…",
       ipfsCidShort: "Invalid ipfs:// URI (CID too short).",
+    },
+    gatedIntegrations: {
+      explorer: {
+        label: "Explorer",
+        viewOnExpert: "View on Stellar Expert ↗",
+        enrichmentTitle: "Transaction metadata",
+        enrichmentLoading: "Loading metadata…",
+        enrichmentUnavailable: "Metadata unavailable — showing the raw hash",
+        enrichmentStatus: "Status",
+        enrichmentLedger: "Ledger",
+        rawHash: "Raw hash",
+        mainnetFenced: "Mainnet explorer links are disabled on this deployment",
+      },
+      pool: {
+        title: "Liquidity pools",
+        quoteReady: "Quote ready — sign in your wallet",
+        quoteStale: "Quote expired — request a new one",
+        routerDrift: "Router address drift detected — swapping is disabled",
+        signInWallet: "Sign in wallet",
+        unavailable: "Pool routes are unavailable on this deployment",
+      },
+      albedo: {
+        parityFreeze:
+          "Albedo is in parity-freeze: existing flows keep working, but no new integrations are added.",
+        retired: "Albedo has been retired on PHASE. Connect Freighter, Ledger or WalletConnect to sign.",
+        changeWallet: "Change wallet",
+        signBlocked: "Albedo signing is disabled. Connect Freighter, Ledger or WalletConnect to continue.",
+      },
+      walletconnect: {
+        title: "WalletConnect v2",
+        connectedVia: "Connected via {peer}",
+        openWallet: "Open {peer}",
+        reconnect: "Reconnect relay",
+        reconnecting: "Reconnecting…",
+        sessionRestored: "Session restored",
+        chainMismatch: "Wrong network — switch to Stellar testnet before signing",
+      },
     },
     forge: {
       exit: "◄ Exit",
@@ -2065,6 +2139,43 @@ export const phaseCopy: Record<
       quotes: "La URL de imagen no puede contener \" ni \\ (JSON on-chain).",
       mustHttpsOrIpfs: "La imagen on-chain debe ser https://… o ipfs://…",
       ipfsCidShort: "URI ipfs:// inválida (CID demasiado corto).",
+    },
+    gatedIntegrations: {
+      explorer: {
+        label: "Explorador",
+        viewOnExpert: "Ver en Stellar Expert ↗",
+        enrichmentTitle: "Metadatos de transacción",
+        enrichmentLoading: "Cargando metadatos…",
+        enrichmentUnavailable: "Metadatos no disponibles — se muestra el hash sin procesar",
+        enrichmentStatus: "Estado",
+        enrichmentLedger: "Ledger",
+        rawHash: "Hash sin procesar",
+        mainnetFenced: "Los enlaces a mainnet están deshabilitados en este despliegue",
+      },
+      pool: {
+        title: "Pools de liquidez",
+        quoteReady: "Cotización lista — firmá en tu wallet",
+        quoteStale: "La cotización expiró — pedí una nueva",
+        routerDrift: "Cambio de dirección del router detectado — los swaps están deshabilitados",
+        signInWallet: "Firmar en wallet",
+        unavailable: "Las rutas de pool no están disponibles en este despliegue",
+      },
+      albedo: {
+        parityFreeze:
+          "Albedo está en congelación de paridad: los flujos actuales siguen funcionando, pero no se agregan integraciones nuevas.",
+        retired: "Albedo fue retirado de PHASE. Conectá Freighter, Ledger o WalletConnect para firmar.",
+        changeWallet: "Cambiar wallet",
+        signBlocked: "La firma con Albedo está deshabilitada. Conectá Freighter, Ledger o WalletConnect para continuar.",
+      },
+      walletconnect: {
+        title: "WalletConnect v2",
+        connectedVia: "Conectado vía {peer}",
+        openWallet: "Abrir {peer}",
+        reconnect: "Reconectar relay",
+        reconnecting: "Reconectando…",
+        sessionRestored: "Sesión restaurada",
+        chainMismatch: "Red incorrecta — cambiá a Stellar testnet antes de firmar",
+      },
     },
     forge: {
       exit: "◄ Salir",

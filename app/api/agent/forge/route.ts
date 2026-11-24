@@ -354,6 +354,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<AgentForg
       },
       { status: 429, headers: { "Retry-After": String(forgeBillingRetryAfterSeconds(quota)) } },
     )
+  }
   if (isAnalyticsWarehouseEnabled(payerAddress)) {
     void recordWarehouseEvent({
       surface: "forge",

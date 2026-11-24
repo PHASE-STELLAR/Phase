@@ -102,6 +102,10 @@ import { incSecurityCounter } from "@/lib/security-counters"
  * - phase-181: anomaly detection on volume, counters and balances with webhook alert routing (spike 619 / issue #482)
  * - phase-182: liquidity pools — classic PHASELQ/XLM pool + Soroswap router adapter, quotes,
  *   deposits/withdrawals, and pool-aware wash screening (spike 574 / issue #438)
+ * - phase-220: Stellar Expert deep links + read-only tx/asset enrichment with timeout
+ *   and graceful fallback (spike 648 / issue #642)
+ * - phase-221: Albedo sunset — call-site registry, parity-freeze (pinned 0.12.0)
+ *   and retired fail-closed signing (spike 626 / issue #644)
  * - phase-280: SEP-0001 stellar.toml generation from env at build time with published
  *   document validation and testnet fencing (spike 648 / issue #739)
  * - phase-281: Friendbot testnet bootstrap integration with idempotent per-account request,
@@ -156,7 +160,7 @@ import { incSecurityCounter } from "@/lib/security-counters"
  * - phase-268: edge runtime hardening — edge-safe helpers and a degraded in-memory
  *   fallback for file-backed stores on edge (issue #726)
  *
- * phase-182/265/266/267/268/280/281/282/286/287/288/289 are default off. Rollback: unset the env keys and restart.
+ * phase-182/220/221/265/266/267/268/280/281/282/286/287/288/289 are default off. Rollback: unset the env keys and restart.
  */
 
 export type PhaseFeatureFlag =
@@ -269,6 +273,8 @@ export type PhaseFeatureFlag =
   | "phase-180"
   | "phase-181"
   | "phase-182"
+  | "phase-220"
+  | "phase-221"
   | "phase-280"
   | "phase-281"
   | "phase-265"
@@ -327,6 +333,8 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-180": ["NEXT_PUBLIC_FEATURE_PHASE_180", "FEATURE_PHASE_180"],
   "phase-181": ["NEXT_PUBLIC_FEATURE_PHASE_181", "FEATURE_PHASE_181"],
   "phase-182": ["NEXT_PUBLIC_FEATURE_PHASE_182", "FEATURE_PHASE_182"],
+  "phase-220": ["NEXT_PUBLIC_FEATURE_PHASE_220", "FEATURE_PHASE_220"],
+  "phase-221": ["NEXT_PUBLIC_FEATURE_PHASE_221", "FEATURE_PHASE_221"],
   "phase-66": ["NEXT_PUBLIC_FEATURE_PHASE_66", "FEATURE_PHASE_66"],
   "phase-77": ["NEXT_PUBLIC_FEATURE_PHASE_77", "FEATURE_PHASE_77"],
   "phase-78": ["NEXT_PUBLIC_FEATURE_PHASE_78", "FEATURE_PHASE_78"],
@@ -558,6 +566,8 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-180",
   "phase-181",
   "phase-182",
+  "phase-220",
+  "phase-221",
   "phase-280",
   "phase-281",
   "phase-282",
@@ -732,6 +742,8 @@ export function getEnabledFeatureFlags(): PhaseFeatureFlag[] {
     "phase-180",
     "phase-181",
     "phase-182",
+    "phase-220",
+    "phase-221",
     "phase-280",
     "phase-281",
     "phase-282",
@@ -843,6 +855,8 @@ function envFlagState(flag: PhaseFeatureFlag): {
     "phase-180": process.env.NEXT_PUBLIC_FEATURE_PHASE_180,
     "phase-181": process.env.NEXT_PUBLIC_FEATURE_PHASE_181,
     "phase-182": process.env.NEXT_PUBLIC_FEATURE_PHASE_182,
+  "phase-220": process.env.NEXT_PUBLIC_FEATURE_PHASE_220,
+  "phase-221": process.env.NEXT_PUBLIC_FEATURE_PHASE_221,
     "phase-265": process.env.NEXT_PUBLIC_FEATURE_PHASE_265,
     "phase-266": process.env.NEXT_PUBLIC_FEATURE_PHASE_266,
     "phase-267": process.env.NEXT_PUBLIC_FEATURE_PHASE_267,

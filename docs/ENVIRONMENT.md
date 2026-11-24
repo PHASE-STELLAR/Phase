@@ -196,6 +196,8 @@ Feature flags follow the pattern `NEXT_PUBLIC_FEATURE_*` / `FEATURE_*` and accep
 | `PHASE_EXPERIMENT_SALT` | **secret** | Salt for experiment bucketing. |
 | `PHASE_KILL_SWITCH_FLAGS` |  | Comma-separated feature flags forced off. |
 | `ALBEDO_SUNSET_MODE` |  | Albedo sunset mode. |
+| `PHASE_EXPLORER_ALLOW_MAINNET` |  | Explicit opt-in for mainnet Stellar Expert links (phase-220). |
+| `PHASE_PROOF_WALLET_SECRET` | **secret** | Testnet key used only by the phase-182 proof harness. |
 | `SYBIL_CAUTION_MAX` |  | Sybil score above which a wallet is cautioned. |
 | `SYBIL_SUSPECT_MAX` |  | Sybil score above which a wallet is suspect. |
 | `NEXT_PUBLIC_SYBIL_CAUTION_MAX` |  | Client copy of SYBIL_CAUTION_MAX. |

@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
 
     switch (body.event) {
       case "connect":
-        recordSecurityCounter("wc_session_restored")
+        recordSecurityCounter("session_restored")
         break
       case "expire":
         recordSecurityCounter("wc_session_expired")

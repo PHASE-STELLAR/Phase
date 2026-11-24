@@ -26,6 +26,7 @@ import {
 import { playTacticalUiClick } from "@/lib/tactical-ui-click"
 import { cn } from "@/lib/utils"
 import { albedoRetiredSignMessage, isAlbedoRetired } from "@/lib/albedo-sunset"
+import { ExplorerEnrichmentPanel } from "@/components/explorer-enrichment-panel"
 
 function comparableStellarAccountG(addr: string): string {
   const t = addr.trim()
@@ -124,6 +125,8 @@ export function LiquidityFaucetControl({
   )
 
   const [status, setStatus] = useState<FaucetStatusResponse | null>(null)
+  /** phase-220: last public tx hash shown through the explorer panel. */
+  const [lastTxHash, setLastTxHash] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [loadingReward, setLoadingReward] = useState<RewardType | null>(null)
   const [rewardFlowPhase, setRewardFlowPhase] = useState<RewardFlowPhase>("idle")
@@ -385,7 +388,10 @@ export function LiquidityFaucetControl({
             : `[ REWARD_CREDITED ] +${amount} PHASELQ`
         onNarrativeLog?.(logs.faucetOk)
         onNarrativeLog?.(line)
-        if (data.hash) onNarrativeLog?.(`${logs.tracePrefix} ${data.hash}`)
+        if (data.hash) {
+          setLastTxHash(data.hash)
+          onNarrativeLog?.(`${logs.tracePrefix} ${data.hash}`)
+        }
         toast.success(line, {
           icon: <TokenIcon className="h-4 w-4" pulse />,
         })
@@ -455,7 +461,10 @@ export function LiquidityFaucetControl({
           ? `NFT enviado a tu wallet${hash ? `. Hash: ${hash}` : ""}`
           : `NFT sent to your wallet${hash ? `. Hash: ${hash}` : ""}`,
       )
-      if (hash) onNarrativeLog?.(`${logs.tracePrefix} ${hash}`)
+      if (hash) {
+        setLastTxHash(hash)
+        onNarrativeLog?.(`${logs.tracePrefix} ${hash}`)
+      }
       setNftCollectEligibility({
         status: "ready",
         viewerIsOwner: true,
@@ -747,6 +756,7 @@ export function LiquidityFaucetControl({
           </button>
         </div>
       )}
+      {lastTxHash ? <ExplorerEnrichmentPanel hash={lastTxHash} compact={compact} /> : null}
       {freighterNftCollect && address && nftCollectEligibility?.status === "loading" ? (
         <div
           className={cn(

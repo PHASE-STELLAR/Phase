@@ -279,6 +279,8 @@ export const ENV_SURFACES = {
     PHASE_EXPERIMENT_SALT: credential("Salt for experiment bucketing."),
     PHASE_KILL_SWITCH_FLAGS: text("Comma-separated feature flags forced off."),
     ALBEDO_SUNSET_MODE: oneOf("Albedo sunset mode.", ["parity-freeze", "retired"]),
+    PHASE_EXPLORER_ALLOW_MAINNET: text("Explicit opt-in for mainnet Stellar Expert links (phase-220)."),
+    PHASE_PROOF_WALLET_SECRET: credential("Testnet key used only by the phase-182 proof harness."),
     SYBIL_CAUTION_MAX: int("Sybil score above which a wallet is cautioned.", 0),
     SYBIL_SUSPECT_MAX: int("Sybil score above which a wallet is suspect.", 0),
     NEXT_PUBLIC_SYBIL_CAUTION_MAX: int("Client copy of SYBIL_CAUTION_MAX.", 0),
