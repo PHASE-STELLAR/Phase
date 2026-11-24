@@ -72,8 +72,12 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // phase-216: surface signed license metadata per listing (empty when off).
+  const { attachLicenseMetadata } = await import("@/lib/license-revocation")
+  const listingsWithLicense = await attachLicenseMetadata(listings)
+
   return NextResponse.json(
-    { listings, ...(poolPrice ? { pool_price: poolPrice } : {}) },
+    { listings: listingsWithLicense, ...(poolPrice ? { pool_price: poolPrice } : {}) },
     poolStale ? { headers: { "X-Phase-Pool-Stale": "1" } } : undefined,
   )
 }

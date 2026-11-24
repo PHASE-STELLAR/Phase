@@ -43,6 +43,18 @@ export const MODERATION_DECISIONS = ["auto_allow", "human_review", "auto_hold"] 
 
 const PREVIEW_VERIFY_REASONS = [...PREVIEW_VERIFY_RESULTS, "malformed"] as const
 
+/** phase-132 / phase-267: closed reason set for signed referral enrollment. */
+export const REFERRAL_QUEST_REASONS = [
+  "invalid_code",
+  "sybil_rejected",
+  "version_conflict",
+  "self_referral",
+  "already_enrolled",
+  "code_already_used",
+  "referrer_cap_reached",
+  "enrolled",
+] as const
+
 export const LABEL_REJECTION_REASONS = [
   "unknown_counter",
   "unknown_reason",
@@ -78,9 +90,8 @@ export const PRE_CREDIT_GATE_REASONS = [
   "provider_outage",
 ] as const
 
-/** phase-132 enrollment outcomes (the registry entry previously referenced an undefined symbol). */
+/** phase-252 referral-quest enrollment outcomes (closed set). */
 export const REFERRAL_QUEST_REASONS = [
-  "enrolled",
   "invalid_code",
   "sybil_rejected",
   "version_conflict",
@@ -88,6 +99,7 @@ export const REFERRAL_QUEST_REASONS = [
   "already_enrolled",
   "code_already_used",
   "referrer_cap_reached",
+  "enrolled",
 ] as const
 
 /** Every reason code any counter may carry. */
@@ -248,6 +260,15 @@ export const SECURITY_COUNTER_REGISTRY = {
   wc_reconnect_success: { surface: "wallet", reasons: NO_REASONS },
   wc_reconnect_failed: { surface: "wallet", reasons: NO_REASONS },
   wc_chain_mismatch_blocked: { surface: "wallet", reasons: NO_REASONS },
+  // phase-167 / 220 / 221 — closed labels for the gated integrations.
+  session_restored: { surface: "wallet", reasons: NO_REASONS },
+  relay_failover: { surface: "wallet", reasons: NO_REASONS },
+  deep_link_return: { surface: "wallet", reasons: NO_REASONS },
+  explorer_enrichment_ok: { surface: "operations", reasons: NO_REASONS },
+  explorer_enrichment_failed: { surface: "operations", reasons: NO_REASONS },
+  explorer_mainnet_link_blocked: { surface: "operations", reasons: NO_REASONS },
+  albedo_signing_blocked: { surface: "wallet", reasons: NO_REASONS },
+  albedo_version_drift: { surface: "wallet", reasons: NO_REASONS },
   xbull_connect_success: { surface: "wallet", reasons: NO_REASONS },
   xbull_sign_requested: { surface: "wallet", reasons: NO_REASONS },
   xbull_sign_success: { surface: "wallet", reasons: NO_REASONS },

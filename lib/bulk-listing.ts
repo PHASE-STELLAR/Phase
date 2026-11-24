@@ -5,6 +5,7 @@
  */
 
 import { z } from "zod"
+import { isFeatureEnabled } from "@/lib/feature-flags"
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -49,6 +50,8 @@ export const BulkListingResultSchema = z.object({
     success: z.boolean(),
     error: z.string().nullable(),
     skipped: z.boolean().default(false),
+    /** phase-216: license status resolved for this token's collection. */
+    license_status: z.string().max(32).optional(),
   })),
   batchId: z.string(),
   createdAt: z.number().int().positive(),
@@ -75,6 +78,8 @@ export const CSV_HEADERS = {
   price: ["price", "amount"],
   imageUri: ["image_uri", "imageuri", "image", "url"],
   collectionId: ["collection_id", "collectionid", "collection"],
+  /** phase-216: optional license column in import/export CSVs. */
+  licenseStatus: ["license_status", "licensestatus", "license"],
 } as const
 
 /**
@@ -194,10 +199,16 @@ export function parseCSV(csvContent: string): CSVParseResult {
  * Generate sample CSV template
  */
 export function generateCSVTemplate(): string {
+  const withLicense = isFeatureEnabled("phase-216")
   const headers = ["token_id", "name", "description", "price", "image_uri", "collection_id"]
   const sample1 = ["1", "Phase Artifact #1", "Rare digital artifact", "10000000", "https://example.com/artifact1.png", "0"]
   const sample2 = ["2", "Phase Artifact #2", "Legendary collectible", "50000000", "https://example.com/artifact2.png", "0"]
-  
+  if (withLicense) {
+    headers.push("license_status")
+    sample1.push("active")
+    sample2.push("none")
+  }
+
   return [
     headers.join(","),
     sample1.join(","),
@@ -328,13 +339,38 @@ export function calculateProgress(progress: BulkListingProgress): number {
  * Export bulk listing results to CSV
  */
 export function exportResultsToCSV(result: BulkListingResult): string {
-  const headers = ["token_id", "status", "error"]
+  const withLicense = isFeatureEnabled("phase-216")
+  const headers = ["token_id", "status", "error", ...(withLicense ? ["license_status"] : [])]
   const rows = result.results.map((r) => [
     r.tokenId.toString(),
     r.success ? "success" : r.skipped ? "skipped" : "failed",
     r.error || "",
+    ...(withLicense ? [r.license_status ?? "none"] : []),
   ])
 
+  return [
+    headers.join(","),
+    ...rows.map((row) => row.map((cell) => `"${cell}"`).join(",")),
+  ].join("\n")
+}
+
+/**
+ * phase-216 — export real listings with their license metadata. Every row
+ * carries `rights_basis` and `license_status`; with the flag off, statuses are
+ * `none` and the pre-216 CSV shape is preserved.
+ */
+export async function exportListingsWithLicenseToCSV<
+  T extends { token_id: number; collection_id: number },
+>(listings: readonly T[]): Promise<string> {
+  const { attachLicenseMetadata } = await import("@/lib/license-revocation")
+  const enriched = await attachLicenseMetadata(listings)
+  const headers = ["token_id", "collection_id", "rights_basis", "license_status"]
+  const rows = enriched.map((listing) => [
+    String(listing.token_id),
+    String(listing.collection_id),
+    listing.license.rights_basis ?? "",
+    listing.license.status,
+  ])
   return [
     headers.join(","),
     ...rows.map((row) => row.map((cell) => `"${cell}"`).join(",")),

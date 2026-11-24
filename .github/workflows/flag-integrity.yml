@@ -1,0 +1,31 @@
+name: Flag integrity and adapter tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  flag-integrity:
+    name: Unique flag IDs, drills and adapter tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Reject duplicate flag IDs / env vars / aliases
+        run: npm run flags:check
+      - name: Non-destructive kill-switch drill
+        run: npm run drill:kill-switch
+        env:
+          PHASE_FLAG_KILL_SWITCH_DRILLS: "1"
+      - name: Adapter and flag unit tests
+        run: npm run test:adapters

@@ -117,3 +117,54 @@ export const PHASE_ERROR_CODES: readonly number[] = Object.keys(PHASE_ERROR_TAXO
 export function phaseErrorTaxonomyRollbackNote(): string {
   return "Rollback phase-161: unset NEXT_PUBLIC_FEATURE_PHASE_161 / FEATURE_PHASE_161 or set 0/false and restart. No persisted state."
 }
+
+// ─── phase-214: transport errors mapped into the same descriptor shape ───────
+//
+// Transport codes live in a disjoint range (1000+) so the contract 1..39
+// surface stays code-stable. `describePhaseErrorCode` / `PHASE_ERROR_CODES`
+// deliberately remain contract-only for backwards compatibility.
+
+export const TRANSPORT_ERROR_CODES = {
+  RATE_LIMITED: 1001,
+  UPSTREAM_5XX: 1002,
+  TIMEOUT: 1003,
+  NETWORK_UNREACHABLE: 1004,
+} as const
+
+export type TransportErrorCode = (typeof TRANSPORT_ERROR_CODES)[keyof typeof TRANSPORT_ERROR_CODES]
+
+const TRANSPORT_DISCRIMINANTS: Record<number, string> = {
+  [TRANSPORT_ERROR_CODES.RATE_LIMITED]: "TransportRateLimited",
+  [TRANSPORT_ERROR_CODES.UPSTREAM_5XX]: "TransportUpstream5xx",
+  [TRANSPORT_ERROR_CODES.TIMEOUT]: "TransportTimeout",
+  [TRANSPORT_ERROR_CODES.NETWORK_UNREACHABLE]: "TransportNetworkUnreachable",
+}
+
+/** All transport codes are transient by definition; callers may retry them. */
+const TRANSPORT_RETRYABLE = new Set<number>(Object.values(TRANSPORT_ERROR_CODES))
+
+export const TRANSPORT_ERROR_TAXONOMY: Record<number, PhaseErrorDescriptor> =
+  Object.fromEntries(
+    Object.entries(TRANSPORT_DISCRIMINANTS).map(([code, discriminant]) => [
+      Number(code),
+      {
+        code: Number(code),
+        discriminant,
+        retryable: TRANSPORT_RETRYABLE.has(Number(code)),
+        userMessageKey: userMessageKey(discriminant),
+      } satisfies PhaseErrorDescriptor,
+    ]),
+  )
+
+/** Look up a code from either the contract or transport taxonomy. */
+export function describeAnyPhaseError(code: number): PhaseErrorDescriptor | null {
+  return PHASE_ERROR_TAXONOMY[code] ?? TRANSPORT_ERROR_TAXONOMY[code] ?? null
+}
+
+export function isPhase214Enabled(): boolean {
+  return isFeatureEnabled("phase-214")
+}
+
+export function phase214RollbackNote(): string {
+  return "Rollback phase-214: unset NEXT_PUBLIC_FEATURE_PHASE_214 / FEATURE_PHASE_214 or set 0/false and restart. Callers fall back to lib/phase-host-error.ts string helpers; no persisted state."
+}

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { isFeatureEnabled } from "@/lib/feature-flags"
+import { isPhase215Enabled } from "@/lib/webhook-subscriptions"
 import {
   deleteSubscription,
   getSubscription,
@@ -10,7 +10,7 @@ import {
  * DELETE /api/admin/webhook-subscriptions/[id]            - remove a subscription
  * POST   /api/admin/webhook-subscriptions/[id]?rotate=1    - rotate its secret
  *
- * Flag: phase-154. See ../route.ts for the shared admin-auth convention.
+ * Flag: phase-215 (phase-154 precursor). See ../route.ts for the shared admin-auth convention.
  */
 
 export const dynamic = "force-dynamic"
@@ -27,7 +27,7 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  if (!isFeatureEnabled("phase-154")) {
+  if (!isPhase215Enabled()) {
     return NextResponse.json({ error: "Not found" }, { status: 404 })
   }
   if (!validateAdminAuth(req)) {
@@ -49,7 +49,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  if (!isFeatureEnabled("phase-154")) {
+  if (!isPhase215Enabled()) {
     return NextResponse.json({ error: "Not found" }, { status: 404 })
   }
   if (!validateAdminAuth(req)) {

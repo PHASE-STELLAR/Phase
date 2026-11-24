@@ -1,5 +1,6 @@
 import { serverLog } from "@/lib/server-logger"
 import { NextRequest, NextResponse } from "next/server"
+import { backoffDelayMs, isPhase214Enabled, parseRetryAfter } from "@/lib/phase-transport-error"
 
 /** Upstream Soroban JSON-RPC (solo servidor; el navegador llama a esta ruta en el mismo origen). */
 const DEFAULT_SOROBAN_TESTNET_RPC = "https://soroban-testnet.stellar.org"
@@ -23,10 +24,23 @@ function attemptsPerUrl(): number {
   return process.env.NODE_ENV === "development" ? 3 : 2
 }
 
-/** Pausa entre reintentos al mismo upstream: 1s, 2s, 4s… (no saturar con 503). */
-function proxyRetryBackoffMs(attemptIndex: number): number {
-  const i = Math.max(0, Math.min(attemptIndex, 8))
-  return 1000 * 2 ** i
+/**
+ * Pausa entre reintentos al mismo upstream. Legacy: 1s, 2s, 4s… (acotado a 8).
+ * Con phase-214: exponential backoff con jitter, límite superior y respeto a
+ * `Retry-After` del upstream (phase-214 off = comportamiento anterior).
+ */
+function proxyRetryBackoffMs(attemptIndex: number, retryAfterHeader?: string | null): number {
+  if (!isPhase214Enabled()) {
+    const i = Math.max(0, Math.min(attemptIndex, 8))
+    return 1000 * 2 ** i
+  }
+  return Math.round(
+    backoffDelayMs(attemptIndex, parseRetryAfter(retryAfterHeader), {
+      baseDelayMs: 1000,
+      maxDelayMs: 8_000,
+      maxRetryAfterMs: 30_000,
+    }),
+  )
 }
 
 /** HTTP que suelen ser transitorios en el RPC público de testnet. */
@@ -291,7 +305,7 @@ export async function POST(req: NextRequest) {
           recordUpstreamFailure(url, upstream.status === 429)
           if (isHalfOpenProbe) completeHalfOpenProbe(url)
           if (attempt + 1 < perUrl) {
-            await sleep(proxyRetryBackoffMs(attempt))
+            await sleep(proxyRetryBackoffMs(attempt, upstream.headers.get("retry-after")))
             continue
           }
           break

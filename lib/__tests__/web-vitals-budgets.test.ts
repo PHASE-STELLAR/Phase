@@ -2,9 +2,17 @@ import { describe, it, beforeEach } from "vitest"
 import * as assert from "node:assert/strict"
 import {
   DEFAULT_VITAL_BUDGETS,
+  createRumEvent,
+  evaluateFieldData,
   evaluateVital,
+  formatVitalsMarkdown,
   getVitalsBudget,
+  hasRegression,
+  isRumCollectorEnabled,
   isWebVitalsBudgetsEnabled,
+  normalizeRoute,
+  parseFieldData,
+  rumRollbackNote,
   summarizeVitals,
   webVitalsBudgetsRollbackNote,
 } from "@/lib/web-vitals-budgets"
@@ -70,3 +78,100 @@ describe("phase-160 web vitals budgets", () => {
     assert.match(webVitalsBudgetsRollbackNote(), /phase-160/)
   })
 })
+
+// ─── phase-213: closed-label RUM + CI gate ───────────────────────────────────
+
+function enable213(on: boolean) {
+  if (on) {
+    process.env.NEXT_PUBLIC_FEATURE_PHASE_213 = "1"
+    process.env.FEATURE_PHASE_213 = "1"
+  } else {
+    delete process.env.NEXT_PUBLIC_FEATURE_PHASE_213
+    delete process.env.FEATURE_PHASE_213
+  }
+}
+
+const HASH = "a".repeat(64)
+
+describe("phase-213 RUM wire format", () => {
+  beforeEach(() => enable213(true))
+
+  it("normalizes routes and strips PII", () => {
+    assert.equal(normalizeRoute("/world/123?wallet=GABC&ref=abc"), "/world/:id")
+    assert.equal(normalizeRoute("/profile/GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ"), "/profile/:id")
+    assert.equal(normalizeRoute("/explore/"), "/explore")
+    assert.equal(normalizeRoute(null), null)
+  })
+
+  it("emits only the five whitelisted fields", () => {
+    const withPii = {
+      route: "/world/42?secret=1",
+      metric: "LCP",
+      value: 2100,
+      sessionHash: HASH,
+      ts: Date.now(),
+      wallet: "GSECRET",
+      email: "someone@example.com",
+    }
+    const event = createRumEvent(withPii)
+    assert.ok(event)
+    assert.deepEqual(Object.keys(event!).sort(), ["metric", "route", "sessionHash", "ts", "value"])
+    assert.equal(JSON.stringify(event).includes("GSECRET"), false)
+    assert.equal(JSON.stringify(event).includes("someone@example.com"), false)
+    assert.equal(event!.route, "/world/:id")
+  })
+
+  it("rejects malformed / raw session ids", () => {
+    assert.equal(createRumEvent({ route: "/", metric: "LCP", value: 1, sessionHash: "raw-session", ts: Date.now() }), null)
+    assert.equal(createRumEvent({ route: "/", metric: "FCP", value: 1, sessionHash: HASH, ts: Date.now() }), null)
+    assert.equal(createRumEvent({ route: "/", metric: "CLS", value: 99, sessionHash: HASH, ts: Date.now() }), null)
+  })
+
+  it("drops unexpected fields when parsing recorded data", () => {
+    const parsed = parseFieldData([
+      { route: "/", metric: "INP", value: 100, sessionHash: HASH, ts: Date.now(), ip: "1.2.3.4" },
+      { route: "/", metric: "INP", value: -1, sessionHash: HASH, ts: Date.now() },
+    ])
+    assert.equal(parsed.length, 1)
+    assert.equal("ip" in parsed[0], false)
+  })
+
+  it("reflects the phase-213 flag and exposes a rollback note", () => {
+    assert.equal(isRumCollectorEnabled(), true)
+    enable213(false)
+    assert.equal(isRumCollectorEnabled(), false)
+    assert.match(rumRollbackNote(), /phase-213/)
+  })
+})
+
+describe("phase-213 CI budget evaluation", () => {
+  beforeEach(() => enable213(true))
+
+  const events = Array.from({ length: 8 }, (_, i) => ({
+    route: "/explore",
+    metric: "CLS" as const,
+    value: 0.04 + i * 0.001,
+    sessionHash: HASH,
+    ts: 1760000000000 + i,
+  }))
+
+  it("passes recorded data that stays within budget", () => {
+    const report = evaluateFieldData(events)
+    assert.equal(hasRegression(report), false)
+    assert.equal(report.evaluations[0].budget, 0.05)
+  })
+
+  it("blocks a deliberate budget regression", () => {
+    const regressed = events.map((e) => ({ ...e, value: 0.2 }))
+    const report = evaluateFieldData(regressed)
+    assert.equal(hasRegression(report), true)
+    assert.match(formatVitalsMarkdown(report), /Gate: FAIL/)
+  })
+
+  it("ignores buckets below the minimum sample count", () => {
+    const report = evaluateFieldData(events.slice(0, 2))
+    assert.equal(report.evaluations.length, 0)
+    assert.equal(hasRegression(report), false)
+  })
+})
+

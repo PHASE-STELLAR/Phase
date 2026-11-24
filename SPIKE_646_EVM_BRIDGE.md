@@ -42,3 +42,19 @@ PHASE currently lives on Stellar Soroban. This spike explores cross-chain intero
 - [ ] Stellar contract interface sketched
 - [ ] EVM contract pattern identified
 - [ ] No code changes (spike = design only)
+
+## Implementation note (flag `phase-218`)
+
+The design-only spike above remains the authoritative design record. A
+testnet-only adapter was added behind `PHASE_FLAG_EVM_BRIDGE` in
+`lib/adapters/bridge/`:
+
+- `stellar-to-evm` route only; pubnet fenced by a static snapshot;
+- Stellar leg signed client-side, server custody limited to the EVM leg;
+- idempotent relay keyed by Stellar source tx hash with an atomic mint claim;
+- configurable finality depth, drift/fee fences, partial fills and orphan
+  recovery (`docs/FLAGGED_ADAPTERS.md`);
+- no double-mint under replay (`tests/bridge.test.ts`).
+
+Rollback: unset the flag — routes disappear and locked funds remain
+recoverable through the documented custody recovery procedure.

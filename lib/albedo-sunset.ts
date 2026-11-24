@@ -19,8 +19,8 @@
  * Not spikes 520/537 (keep Albedo first-class with guards) — this is the
  * removal path with a reversible flag.
  *
- * Feature flag: phase-170.
- * Rollback: unset NEXT_PUBLIC_FEATURE_PHASE_170 / FEATURE_PHASE_170; every
+ * Feature flag: phase-221.
+ * Rollback: unset NEXT_PUBLIC_FEATURE_PHASE_221 / FEATURE_PHASE_221; every
  * call site reverts to the legacy guarded Albedo behavior (zero regression).
  */
 
@@ -30,6 +30,8 @@ import type {
   AlbedoCallSiteId,
   AlbedoSunsetMode,
 } from "@/lib/types/albedo-sunset";
+
+export type { AlbedoSunsetMode, AlbedoCallSite, AlbedoCallSiteId } from "@/lib/types/albedo-sunset";
 
 /** Pinned `@albedo-link/intent` version — parity freeze forbids drift. */
 export const ALBEDO_INTENT_PINNED_VERSION = "0.12.0";
@@ -50,8 +52,8 @@ export class AlbedoSunsetError extends Error {
   }
 }
 
-export function isAlbedoSunset170Enabled(): boolean {
-  return isFeatureEnabled("phase-170");
+export function isAlbedoSunset221Enabled(): boolean {
+  return isFeatureEnabled("phase-221");
 }
 
 /**
@@ -108,7 +110,7 @@ const CALL_SITE_IDS = new Set<string>(ALBEDO_CALL_SITES.map((c) => c.id));
  * Unknown values fail safe to `parity-freeze` — never to `retired`.
  */
 export function getAlbedoSunsetMode(): AlbedoSunsetMode | null {
-  if (!isAlbedoSunset170Enabled()) return null;
+  if (!isAlbedoSunset221Enabled()) return null;
   const raw =
     typeof process !== "undefined"
       ? (process.env as Record<string, string | undefined>).ALBEDO_SUNSET_MODE?.trim().toLowerCase()
@@ -214,7 +216,7 @@ export function albedoSunsetStatus(): {
   call_sites: AlbedoCallSite[];
 } {
   return {
-    enabled: isAlbedoSunset170Enabled(),
+    enabled: isAlbedoSunset221Enabled(),
     mode: getAlbedoSunsetMode(),
     pinned_version: ALBEDO_INTENT_PINNED_VERSION,
     call_sites: [...ALBEDO_CALL_SITES],
