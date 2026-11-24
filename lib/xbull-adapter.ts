@@ -28,8 +28,10 @@ const LS_SELECTED_MODULE_ID = "@StellarWalletsKit/selectedModuleId"
 
 /**
  * Checks whether xBull is the currently selected wallet module in StellarWalletsKit.
+ * Enforces phase-168 feature flag: returns false when flag is disabled (clean rollback).
  */
 export function isXBullSelected(): boolean {
+  if (!isXBullEnabled()) return false
   if (typeof window === "undefined") return false
   const selected = window.localStorage.getItem(LS_SELECTED_MODULE_ID)?.trim()?.toLowerCase()
   return selected === XBULL_ID || selected === "xbull-wallet"

@@ -76,6 +76,8 @@ import { incSecurityCounter } from "@/lib/security-counters"
  * - phase-167: WalletConnect v2 mobile session resilience with reconnect and chain-switch (spike 623 / issue #486)
  * - phase-168: xBull full support with sign, trustline and Freighter-difference matrix (spike 624 / issue #487)
  * - phase-169: Ledger blind-signing to clear-signing review for Soroban transactions (spike 625 / issue #488)
+ * - phase-224: Freighter mobile browser support — UA detection, keyboard avoidance, same-tab friendbot, return-flow marker (spike 627 / issue #648)
+ * - phase-225: Biometric unlock for returning wallets — WebAuthn platform gate, AES-GCM envelope, attempt lockout, recovery (spike 628 / issue #649)
  * - phase-174: A/B experimentation framework for forge and chamber copy plus
  *   pricing with sticky salted bucketing (spike 612 / issue #475)
  * - phase-175: Search analytics — hashed query logs, zero-result rate,
@@ -272,6 +274,8 @@ export type PhaseFeatureFlag =
   | "phase-287"
   | "phase-288"
   | "phase-289"
+  | "phase-224"
+  | "phase-225"
   | "phase-228"
   | "phase-251"
   | "phase-252"
@@ -413,6 +417,8 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-287": ["NEXT_PUBLIC_FEATURE_PHASE_287", "FEATURE_PHASE_287"],
   "phase-288": ["NEXT_PUBLIC_FEATURE_PHASE_288", "FEATURE_PHASE_288"],
   "phase-289": ["NEXT_PUBLIC_FEATURE_PHASE_289", "FEATURE_PHASE_289"],
+  "phase-224": ["NEXT_PUBLIC_FEATURE_PHASE_224", "FEATURE_PHASE_224"],
+  "phase-225": ["NEXT_PUBLIC_FEATURE_PHASE_225", "FEATURE_PHASE_225"],
   "phase-228": ["NEXT_PUBLIC_FEATURE_PHASE_228", "FEATURE_PHASE_228"],
   "phase-251": ["NEXT_PUBLIC_FEATURE_PHASE_251", "FEATURE_PHASE_251"],
   "phase-252": ["NEXT_PUBLIC_FEATURE_PHASE_252", "FEATURE_PHASE_252"],
@@ -545,6 +551,8 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-287",
   "phase-288",
   "phase-289",
+  "phase-224",
+  "phase-225",
   "phase-228",
   "phase-251",
   "phase-252",

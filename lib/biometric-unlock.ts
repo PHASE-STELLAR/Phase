@@ -44,6 +44,15 @@ export function isBiometric172Enabled(): boolean {
   return isFeatureEnabled("phase-172");
 }
 
+/**
+ * Returns true when phase-225 (issue #649) or its legacy phase-172 alias is
+ * enabled. Callers should prefer this helper so they resolve the canonical
+ * issue flag; phase-172 stays registered for backward compatibility.
+ */
+export function isBiometricEnabled(): boolean {
+  return isFeatureEnabled("phase-225") || isFeatureEnabled("phase-172");
+}
+
 export const BIOMETRIC_ENVELOPE_LS_KEY = "@Phase/biometric-session-envelope";
 export const BIOMETRIC_META_LS_KEY = "@Phase/biometric-lock-meta";
 /** Sealed sessions re-gate via OS biometric after this long. */
