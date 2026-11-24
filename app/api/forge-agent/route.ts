@@ -13,6 +13,7 @@ import {
 import { runForgePipeline } from "@/lib/forge/pipeline"
 import { tokenContractIdForServer, REQUIRED_AMOUNT } from "@/lib/phase-protocol"
 import { isSettlementUsed, markSettlementUsedIfUnused } from "@/lib/settlement-store"
+import { dispatchWebhookEvent } from "@/lib/webhook-delivery"
 import {
   nanobananaApiKeyConfigured,
   nanobananaAsyncWebhookEnabled,
@@ -109,6 +110,12 @@ export async function POST(request: NextRequest) {
         { status: 409, headers: { "x-correlation-id": correlationId } },
       )
     }
+    // phase-215: emit once per settled transaction (no-op when flag is off).
+    void dispatchWebhookEvent(
+      "settle.verified",
+      { txHash: receipt, correlationId },
+      `settle.verified:${receipt}`,
+    ).catch(() => undefined)
   }
 
   if (typeof body.prompt !== "string") {

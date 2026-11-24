@@ -38,6 +38,13 @@ const FILES = {
   x402DeadLetter: "x402-dead-letter.json",
   generationJobs: "generation-jobs.json",
   generationDlq: "generation-dlq.json",
+  ageDeclarations: "age-declarations.json",
+  rumEvents: "rum-events.json",
+  webhookSubscriptions: "webhook-subscriptions.json",
+  subscribers: "webhook-subscribers.json",
+  webhookDeliveries: "webhook-deliveries.json",
+  licenseAttestations: "license-attestations.json",
+  licenseAudit: "license-audit.json",
 } as const
 
 export type ServerDataFile = keyof typeof FILES

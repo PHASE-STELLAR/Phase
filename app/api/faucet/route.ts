@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
+import { dispatchWebhookEvent } from "@/lib/webhook-delivery"
+import { AgeRestrictedError, enforceAgeGate216 } from "@/lib/age-gate-216"
 import {
   classicLiqIssuerForStellarToml,
   expectedClassicPhaserLiqSorobanContractId,
@@ -508,6 +510,19 @@ export async function POST(req: NextRequest) {
     )
   }
 
+  // phase-216: claim-side age gate (451 on denial, no-op when flag off).
+  try {
+    await enforceAgeGate216(userAddress, "claim")
+  } catch (error) {
+    if (error instanceof AgeRestrictedError) {
+      return NextResponse.json(
+        { error: "Age restricted", code: error.code, detail: error.message },
+        { status: error.status },
+      )
+    }
+    throw error
+  }
+
   // Triple check #1: Check deny-list (governance veto)
   if (await isWalletDenied(userAddress)) {
     return NextResponse.json(
@@ -761,6 +776,11 @@ export async function POST(req: NextRequest) {
       const out = await pollSubmittedMint(server, pendingHash)
       if (out.outcome === "SUCCESS") {
         await markClaim(userAddress, reward)
+        void dispatchWebhookEvent(
+          "faucet.claim_completed",
+          { wallet: userAddress, reward, txHash: pendingHash },
+          `faucet.claim_completed:${pendingHash}`,
+        ).catch(() => undefined)
         let streakInfo: StreakInfo | undefined
         if (reward === "daily") {
           const recorded = await recordDailyClaim(userAddress)
@@ -881,6 +901,11 @@ export async function POST(req: NextRequest) {
     const out = await pollSubmittedMint(server, hash)
     if (out.outcome === "SUCCESS") {
       await markClaim(userAddress, reward)
+      void dispatchWebhookEvent(
+        "faucet.claim_completed",
+        { wallet: userAddress, reward, txHash: hash },
+        `faucet.claim_completed:${hash}`,
+      ).catch(() => undefined)
       let streakInfo: StreakInfo | undefined
       if (reward === "daily") {
         const recorded = await recordDailyClaim(userAddress)

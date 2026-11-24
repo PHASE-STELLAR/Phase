@@ -11,7 +11,7 @@ import {
   buildClassicTrustlineTransactionXdr,
   parseSignedTxXdr,
 } from "@/lib/classic-liq"
-import { humanizePhaseHostErrorMessage } from "@/lib/phase-host-error"
+import { humanizePhaseError } from "@/lib/phase-error-presentation"
 import { pickCopy } from "@/lib/phase-copy"
 import { extractBaseAddress } from "@stellar/stellar-sdk"
 import {
@@ -113,11 +113,11 @@ export function LiquidityFaucetControl({
   const logs = ch.logs
   const normalizeToastError = useCallback(
     (msg: string) => {
-      const h = humanizePhaseHostErrorMessage(msg, ch.phaseHostContractErrors, ch.phaseHostContractUnknown)
+      const h = humanizePhaseError(msg, ch.phaseHostContractErrors, ch.phaseHostContractUnknown, lang)
       if (h) return h
       return isPhaseUnauthorizedError(msg) ? ch.biometricTrustGateClosed : msg
     },
-    [ch.biometricTrustGateClosed, ch.phaseHostContractErrors, ch.phaseHostContractUnknown],
+    [ch.biometricTrustGateClosed, ch.phaseHostContractErrors, ch.phaseHostContractUnknown, lang],
   )
 
   const [status, setStatus] = useState<FaucetStatusResponse | null>(null)

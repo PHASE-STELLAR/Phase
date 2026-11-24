@@ -35,6 +35,15 @@
  * - phase-83: emoji-reaction aggregation on signals with per-wallet rate limits
  * - phase-139: collection-level offer books aggregated from token offers + bulk bid
  * - phase-140: royalty enforcement on secondary sales via a creator/seller split
+ * - phase-154: admin-managed outbound webhook subscribers (partial spike 664)
+ * - phase-160: per-route web-vitals budget table (partial spike 657)
+ * - phase-161: code-stable PhaseError descriptor taxonomy 1..39 (partial spike 660)
+ * - phase-164: self-attested age bands / gated world creation (partial spike 637)
+ * - phase-165: signed license attestation on collection creation (partial spike 639)
+ * - phase-213: client RUM collector + CI web-vitals budget gate (hashed sessions only)
+ * - phase-214: transport error taxonomy (429/5xx/timeout) with bounded retry/backoff
+ * - phase-215: signed webhook subscribers, SSRF fence, redelivery UI, circuit breakers
+ * - phase-216: age-gate enforcement on viewer/claim paths + license revocation cascade
  */
 
 export type PhaseFeatureFlag =
@@ -91,7 +100,16 @@ export type PhaseFeatureFlag =
   | "phase-82"
   | "phase-83"
   | "phase-139"
-  | "phase-140";
+  | "phase-140"
+  | "phase-154"
+  | "phase-160"
+  | "phase-161"
+  | "phase-164"
+  | "phase-165"
+  | "phase-213"
+  | "phase-214"
+  | "phase-215"
+  | "phase-216";
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-66": ["NEXT_PUBLIC_FEATURE_PHASE_66", "FEATURE_PHASE_66"],
@@ -147,6 +165,15 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-83": ["NEXT_PUBLIC_FEATURE_PHASE_83", "FEATURE_PHASE_83"],
   "phase-139": ["NEXT_PUBLIC_FEATURE_PHASE_139", "FEATURE_PHASE_139"],
   "phase-140": ["NEXT_PUBLIC_FEATURE_PHASE_140", "FEATURE_PHASE_140"],
+  "phase-154": ["NEXT_PUBLIC_FEATURE_PHASE_154", "FEATURE_PHASE_154"],
+  "phase-160": ["NEXT_PUBLIC_FEATURE_PHASE_160", "FEATURE_PHASE_160"],
+  "phase-161": ["NEXT_PUBLIC_FEATURE_PHASE_161", "FEATURE_PHASE_161"],
+  "phase-164": ["NEXT_PUBLIC_FEATURE_PHASE_164", "FEATURE_PHASE_164"],
+  "phase-165": ["NEXT_PUBLIC_FEATURE_PHASE_165", "FEATURE_PHASE_165"],
+  "phase-213": ["NEXT_PUBLIC_FEATURE_PHASE_213", "FEATURE_PHASE_213"],
+  "phase-214": ["NEXT_PUBLIC_FEATURE_PHASE_214", "FEATURE_PHASE_214"],
+  "phase-215": ["NEXT_PUBLIC_FEATURE_PHASE_215", "FEATURE_PHASE_215"],
+  "phase-216": ["NEXT_PUBLIC_FEATURE_PHASE_216", "FEATURE_PHASE_216"],
 };
 
 function isTruthy(v: string | undefined): boolean {
@@ -228,6 +255,15 @@ export function getEnabledFeatureFlags(): PhaseFeatureFlag[] {
     "phase-83",
     "phase-139",
     "phase-140",
+    "phase-154",
+    "phase-160",
+    "phase-161",
+    "phase-164",
+    "phase-165",
+    "phase-213",
+    "phase-214",
+    "phase-215",
+    "phase-216",
   ];
   return all.filter(isFeatureEnabled)
 }

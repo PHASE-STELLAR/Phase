@@ -1,0 +1,170 @@
+[
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 3000,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000000000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 3100,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000001000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 3200,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000002000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 3300,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000003000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 3400,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000004000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 3500,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000005000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 3600,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000006000
+  },
+  {
+    "route": "/",
+    "metric": "LCP",
+    "value": 3700,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000007000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 120,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000000000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 140,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000001000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 150,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000002000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 130,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000003000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 160,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000004000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 145,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000005000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 135,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000006000
+  },
+  {
+    "route": "/",
+    "metric": "INP",
+    "value": 155,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000007000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.04,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000000000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.05,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000001000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.045,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000002000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.06,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000003000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.055,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000004000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.042,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000005000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.048,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000006000
+  },
+  {
+    "route": "/",
+    "metric": "CLS",
+    "value": 0.052,
+    "sessionHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "ts": 1760000007000
+  }
+]

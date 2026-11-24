@@ -335,6 +335,18 @@ export async function soldListing(id: string): Promise<Listing | null> {
   return setListingStatus(id, "sold");
 }
 
+/**
+ * phase-216: delist every active listing of a collection after license
+ * revocation. Returns the number of listings actually cancelled.
+ */
+export async function cancelListingsForCollection(collectionId: number): Promise<number> {
+  const db = getDb();
+  const result = db
+    .prepare("UPDATE listings SET status = ? WHERE collection_id = ? AND status = ?")
+    .run("cancelled", collectionId, "active");
+  return result.changes;
+}
+
 // â”€â”€ Offers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Issue #36: backed by SQLite (indexed on listing_id, buyer_wallet, and
 // status+expires_at for expiration scans) instead of a full-array scan.

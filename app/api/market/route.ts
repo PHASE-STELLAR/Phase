@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
 import { getListings, createListing, isPhase140Enabled } from "@/lib/market-store"
+import { attachLicenseMetadata } from "@/lib/license-revocation"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -16,7 +17,9 @@ export async function GET(request: NextRequest) {
     seller_wallet: sellerWallet ?? undefined,
     sort: sort ?? "newest",
   })
-  return NextResponse.json({ listings })
+  // phase-216: surface signed license metadata per listing (empty when off).
+  const listingsWithLicense = await attachLicenseMetadata(listings)
+  return NextResponse.json({ listings: listingsWithLicense })
 }
 
 type CreateBody = {

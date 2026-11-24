@@ -27,7 +27,7 @@ const TrustlineButton = dynamic(
 )
 import { useWallet } from "@/components/wallet-provider"
 import { pickCopy } from "@/lib/phase-copy"
-import { humanizePhaseHostErrorMessage } from "@/lib/phase-host-error"
+import { humanizePhaseError } from "@/lib/phase-error-presentation"
 import { composeImageWithPhaseForgeSeal } from "@/lib/forge-seal-image"
 import { isIpfsUploadConfigured, uploadToIPFS } from "@/lib/ipfs-upload"
 import { cn } from "@/lib/utils"
@@ -115,6 +115,7 @@ function truncateAddress(addr: string) {
 function mapFusionChamberError(
   err: unknown,
   errors: ReturnType<typeof pickCopy>["forge"]["errors"],
+  lang: unknown = "en",
 ): string {
   const msg =
     err instanceof Error
@@ -137,10 +138,11 @@ function mapFusionChamberError(
     default:
       break
   }
-  const hostMsg = humanizePhaseHostErrorMessage(
+  const hostMsg = humanizePhaseError(
     msg,
     errors.phaseHostContractErrors,
     errors.phaseHostContractUnknown,
+    lang,
   )
   if (hostMsg) return hostMsg
   if (msg && (/\s/.test(msg) || /[a-z]/.test(msg))) {
@@ -558,7 +560,7 @@ export default function ForgePage() {
             lang === "es"
               ? "La colección se creó, pero el auto-mint del NFT falló. Abrí Chamber para mintear manualmente."
               : "Collection created, but NFT auto-mint failed. Open Chamber to mint manually."
-          const friendly = mapFusionChamberError(mintErr, ff.errors)
+          const friendly = mapFusionChamberError(mintErr, ff.errors, lang)
           setError(`${fallback} ${friendly}`)
         }
 
@@ -570,7 +572,7 @@ export default function ForgePage() {
         }
       } catch (e) {
         if (opts.restoreOracleOnFail) setAgentState("COMPLETE")
-        setError(mapFusionChamberError(e, ff.errors))
+        setError(mapFusionChamberError(e, ff.errors, lang))
       } finally {
         setIsMintingCollection(false)
       }
@@ -936,7 +938,7 @@ export default function ForgePage() {
       setAgentState("IDLE")
       setAgentImageUrl(null)
       setLore(null)
-      setError(mapFusionChamberError(e, ff.errors))
+      setError(mapFusionChamberError(e, ff.errors, lang))
     }
   }, [address, anomalyDescription, initiateAgentForge, lang, oracleImageStyleMode, protocolReady, refresh])
 
@@ -951,7 +953,7 @@ export default function ForgePage() {
         clearManualOnSuccess: false,
       })
     } catch (e) {
-      setError(mapFusionChamberError(e, ff.errors))
+      setError(mapFusionChamberError(e, ff.errors, lang))
     }
   }, [agentImageUrl, agentState, lang, resolveImageUriForMint, runCreateCollectionTransaction])
 
@@ -982,7 +984,7 @@ export default function ForgePage() {
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      setError(msg ? mapFusionChamberError(e, ff.errors) : ff.errors.fusionChamberHalted)
+      setError(msg ? mapFusionChamberError(e, ff.errors, lang) : ff.errors.fusionChamberHalted)
       return
     }
     await runCreateCollectionTransaction(finalUri, {

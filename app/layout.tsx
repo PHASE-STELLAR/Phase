@@ -4,6 +4,7 @@ import { IBM_Plex_Sans, IBM_Plex_Mono, Bebas_Neue, Orbitron } from "next/font/go
 import { Analytics } from "@vercel/analytics/next"
 import { AppProviders } from "@/components/app-providers"
 import { SmoothScroll } from "@/components/smooth-scroll"
+import { WebVitalsReporter } from "@/components/web-vitals-reporter"
 import "./globals.css"
 
 const PRODUCTION_SITE = "https://www.phasee.xyz"
@@ -128,6 +129,7 @@ export default function RootLayout({
         <SmoothScroll>
           <AppProviders>{children}</AppProviders>
         </SmoothScroll>
+        <WebVitalsReporter />
         <Analytics />
       </body>
     </html>

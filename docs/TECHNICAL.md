@@ -71,7 +71,7 @@ flowchart TB
 | `lib/classic-liq.ts` | Classic asset trustline utilities (`changeTrust` XDR, Horizon checks) + CID integrity helpers via `cid-cache` (phase-119) + rate-limit-aware batch submission to Horizon (phase-134) |
 | `lib/phase-copy.ts` | Centralized i18n dictionary (EN/ES) |
 | `lib/server-data-paths.ts` | Writable data location abstraction |
-| `lib/feature-flags.ts` | Flag registry (phase-107,111,113,114 + 116,117,119,120 + 121..124, env resolution, rollback notes) |
+| `lib/feature-flags.ts` | Flag registry (phase-107,111,113,114 + 116,117,119,120 + 121..124 + 154,160,161,164,165,213..216; env resolution, rollback notes) |
 | `lib/world-conflict.ts` | World save conflict detection (phase-105): version check + per-author vector clock normalization (object / `Map` / entries array) and ordering |
 | `lib/story-arc-continuity.ts` | AI story-arc continuity check against recent world narratives (phase-107) |
 | `lib/narrative-world-store.ts` | World/narrative JSON store + localized per-(tokenId,lang) narrative cache (phase-111) + world export snapshot builder and markdown renderer (phase-112) + collaborative role store with ownership enforcement (phase-109) + lore link store with back-reference index (phase-115) |
@@ -177,6 +177,10 @@ settlement verifier and must not accept unsigned base64 payloads.
 | `phase-83` | `GET/POST /api/signals/[id]/reactions` | Toggle a curated emoji reaction per (signal, wallet); `GET` returns per-emoji counts + the viewer's own reacted flags; `POST` rate-limited to 20/60s per wallet (`429` + `Retry-After` over the limit) | `404` disabled |
 | `phase-139` | `GET/POST /api/market/collections/[collection_id]/offer-book` | `GET` aggregates every pending offer across a collection's active listings into price levels (best price first); `POST` fans a single buyer intent into up to 20 per-listing offers, reporting `created`/`skipped` | `404` disabled; per-listing `/api/market/[id]/offers` unaffected |
 | `phase-140` | `POST /api/market/route.ts` (listing create) & `POST /api/market/[id]/offers/[offer_id]` (accept) | Listing create accepts `creator_wallet`/`royalty_bps`; accepting an offer on a secondary sale (`creator_wallet !== seller_wallet`) computes and ledgers a creator/seller split, returned as `royalty` on the accept response | Listing create ignores the fields; accept pays 100% to seller as before |
+| `phase-213` | `POST /api/rum/ingest`, `components/web-vitals-reporter.tsx`, `.github/workflows/web-vitals-budget.yml` | Closed-label RUM: five whitelisted fields only (normalized route, `LCP|INP|CLS`, value, SHA-256 session hash, ts). CI evaluates p75 against the per-route budget table and comments deltas on the PR | `404` disabled; no observers registered; workflow skips; no evaluation |
+| `phase-214` | Callers of `lib/phase-error-presentation.ts` + `app/api/soroban-rpc/route.ts` | Typed transport errors (429/5xx/timeout/network) with `Retry-After` parsing, bounded jittered backoff and retryable descriptors (1001..1004) | Legacy `humanizePhaseHostErrorMessage` and fixed 1s/2s/4s proxy backoff |
+| `phase-215` | `/api/admin/webhook-subscriptions/*`, `/api/admin/webhook-deliveries`, `app/admin/webhook-subscriptions` | Signed `settle.verified` / `market.offer_accepted` / `faucet.claim_completed` emissions; https-only SSRF fence with DNS pinning; delivery log + redelivery UI; per-endpoint circuit breaker | All admin routes `404`; no emissions; rows inert |
+| `phase-216` | `POST /api/phase-nft/verify`, `POST /api/faucet`, `GET /api/market`, bulk CSV | Viewer/claim age gates return `451 AGE_RESTRICTED`; license revocation delists a collection in the same request; listings and CSV carry license metadata; decisions appended to an audit log | Gates are no-ops; no `license` field; CSV columns omitted |
 
 ### 5.3 Signal concurrency contract
 
