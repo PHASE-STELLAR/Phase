@@ -23,9 +23,12 @@
  * Rollback: unset the flag. No persisted state — nothing to migrate.
  */
 
+import { createHmac, randomUUID } from "node:crypto"
 import { z } from "zod"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 import { HORIZON_URL } from "@/lib/phase-protocol"
+import { getDb } from "@/lib/sqlite-db"
+import { incSecurityCounter, SYBIL_DECISION_REASONS } from "@/lib/security-counters"
 
 export function isSybilResistanceEnabled(wallet?: string): boolean {
   return isFeatureEnabled("phase-145", wallet ? { wallet, runtimeOnly: true } : { runtimeOnly: true })
@@ -369,4 +372,224 @@ export async function classifyWalletForCohorts(
     accountAgeDays: features.accountAgeDays,
     score: scoreResult.score,
   }
+}
+
+// ── phase-246 (#697): Sybil gating for rewards & governance + inspect ────────
+
+export type SybilDecisionSurface = "reward_credit" | "governance_vote"
+export type SybilDecisionReasonCode = (typeof SYBIL_DECISION_REASONS)[number]
+
+export type SybilDecision = {
+  decisionId: string
+  walletHash: string
+  surface: SybilDecisionSurface
+  score: number
+  minThreshold: number
+  band: SybilBand
+  allowed: boolean
+  reasonCode: SybilDecisionReasonCode
+  signals: string[]
+  createdAt: number
+}
+
+export function isSybilGatingEnabled(wallet?: string): boolean {
+  return isFeatureEnabled("phase-246", wallet ? { wallet, runtimeOnly: true } : { runtimeOnly: true })
+}
+
+export function getSybilMinThreshold(surface: SybilDecisionSurface): number {
+  const specific =
+    surface === "reward_credit"
+      ? process.env.SYBIL_MIN_REWARD_SCORE
+      : process.env.SYBIL_MIN_VOTE_SCORE
+  const raw = (specific ?? process.env.SYBIL_MIN_SCORE ?? "").trim()
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10)
+    if (Number.isFinite(parsed)) return Math.max(0, Math.min(100, parsed))
+  }
+  // Default: strictly above SUSPECT_MAX (34) so suspect wallets (0..34) are blocked.
+  return Math.min(100, SUSPECT_MAX + 1)
+}
+
+export function hashWalletForSybil(wallet: string): string {
+  const secret =
+    process.env.PHASE_SYBIL_HASH_KEY?.trim() ||
+    process.env.PHASE_KYC_HASH_KEY?.trim() ||
+    "phase-sybil-decision-key"
+  return createHmac("sha256", secret).update(`sybil:${wallet.trim()}`).digest("hex")
+}
+
+function persistSybilDecision(decision: SybilDecision): void {
+  const db = getDb()
+  db.prepare(`
+    INSERT INTO sybil_decisions (
+      decision_id, wallet_hash, surface, score, min_threshold, band, allowed, reason_code, signals_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    decision.decisionId,
+    decision.walletHash,
+    decision.surface,
+    decision.score,
+    decision.minThreshold,
+    decision.band,
+    decision.allowed ? 1 : 0,
+    decision.reasonCode,
+    JSON.stringify(decision.signals),
+    decision.createdAt,
+  )
+}
+
+function mapSybilDecisionRow(row: {
+  decision_id: string
+  wallet_hash: string
+  surface: SybilDecisionSurface
+  score: number
+  min_threshold: number
+  band: SybilBand
+  allowed: number
+  reason_code: string
+  signals_json: string
+  created_at: number
+}): SybilDecision {
+  const validReason = (SYBIL_DECISION_REASONS as readonly string[]).includes(row.reason_code)
+    ? (row.reason_code as SybilDecisionReasonCode)
+    : "signal_unavailable"
+  let signals: string[] = []
+  try {
+    const parsed = JSON.parse(row.signals_json)
+    if (Array.isArray(parsed)) signals = parsed.filter((s): s is string => typeof s === "string")
+  } catch {
+    signals = []
+  }
+  return {
+    decisionId: row.decision_id,
+    walletHash: row.wallet_hash,
+    surface: row.surface,
+    score: row.score,
+    minThreshold: row.min_threshold,
+    band: row.band,
+    allowed: row.allowed === 1,
+    reasonCode: validReason,
+    signals,
+    createdAt: row.created_at,
+  }
+}
+
+/**
+ * Evaluates a wallet's sybil score for a credit or governance vote surface,
+ * persists the decision with a closed reason code, and emits a cardinality-safe
+ * counter. Returns null when phase-246 is off (no gating).
+ */
+export async function evaluateAndRecordSybilDecision(
+  wallet: string,
+  surface: SybilDecisionSurface,
+  opts: {
+    minThreshold?: number
+    features?: SybilScoreInput | null
+    horizonUrl?: string
+    timeoutMs?: number
+  } = {},
+): Promise<SybilDecision | null> {
+  if (!isSybilGatingEnabled(wallet)) return null
+
+  const trimmed = wallet.trim()
+  const minThreshold = clampThreshold(opts.minThreshold, getSybilMinThreshold(surface))
+  const now = Date.now()
+  const walletHash = hashWalletForSybil(trimmed)
+  const decisionId = randomUUID()
+
+  if (!G_ADDRESS_RE.test(trimmed)) {
+    const decision: SybilDecision = {
+      decisionId,
+      walletHash,
+      surface,
+      score: 0,
+      minThreshold,
+      band: "suspect",
+      allowed: false,
+      reasonCode: "invalid_wallet",
+      signals: ["invalid_wallet"],
+      createdAt: now,
+    }
+    persistSybilDecision(decision)
+    incSecurityCounter("sybil_decision_recorded", decision.reasonCode)
+    return decision
+  }
+
+  const features =
+    opts.features !== undefined
+      ? opts.features
+      : await fetchAccountHistoryFeatures(trimmed, {
+          horizonUrl: opts.horizonUrl,
+          timeoutMs: opts.timeoutMs,
+        })
+
+  if (!features) {
+    const decision: SybilDecision = {
+      decisionId,
+      walletHash,
+      surface,
+      score: 0,
+      minThreshold,
+      band: "suspect",
+      allowed: false,
+      reasonCode: "signal_unavailable",
+      signals: ["horizon_unavailable"],
+      createdAt: now,
+    }
+    persistSybilDecision(decision)
+    incSecurityCounter("sybil_decision_recorded", decision.reasonCode)
+    return decision
+  }
+
+  const scored = scoreWalletHistory(features, {
+    suspectThreshold: Math.max(0, minThreshold - 1),
+  })
+  const allowed = scored.score >= minThreshold
+  const reasonCode: SybilDecisionReasonCode = !allowed
+    ? "below_threshold"
+    : scored.band === "trusted"
+      ? "allowed_trusted"
+      : "allowed_caution"
+
+  const decision: SybilDecision = {
+    decisionId,
+    walletHash,
+    surface,
+    score: scored.score,
+    minThreshold,
+    band: scored.band,
+    allowed,
+    reasonCode,
+    signals: scored.signals,
+    createdAt: now,
+  }
+  persistSybilDecision(decision)
+  incSecurityCounter("sybil_decision_recorded", decision.reasonCode)
+  return decision
+}
+
+export function getSybilDecisionById(decisionId: string): SybilDecision | null {
+  const db = getDb()
+  const row = db
+    .prepare("SELECT * FROM sybil_decisions WHERE decision_id = ?")
+    .get(decisionId) as Parameters<typeof mapSybilDecisionRow>[0] | undefined
+  return row ? mapSybilDecisionRow(row) : null
+}
+
+export function listSybilDecisionsByWallet(wallet: string, limit = 25): SybilDecision[] {
+  const db = getDb()
+  const bounded = Math.max(1, Math.min(100, limit))
+  const rows = db
+    .prepare("SELECT * FROM sybil_decisions WHERE wallet_hash = ? ORDER BY created_at DESC LIMIT ?")
+    .all(hashWalletForSybil(wallet), bounded) as Array<Parameters<typeof mapSybilDecisionRow>[0]>
+  return rows.map(mapSybilDecisionRow)
+}
+
+export function listRecentSybilDecisions(limit = 50): SybilDecision[] {
+  const db = getDb()
+  const bounded = Math.max(1, Math.min(200, limit))
+  const rows = db
+    .prepare("SELECT * FROM sybil_decisions ORDER BY created_at DESC LIMIT ?")
+    .all(bounded) as Array<Parameters<typeof mapSybilDecisionRow>[0]>
+  return rows.map(mapSybilDecisionRow)
 }

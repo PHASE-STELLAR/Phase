@@ -7,16 +7,24 @@ import { parquetMetadata, parquetReadObjects } from "hyparquet"
 import {
   WAREHOUSE_SCHEMA,
   WAREHOUSE_SCHEMA_VERSION,
+  appendWarehouseExportAuditEvent,
   buildWarehouseManifest,
   collectCounterRows,
   collectVolumeRows,
   collectWarehouseRows,
+  consumeWarehouseExportGrant,
   formatWarehouseNdjson,
+  getWarehouseExportAuditEvents,
   isWarehouseExportEnabled,
+  isWarehouseIntegrationExportEnabled,
+  issueWarehouseExportGrant,
+  paginateWarehouseRows,
   redactWarehouseRow,
   redactWarehouseRows,
   redactWarehouseText,
   rowsToParquetBuffer,
+  sanitizeWarehouseRowsClosed,
+  streamWarehouseNdjson,
   warehouseRowsChecksum,
   type WarehouseRow,
 } from "@/lib/analytics-warehouse"
@@ -206,5 +214,91 @@ describe("phase-180 warehouse collectors", () => {
     assert.ok(rows.some((r) => r.table === "counter" && r.metric === "preview_verify_total"))
     const redacted = redactWarehouseRows(rows)
     assert.equal(redacted.length, rows.length)
+  })
+})
+
+describe("phase-253 analytics warehouse export integration (#704)", () => {
+  it("gates on phase-253 flag", () => {
+    assert.equal(isWarehouseIntegrationExportEnabled(), false)
+    process.env.FEATURE_PHASE_253 = "1"
+    assert.equal(isWarehouseIntegrationExportEnabled(), true)
+    delete process.env.FEATURE_PHASE_253
+  })
+
+  it("issues signed one-use grants and rejects reuse or expiry", () => {
+    const grant = issueWarehouseExportGrant({ ttlMs: 10_000, maxRows: 50, now: NOW, secret: "test-secret" })
+    const first = consumeWarehouseExportGrant(grant.token, { now: NOW + 1_000, secret: "test-secret" })
+    assert.equal(first.ok, true)
+    if (first.ok) assert.equal(first.maxRows, 50)
+
+    const reuse = consumeWarehouseExportGrant(grant.token, { now: NOW + 2_000, secret: "test-secret" })
+    assert.deepEqual(reuse, { ok: false, code: "GRANT_ALREADY_USED" })
+
+    const expiredGrant = issueWarehouseExportGrant({ ttlMs: 1_000, now: NOW, secret: "test-secret" })
+    const expired = consumeWarehouseExportGrant(expiredGrant.token, { now: NOW + 5_000, secret: "test-secret" })
+    assert.deepEqual(expired, { ok: false, code: "EXPIRED_GRANT" })
+  })
+
+  it("sanitizes rows to closed labels and hashed subjects with no wallet or CID PII", async () => {
+    const cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"
+    const dirtyRows: WarehouseRow[] = [
+      row({
+        table: "health",
+        metric: `mint ${WALLET} ipfs ${cid}`,
+        status: "arbitrary_free_text",
+        wallet_fingerprint: WALLET,
+      }),
+      row({
+        table: "counter",
+        metric: `secret ${SECRET}`,
+        status: "ok",
+        wallet_fingerprint: cid,
+      }),
+    ]
+
+    const sanitized = sanitizeWarehouseRowsClosed(dirtyRows)
+    const serialized = JSON.stringify(sanitized)
+    assert.ok(!serialized.includes(WALLET))
+    assert.ok(!serialized.includes(SECRET))
+    assert.ok(!serialized.includes(cid))
+    assert.equal(sanitized[0]?.status, "unknown")
+    assert.equal(sanitized[1]?.status, "ok")
+
+    const { stream, truncated } = streamWarehouseNdjson(dirtyRows, { pageSize: 1, rowCap: 1, generatedAt: NOW })
+    assert.equal(truncated, true)
+    const reader = stream.getReader()
+    const chunks: string[] = []
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(new TextDecoder().decode(value))
+    }
+    const lines = chunks.join("").trim().split("\n")
+    assert.equal(lines.length, 2) // 1 manifest + 1 capped row
+  })
+
+  it("enforces pagination row caps and appends audit events", () => {
+    const many = Array.from({ length: 15 }, (_, i) => row({ metric: `m_${i}` }))
+    const page1 = paginateWarehouseRows(many, { cursor: 0, limit: 5, rowCap: 8 })
+    assert.equal(page1.rows.length, 5)
+    assert.equal(page1.nextCursor, 5)
+    assert.equal(page1.truncated, true)
+
+    const page2 = paginateWarehouseRows(many, { cursor: page1.nextCursor!, limit: 5, rowCap: 8 })
+    assert.equal(page2.rows.length, 3)
+    assert.equal(page2.nextCursor, null)
+
+    const audit = appendWarehouseExportAuditEvent({
+      grantId: "g1",
+      format: "ndjson",
+      rowCount: 8,
+      truncated: true,
+      status: "success",
+      ts: NOW,
+    })
+    assert.equal(audit.row_count, 8)
+    const logs = getWarehouseExportAuditEvents(10)
+    assert.equal(logs.length, 1)
+    assert.equal(logs[0]?.grant_id, "g1")
   })
 })

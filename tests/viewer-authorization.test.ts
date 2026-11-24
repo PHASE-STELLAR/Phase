@@ -10,6 +10,7 @@ import {
   buildViewerSignatureMessage,
   consumeJti,
   releaseJti,
+  revokeJti,
   verifyViewerSignature,
 } from "@/lib/viewer-authorization"
 import {
@@ -184,6 +185,18 @@ async function testSecurityCounters() {
   assert.equal(getSecurityCounter("gated_cdn_leak_blocked"), 0)
 }
 
+async function testRevocationPropagation() {
+  const { claims, signatureBase64 } = await mintClaims()
+  const before = await verifyViewerSignature({ claims, signatureBase64, contractId: CONTRACT, tokenId: 1 })
+  assert.equal(before.ok, true, "signature must verify before revocation")
+
+  revokeJti(claims.jti)
+
+  const after = await verifyViewerSignature({ claims, signatureBase64: signatureBase64, contractId: CONTRACT, tokenId: 1, consume: false })
+  assert.equal(after.ok, false, "revoked grant must be rejected")
+  assert.equal(after.ok === false && after.code, "revoked")
+}
+
 async function main() {
   await testAcceptsFreshValidSignature(); console.log("✓ accepts a fresh, bound signature")
   await testRejectsExpiredSignature(); console.log("✓ rejects an expired signature")
@@ -196,6 +209,7 @@ async function main() {
   await testJtiConsumeIsAtomicUnderConcurrency(); console.log("✓ jti consume is atomic (1 of 25)")
   await testReleaseJtiAllowsReuse(); console.log("✓ released jti can be consumed again")
   await testSecurityCounters(); console.log("✓ security counters record and reset")
+  await testRevocationPropagation(); console.log("✓ revoked grant is rejected on next use")
   console.log("\nAll gated-preview authorization tests passed.")
 }
 

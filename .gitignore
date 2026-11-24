@@ -24,3 +24,6 @@ contracts/**/target/
 
 # Local assistant metadata
 .claude/
+
+# Generated files
+public/.well-known/stellar.toml

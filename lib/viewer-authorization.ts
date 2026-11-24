@@ -28,6 +28,7 @@
  */
 
 import { getDb } from "@/lib/sqlite-db"
+import { incSecurityCounter } from "@/lib/security-counters"
 import { resolveStellarNetwork } from "@/lib/stellar-network"
 
 /** Domain separator. Any change invalidates every previously issued signature. */
@@ -62,6 +63,7 @@ export type ViewerVerificationResult =
         | "replay"
         | "bad_signature"
         | "network_mismatch"
+        | "revoked"
       reason: string
     }
 
@@ -76,10 +78,12 @@ function ensureViewerJtiTable(): void {
       viewer       TEXT NOT NULL,
       token_id     INTEGER NOT NULL,
       consumed_at  INTEGER NOT NULL,
-      expires_at   INTEGER NOT NULL
+      expires_at   INTEGER NOT NULL,
+      revoked_at   INTEGER
     )
   `)
   db.exec("CREATE INDEX IF NOT EXISTS idx_viewer_jti_expires ON viewer_jti (expires_at)")
+  db.exec("CREATE INDEX IF NOT EXISTS idx_viewer_jti_revoked ON viewer_jti (revoked_at)")
 }
 
 function sweepExpiredJti(nowSeconds: number): void {
@@ -121,6 +125,28 @@ export function consumeJti(
 export function releaseJti(jti: string): void {
   ensureViewerJtiTable()
   getDb().prepare("DELETE FROM viewer_jti WHERE jti = ?").run(jti)
+}
+
+/**
+ * Immediately revoke a grant by its jti. Revoked grants are rejected on the next use.
+ * Returns true if the jti existed and was revoked, false if already revoked or not found.
+ */
+export function revokeJti(jti: string, now: Date = new Date()): boolean {
+  ensureViewerJtiTable()
+  const nowSeconds = Math.floor(now.getTime() / 1000)
+  const result = getDb()
+    .prepare("UPDATE viewer_jti SET revoked_at = ? WHERE jti = ? AND revoked_at IS NULL")
+    .run(nowSeconds, jti)
+  return Number(result.changes) > 0
+}
+
+/**
+ * Check if a jti is revoked. Called in one place to centralize revocation checks.
+ */
+function isJtiRevoked(jti: string): boolean {
+  ensureViewerJtiTable()
+  const row = getDb().prepare("SELECT revoked_at FROM viewer_jti WHERE jti = ? LIMIT 1").get(jti) as { revoked_at?: number } | undefined
+  return row?.revoked_at !== undefined && row.revoked_at !== null
 }
 
 /** The network this server settles on. Mismatched signatures are rejected. */
@@ -246,13 +272,20 @@ export async function verifyViewerSignature(input: {
     return { ok: false, code: "bad_signature", reason: "signature does not verify for the requested token" }
   }
 
+  if (isJtiRevoked(claims.jti)) {
+    incSecurityCounter("preview_grant_denied", 1, "revoked")
+    return { ok: false, code: "revoked", reason: "grant has been revoked" }
+  }
+
   if (input.consume !== false) {
     const firstUse = consumeJti(claims.jti, claims.viewer, claims.tokenId, claims.exp, now)
     if (!firstUse) {
+      incSecurityCounter("preview_grant_denied", 1, "replay")
       return { ok: false, code: "replay", reason: "signature has already been used" }
     }
   }
 
+  incSecurityCounter("preview_grant_allowed")
   return { ok: true, claims }
 }
 

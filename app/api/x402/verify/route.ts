@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { REQUIRED_AMOUNT } from "@/lib/phase-protocol"
 import { isSettlementUsed } from "@/lib/settlement-store"
 import { resolveForgeRequiredAmountStroops } from "@/lib/experiments"
+import { isDecimalAmountParsingEnabled, meetsRequiredStroops } from "@/lib/decimal-amount"
 
 export const dynamic = 'force-dynamic'
 
@@ -29,6 +30,7 @@ function decodeX402Token(raw: string): LocalX402Token | null {
 
 function isMaisonedPayment(payload: LocalX402Token | null, requiredStroops: string = REQUIRED_AMOUNT): boolean {
   if (!payload) return false
+  if (isDecimalAmountParsingEnabled()) return Boolean(payload.invoice) && meetsRequiredStroops(payload.amount, requiredStroops)
   const amount = Number(payload.amount)
   const required = Number.parseInt(requiredStroops, 10)
   return Boolean(payload.invoice) && Number.isFinite(amount) && Number.isFinite(required) && amount >= required

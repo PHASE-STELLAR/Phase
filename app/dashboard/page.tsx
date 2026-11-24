@@ -630,9 +630,10 @@ export default function DashboardPage() {
                     </div>
                   )}
 
-                  {/* ── Per-wallet Horizon timeline (spike 629 / phase-173) ── */}
+                  {/* ── Per-wallet Horizon timeline (#650 / phase-226) ── */}
                   <WalletHistoryTimeline
                     address={address}
+                    copy={d.wallet_history}
                     className="mb-8 w-full border-l-4 border-cyan-500/70 bg-cyan-950/20 p-4"
                   />
 

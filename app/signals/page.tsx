@@ -9,6 +9,7 @@ import { SignalCompose } from "@/components/signal-compose"
 import { SocialChips } from "@/components/profile-panel"
 import { WalletAvatar } from "@/components/wallet-avatar"
 import type { Signal } from "@/lib/signal-store"
+import { IpfsDisplayImg } from "@/components/ipfs-display-img"
 
 type ChannelStat = { id: string; label: string; count: number }
 
@@ -240,7 +241,7 @@ function PostCard({
           >
             {signal.nft_image && (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={signal.nft_image} alt={signal.nft_name} className="h-8 w-8 object-cover" />
+              <IpfsDisplayImg uri={signal.nft_image} alt={signal.nft_name} className="h-8 w-8 object-cover" width={32} height={32} sizes="32px" />
             )}
             <span className="font-mono text-[10px] text-foreground/80">{signal.nft_name}</span>
             {nftVerified === "pending" ? (

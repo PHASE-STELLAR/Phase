@@ -3,15 +3,19 @@ import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
+  boundedEditDistance,
   computeSearchReport,
+  pruneSearchQueryLog,
   recordSearchClick,
   recordSearchQuery,
   resetSearchCountersForTests,
   searchQueryHash,
   searchRefHash,
   snapshotSearchCounters,
+  suggestSearchTypoCorrection,
   type SearchEvent,
 } from "@/lib/search-query-log"
+import { fillCopy, pickCopy } from "@/lib/phase-copy"
 
 function queryEvent(over: Partial<SearchEvent> = {}): SearchEvent {
   return {
@@ -118,5 +122,47 @@ describe("search-query-log (spike 613 / phase-175)", () => {
     const recent: SearchEvent[] = [queryEvent({ ts: 90_000 })]
     const report = computeSearchReport([...old, ...recent], { windowMs: 10_000, now: 100_000 })
     expect(report.totalQueries).toBe(1)
+  })
+
+  it("provides deterministic typo suggestions within bounded edit distance", () => {
+    expect(boundedEditDistance("dragin", "dragon", 2)).toBe(1)
+    expect(boundedEditDistance("abcdef", "uvwxyz", 2)).toBe(3)
+
+    const vocab = ["citadel", "dragon", "drake", "nebula"]
+    const s1 = suggestSearchTypoCorrection("Dragin", vocab)
+    const s2 = suggestSearchTypoCorrection("dragin", [...vocab].reverse())
+    expect(s1).not.toBeNull()
+    expect(s1).toEqual(s2)
+    expect(s1?.suggestion).toBe("dragon")
+    expect(s1?.distance).toBe(1)
+    expect(snapshotSearchCounters().search_typo_suggested).toBe(2)
+
+    expect(suggestSearchTypoCorrection("dragon", vocab)).toBeNull()
+    expect(suggestSearchTypoCorrection("zzzzzz", vocab)).toBeNull()
+  })
+
+  it("joins clickthroughs to matching queries and enforces retention window", async () => {
+    await recordSearchQuery(queryEvent({ session_id: "s1", ts: 1_000 }), { now: 1_000, retentionMs: 10_000 })
+    await recordSearchQuery(queryEvent({ session_id: "s2", ts: 20_000 }), { now: 20_000, retentionMs: 10_000 })
+    const removed = await pruneSearchQueryLog({ retentionMs: 5_000, now: 26_000 })
+    expect(removed).toBe(1)
+
+    const events: SearchEvent[] = [
+      queryEvent({ session_id: "s1", ts: 1_000 }),
+      { ...queryEvent({ kind: "click", session_id: "s1", ts: 2_000 }) },
+      { ...queryEvent({ kind: "click", query_hash: searchQueryHash("unmatched"), session_id: "s9", ts: 3_000 }) },
+    ]
+    const report = computeSearchReport(events, { windowMs: 60_000, now: 10_000 })
+    const world = report.surfaces.find((s) => s.surface === "world")!
+    expect(world.clicks).toBe(2)
+    expect(world.joinedClicks).toBe(1)
+    expect(world.joinedClickthroughRate).toBeCloseTo(1)
+  })
+
+  it("exposes EN/ES searchAnalytics copy", () => {
+    const en = pickCopy("en").searchAnalytics
+    const es = pickCopy("es").searchAnalytics
+    expect(fillCopy(en.didYouMean, { suggestion: "dragon" })).toContain("dragon")
+    expect(fillCopy(es.didYouMean, { suggestion: "dragon" })).toContain("dragon")
   })
 })

@@ -90,28 +90,33 @@ function parseJsonRpcId(rawBody: string): string | number | null {
   return null
 }
 
-// ── Circuit Breaker & Rate Limiter (Issue #164) ──────────────────────────────
+// ── Circuit Breaker & Rate Limiter (Issue #738) ──────────────────────────────
 type CircuitState = "CLOSED" | "OPEN" | "HALF_OPEN"
 
 interface CircuitStatus {
   state: CircuitState
   failures: number
   nextAttempt: number
+  probesInFlight: number
+  lastStateChange: number
 }
 
 const upstreamCircuits = new Map<string, CircuitStatus>()
 /** Per-upstream cooldown, distinct from the process-wide CIRCUIT_COOLDOWN_MS above. */
 const UPSTREAM_CIRCUIT_COOLDOWN_MS = 15_000
 const FAILURE_THRESHOLD = 3
+const MAX_HALF_OPEN_PROBES = 1
+const PHASE_CIRCUIT_BREAKER_ENABLED = process.env.phase_circuit_breaker !== "false"
 
 export function getUpstreamCircuitStatus(url: string): CircuitStatus {
   let status = upstreamCircuits.get(url)
   if (!status) {
-    status = { state: "CLOSED", failures: 0, nextAttempt: 0 }
+    status = { state: "CLOSED", failures: 0, nextAttempt: 0, probesInFlight: 0, lastStateChange: Date.now() }
     upstreamCircuits.set(url, status)
   }
   if (status.state === "OPEN" && Date.now() >= status.nextAttempt) {
     status.state = "HALF_OPEN"
+    status.lastStateChange = Date.now()
   }
   return status
 }
@@ -120,6 +125,8 @@ export function recordUpstreamSuccess(url: string) {
   const status = getUpstreamCircuitStatus(url)
   status.state = "CLOSED"
   status.failures = 0
+  status.probesInFlight = 0
+  status.lastStateChange = Date.now()
 }
 
 export function recordUpstreamFailure(url: string, is429: boolean = false) {
@@ -128,7 +135,54 @@ export function recordUpstreamFailure(url: string, is429: boolean = false) {
   if (is429 || status.failures >= FAILURE_THRESHOLD) {
     status.state = "OPEN"
     status.nextAttempt = Date.now() + UPSTREAM_CIRCUIT_COOLDOWN_MS
+    status.lastStateChange = Date.now()
   }
+}
+
+/**
+ * Check if a probe can be issued for HALF_OPEN state.
+ * Bounded probing prevents overwhelming a recovering upstream.
+ */
+export function canProbeHalfOpenCircuit(url: string): boolean {
+  const status = getUpstreamCircuitStatus(url)
+  if (status.state !== "HALF_OPEN") return true
+  if (status.probesInFlight >= MAX_HALF_OPEN_PROBES) return false
+  status.probesInFlight += 1
+  return true
+}
+
+/**
+ * Decrement probe counter after a half-open attempt completes.
+ */
+export function completeHalfOpenProbe(url: string) {
+  const status = upstreamCircuits.get(url)
+  if (status && status.probesInFlight > 0) {
+    status.probesInFlight -= 1
+  }
+}
+
+/**
+ * Health status endpoint (no PII exposed).
+ */
+export interface CircuitBreakerHealth {
+  enabled: boolean
+  upstreams: Array<{
+    url: string
+    state: CircuitState
+    failures: number
+    stateChangedAgo: number
+  }>
+}
+
+export function getCircuitBreakerHealth(): CircuitBreakerHealth {
+  const now = Date.now()
+  const upstreams = Array.from(upstreamCircuits.entries()).map(([url, status]) => ({
+    url: url.replace(/^https?:\/\//, "").split("/")[0] || url,
+    state: status.state,
+    failures: status.failures,
+    stateChangedAgo: now - status.lastStateChange,
+  }))
+  return { enabled: PHASE_CIRCUIT_BREAKER_ENABLED, upstreams }
 }
 
 /** Rate Limiting: 60 requests / minute per client identifier */
@@ -189,7 +243,23 @@ export async function POST(req: NextRequest) {
     if (urlIdx > 0) {
       await sleep(proxyRetryBackoffMs(urlIdx - 1))
     }
+
+    // Check circuit breaker state before attempting
+    if (PHASE_CIRCUIT_BREAKER_ENABLED) {
+      const circuitStatus = getUpstreamCircuitStatus(url)
+      if (circuitStatus.state === "OPEN") {
+        lastFailure = `${url} → circuit OPEN`
+        continue
+      }
+      if (circuitStatus.state === "HALF_OPEN" && !canProbeHalfOpenCircuit(url)) {
+        lastFailure = `${url} → too many HALF_OPEN probes`
+        continue
+      }
+    }
+
     for (let attempt = 0; attempt < perUrl; attempt++) {
+      const isHalfOpenProbe = PHASE_CIRCUIT_BREAKER_ENABLED && getUpstreamCircuitStatus(url).state === "HALF_OPEN"
+
       try {
         const upstream = await fetch(url, {
           method: "POST",
@@ -207,6 +277,8 @@ export async function POST(req: NextRequest) {
         if (upstream.ok) {
           consecutiveFailures = 0
           circuitOpenedAt = 0
+          recordUpstreamSuccess(url)
+          if (isHalfOpenProbe) completeHalfOpenProbe(url)
           return new NextResponse(text, {
             status: upstream.status,
             headers: { "Content-Type": ct },
@@ -216,6 +288,7 @@ export async function POST(req: NextRequest) {
         if (RETRYABLE_HTTP.has(upstream.status)) {
           lastFailure = `${url} → HTTP ${upstream.status}`
           recordUpstreamFailure(url, upstream.status === 429)
+          if (isHalfOpenProbe) completeHalfOpenProbe(url)
           if (attempt + 1 < perUrl) {
             await sleep(proxyRetryBackoffMs(attempt))
             continue
@@ -224,6 +297,7 @@ export async function POST(req: NextRequest) {
         }
 
         recordUpstreamSuccess(url)
+        if (isHalfOpenProbe) completeHalfOpenProbe(url)
         return new NextResponse(text, {
           status: upstream.status,
           headers: { "Content-Type": ct },
@@ -232,6 +306,7 @@ export async function POST(req: NextRequest) {
         const msg = e instanceof Error ? e.message : String(e)
         lastFailure = `${url} → ${msg}`
         recordUpstreamFailure(url, false)
+        if (isHalfOpenProbe) completeHalfOpenProbe(url)
         if (attempt + 1 < perUrl) {
           await sleep(proxyRetryBackoffMs(attempt))
           continue

@@ -11,7 +11,7 @@ export function LinkEntryForm() {
   const [failed, setFailed] = useState(false)
   const { lang } = useLang(), router = useRouter()
   const c = pickCopy(lang).integrations
-  if (!isFeatureEnabled("phase-175")) return null
+  if (!isFeatureEnabled("phase-248") && !isFeatureEnabled("phase-175")) return null
   return <main className="mx-auto max-w-xl px-4 py-24">
     <h1 className="text-lg">{c.reviewLink}</h1><p className="my-4">{c.reviewLinkHint}</p>
     <form onSubmit={event => { event.preventDefault(); try { const intent = parsePhaseLink(raw, window.location.origin); window.location.assign(intentPath(intent)) } catch { setFailed(true) } }}>

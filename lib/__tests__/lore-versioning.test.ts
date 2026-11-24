@@ -56,5 +56,63 @@ describe("phase-106 lore versioning (spike)", () => {
     assert.equal(entry, null)
     process.env.FEATURE_PHASE_106 = "1"
   })
+
+  it("snapshots edits with author proof, enforces If-Match 409, and appends on rollback (phase-257 / #710)", async () => {
+    process.env.FEATURE_PHASE_106 = "0"
+    process.env.FEATURE_PHASE_257 = "1"
+    const {
+      LoreVersionConflictError,
+      commitLoreEdit,
+      getLoreVersions,
+      rollbackLoreVersion,
+    } = await import("@/lib/lore-versioning")
+    const { pickCopy } = await import("@/lib/phase-copy")
+
+    const c1 = await commitLoreEdit(
+      10,
+      { narrative: "First dawn in the citadel.", lore_input: "dawn", author: "G123" },
+      { ifMatch: "0" },
+    )
+    assert.equal(c1.legacyOverwrite, false)
+    assert.ok(c1.entry?.author_proof)
+    assert.ok(c1.entry?.etag)
+
+    const c2 = await commitLoreEdit(
+      10,
+      { narrative: "Second eclipse in the citadel.", lore_input: "eclipse", author: "G456" },
+      { ifMatch: c1.entry!.etag },
+    )
+    assert.equal(c2.legacyOverwrite, false)
+    assert.equal(c2.entry?.version, 2)
+
+    await assert.rejects(
+      () =>
+        commitLoreEdit(
+          10,
+          { narrative: "Stale edit", lore_input: "stale" },
+          { ifMatch: c1.entry!.etag },
+        ),
+      (err: unknown) => err instanceof LoreVersionConflictError && err.status === 409 && err.currentVersion === 2,
+    )
+
+    const rb = await rollbackLoreVersion(10, 1, { author: "G123", ifMatch: c2.entry!.etag })
+    assert.ok(rb)
+    assert.equal(rb!.version, 3)
+    assert.equal(rb!.rolled_back_from, 1)
+    assert.equal(rb!.narrative, "First dawn in the citadel.")
+
+    const history = await getLoreVersions(10)
+    assert.equal(history.length, 3)
+    assert.equal(history[1]!.narrative, "Second eclipse in the citadel.")
+
+    assert.ok(pickCopy("en").loreVersioning.conflictError.includes("409"))
+    assert.ok(pickCopy("es").loreVersioning.conflictError.includes("409"))
+
+    process.env.FEATURE_PHASE_257 = "0"
+    const legacy = await commitLoreEdit(10, { narrative: "Legacy", lore_input: "legacy" })
+    assert.equal(legacy.legacyOverwrite, true)
+    assert.equal(legacy.entry, null)
+    process.env.FEATURE_PHASE_106 = "1"
+  })
 })
 

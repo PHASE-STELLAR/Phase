@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { readFile } from "node:fs/promises"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
 import { isSearchAnalyticsEnabled, recordSearchQuery, searchQueryHash } from "@/lib/search-query-log"
+import { isFeatureEnabled } from "@/lib/feature-flags"
+import { updateStore, readJsonFile } from "@/lib/json-store"
 import type { ProfileData } from "@/lib/profile-store"
 
 export const runtime = "nodejs"
@@ -12,6 +14,11 @@ type NarrativesStore = Record<string, { collection_id: number }>
 type WorldCollectionsStore = Record<string, { world_name: string }>
 type NftListingsFile = { listings?: Array<{ tokenId?: number; seller?: string; collectionId?: number }> }
 type FollowStore = Record<string, { following: string[] }>
+
+type SearchMetricsStore = {
+  searches_total: number
+  queries_rejected: number
+}
 
 export type SearchResult = {
   wallet: string
@@ -25,6 +32,17 @@ export type SearchResult = {
   is_following: boolean
 }
 
+function isPhase285Enabled(): boolean {
+  return isFeatureEnabled("phase-285")
+}
+
+const QUERY_MAX_LENGTH = 100
+const RESULT_MAX_SIZE = 10
+const RATE_LIMIT_PER_SESSION = { requests: 10, windowMs: 60000 }
+
+type SessionRateLimit = { count: number; resetAt: number }
+const sessionRateLimits = new Map<string, SessionRateLimit>()
+
 async function readJson<T extends object>(filePath: string): Promise<T> {
   try {
     return JSON.parse(await readFile(filePath, "utf8")) as T
@@ -33,11 +51,48 @@ async function readJson<T extends object>(filePath: string): Promise<T> {
   }
 }
 
-export async function GET(request: NextRequest) {
-  const q = request.nextUrl.searchParams.get("q")?.trim().toLowerCase() ?? ""
-  const filter = request.nextUrl.searchParams.get("filter") ?? "all"
-  const viewer = request.nextUrl.searchParams.get("viewer")?.trim() ?? ""
-  const cursor = request.nextUrl.searchParams.get("cursor") ?? ""
+function checkSessionRateLimit(sessionId: string, now: number): { allowed: boolean; retryAfterMs: number } {
+  const key = sessionId
+  const bucket = sessionRateLimits.get(key)
+
+  if (!bucket || bucket.resetAt <= now) {
+    sessionRateLimits.set(key, { count: 1, resetAt: now + RATE_LIMIT_PER_SESSION.windowMs })
+    return { allowed: true, retryAfterMs: 0 }
+  }
+
+  if (bucket.count >= RATE_LIMIT_PER_SESSION.requests) {
+    return { allowed: false, retryAfterMs: bucket.resetAt - now }
+  }
+
+  bucket.count++
+  return { allowed: true, retryAfterMs: 0 }
+}
+
+  const now = Date.now()
+  const sessionId = request.nextUrl.searchParams.get("sid")?.trim() || "anonymous"
+
+  if (isPhase285Enabled()) {
+    const rateLimit = checkSessionRateLimit(sessionId, now)
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { error: "Rate limit exceeded. Too many search requests." },
+        {
+          status: 429,
+          headers: { "Retry-After": String(Math.ceil(rateLimit.retryAfterMs / 1000)) }
+        }
+      )
+    }
+
+    if (q.length > QUERY_MAX_LENGTH) {
+      void updateStore<SearchMetricsStore>("profileSearchMetrics", (store) => {
+        store.queries_rejected = (store.queries_rejected ?? 0) + 1
+      }).catch(() => {})
+      return NextResponse.json(
+        { error: "Query too long. Maximum 100 characters." },
+        { status: 400 }
+      )
+    }
+  }
 
   const [profiles, narratives, worldCollections, listingsFile, follows] = await Promise.all([
     readJson<ProfileStore>(serverDataJsonPath("profileSocials")),
@@ -81,7 +136,7 @@ export async function GET(request: NextRequest) {
   const allResults: SearchResult[] = []
   const sortedWallets = Object.keys(profiles).sort()
   const cursorIndex = cursor ? Math.max(0, sortedWallets.indexOf(cursor)) : 0
-  const pageSize = 10
+  const pageSize = isPhase285Enabled() ? RESULT_MAX_SIZE : 10
 
   for (let i = cursorIndex; i < sortedWallets.length && allResults.length < pageSize; i++) {
     const wallet = sortedWallets[i]!
@@ -127,8 +182,14 @@ export async function GET(request: NextRequest) {
   // Sort by artifact_count desc
   allResults.sort((a, b) => b.artifact_count - a.artifact_count)
 
-  const results = allResults.slice(0, 10)
+  const results = allResults.slice(0, pageSize)
   const nextCursor = results.length > 0 ? results[results.length - 1]!.wallet : null
+
+  if (isPhase285Enabled()) {
+    void updateStore<SearchMetricsStore>("profileSearchMetrics", (store) => {
+      store.searches_total = (store.searches_total ?? 0) + 1
+    }).catch(() => {})
+  }
 
   // Suggested: top 5 by artifact_count when no query
   const suggested: SearchResult[] = []

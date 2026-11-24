@@ -26,7 +26,10 @@ import {
   clearDeadLetterForTests,
   isX402DeadLetterEnabled,
   X402DeadLetterError,
+  replayDeadLetterEntry,
+  MAX_REPLAY_ATTEMPTS,
 } from "@/lib/x402-dead-letter"
+import { getSecurityCounter, resetSecurityCounters } from "@/lib/security-counters"
 
 const VALID_G = "GA" + "A".repeat(54)
 
@@ -172,6 +175,43 @@ describe("dead-letter store (flag on)", () => {
       () => resolveDeadLetterEntry("does-not-exist"),
       (e: unknown) => e instanceof X402DeadLetterError && e.code === "NOT_FOUND",
     )
+  })
+
+  it("replays dead-letter entry with bounded retries and idempotent resolve", async () => {
+    await clearDeadLetterForTests()
+    resetSecurityCounters()
+    const bad = validInvoice({ amount: "bad-amount", nonce: "test-nonce-1" })
+    const res = await quarantineInvoice({ source: "unit-test", raw: bad })
+    assert.equal(res.quarantined, true)
+    if (!res.quarantined) return
+
+    assert.equal(getSecurityCounter("x402_dead_letter_enqueued"), 1)
+
+    // First replay attempt: attempts increases from 1 to 2
+    const replay1 = await replayDeadLetterEntry(res.id, { by: "operator" })
+    assert.equal(replay1.ok, true)
+    assert.equal(replay1.status, "replayed")
+    assert.equal(replay1.entry.attempts, 2)
+    assert.equal(getSecurityCounter("x402_replay_attempted"), 1)
+
+    // Second replay attempt: attempts increases from 2 to 3 (reaches MAX_REPLAY_ATTEMPTS)
+    const replay2 = await replayDeadLetterEntry(res.id, { by: "operator" })
+    assert.equal(replay2.ok, true)
+    assert.equal(replay2.status, "replayed")
+    assert.equal(replay2.entry.attempts, 3)
+
+    // Third replay attempt: should be rejected because current attempts >= MAX_REPLAY_ATTEMPTS (3)
+    await assert.rejects(
+      () => replayDeadLetterEntry(res.id, { by: "operator" }),
+      (e: unknown) => e instanceof X402DeadLetterError && e.code === "MAX_REPLAY_ATTEMPTS_EXCEEDED",
+    )
+    assert.equal(getSecurityCounter("x402_replay_rejected"), 1)
+
+    // Test idempotency: if entry is resolved, replay is idempotent
+    await resolveDeadLetterEntry(res.id, { status: "resolved" })
+    const idempotentReplay = await replayDeadLetterEntry(res.id)
+    assert.equal(idempotentReplay.ok, true)
+    assert.equal(idempotentReplay.status, "idempotent")
   })
 })
 

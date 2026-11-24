@@ -365,3 +365,24 @@ export function diffSecretsMap(
     missingInBackup: Object.keys(live).filter((name) => !(name in restored)).sort(),
   }
 }
+
+// ─── Off-Box Shipping & Scheduled Disaster Recovery (Issue #654 / phase-227) ───
+export {
+  isPhase227Enabled,
+  phase227RollbackNote,
+  shipSnapshotOffBox,
+  applyBackupRetention,
+  sealSnapshotDirectory,
+  unsealSnapshotBundle,
+  resolveRemoteStorage,
+  type RemoteObjectStorage,
+  type OffBoxShippingResult,
+} from "@/lib/backup-shipping"
+
+export {
+  runScheduledBackup,
+  runAutomatedRestoreDrill,
+  isSnapshotInProgress,
+  type ScheduledBackupResult,
+  type RestoreDrillResult,
+} from "@/lib/backup-scheduler"

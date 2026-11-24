@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { serverDataJsonPath, type ServerDataFile } from "@/lib/server-data-paths";
 
 /**
@@ -74,6 +75,102 @@ function isErrnoCode(error: unknown, code: string): boolean {
 }
 
 /**
+ * Compute SHA-256 checksum of JSON string.
+ */
+export function computeJsonChecksum(jsonString: string): string {
+  return createHash("sha256").update(jsonString, "utf8").digest("hex");
+}
+
+/**
+ * Read and verify checksum of a JSON file. Returns the parsed data if valid,
+ * or undefined if file is missing. Throws if checksum is invalid.
+ */
+async function readJsonFileWithChecksum<T>(
+  filePath: string,
+): Promise<{ data: T; checksum: string } | undefined> {
+  const checksumPath = `${filePath}.checksum`;
+  let jsonString: string;
+  let storedChecksum: string | undefined;
+
+  try {
+    jsonString = await readFile(filePath, "utf8");
+  } catch (error) {
+    if (isErrnoCode(error, "ENOENT")) return undefined;
+    throw error;
+  }
+
+  try {
+    const checksumFile = await readFile(checksumPath, "utf8");
+    storedChecksum = checksumFile.trim();
+  } catch {
+    // Missing checksum file on first read is OK for lazy migration
+  }
+
+  try {
+    const data = JSON.parse(jsonString) as T;
+    const computedChecksum = computeJsonChecksum(jsonString);
+
+    if (storedChecksum && storedChecksum !== computedChecksum) {
+      throw new Error(`Checksum mismatch for ${filePath}: stored=${storedChecksum} computed=${computedChecksum}`);
+    }
+
+    return { data, checksum: computedChecksum };
+  } catch (error) {
+    throw new Error(`Corrupt JSON store at ${filePath}: ${String(error)}`);
+  }
+}
+
+/**
+ * Write JSON file with checksum. The checksum is written to a `.checksum` sibling file.
+ */
+async function writeJsonFileAtomicWithChecksum(
+  filePath: string,
+  data: unknown,
+): Promise<void> {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.${process.pid}.${Date.now().toString(36)}.tmp`;
+  const tmpChecksumPath = `${tmpPath}.checksum`;
+
+  try {
+    const jsonString = JSON.stringify(data, null, 2);
+    const checksum = computeJsonChecksum(jsonString);
+
+    await writeFile(tmpPath, jsonString, "utf8");
+    await writeFile(tmpChecksumPath, checksum, "utf8");
+
+    await rename(tmpPath, filePath);
+    const checksumPath = `${filePath}.checksum`;
+    await rename(tmpChecksumPath, checksumPath);
+  } catch (error) {
+    await rm(tmpPath, { force: true }).catch(() => undefined);
+    await rm(`${tmpPath}.checksum`, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Repair a corrupted JSON file by restoring from backup or clearing.
+ * Returns audit info about the repair.
+ */
+export async function repairJsonFile(
+  filePath: string,
+): Promise<{ repaired: boolean; reason: string; timestamp: string }> {
+  const timestamp = new Date().toISOString();
+  const backupPath = `${filePath}.backup`;
+
+  try {
+    // Try to restore from backup
+    const backup = await readFile(backupPath, "utf8");
+    await writeFile(filePath, backup, "utf8");
+    return { repaired: true, reason: "restored from backup", timestamp };
+  } catch {
+    // No backup; clear the file
+    await writeFile(filePath, "{}", "utf8");
+    return { repaired: true, reason: "cleared to empty object", timestamp };
+  }
+}
+
+/**
  * Unlocked read. A missing file yields `fallback`; a corrupt file throws rather
  * than silently reporting empty. Safe for read-only consumers.
  */
@@ -104,7 +201,12 @@ export async function readJsonFile<T>(
 export async function writeJsonFileAtomic(
   filePath: string,
   data: unknown,
+  options: { withChecksum?: boolean } = {},
 ): Promise<void> {
+  if (options.withChecksum) {
+    return writeJsonFileAtomicWithChecksum(filePath, data);
+  }
+
   // The temporary sibling keeps rename atomic on the same filesystem.
   await mkdir(path.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${Date.now().toString(36)}.tmp`;

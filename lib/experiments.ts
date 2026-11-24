@@ -3,6 +3,7 @@ import { z } from "zod"
 import { flagRollbackNote, isFeatureEnabled } from "@/lib/feature-flags"
 import { readStore, updateStoreWithReader } from "@/lib/json-store"
 import { REQUIRED_AMOUNT } from "@/lib/phase-protocol"
+import { incSecurityCounter } from "@/lib/security-counters"
 
 // ── Spike 612 (phase-174): A/B experimentation for forge/chamber copy + pricing ──
 //
@@ -32,6 +33,7 @@ export function experimentRollbackNote(): string {
 }
 
 export const FORGE_PRICE_EXPERIMENT_ID = "forge_price_v1"
+export const CHAMBER_COPY_EXPERIMENT_ID = "chamber_copy_v1"
 export const EXPERIMENT_CONTROL_VARIANT_ID = "control"
 
 const EXPERIMENT_ID_REGEX = /^[a-z0-9][a-z0-9._-]{0,62}[a-z0-9]$/
@@ -103,12 +105,7 @@ export function parseExperimentConfig(raw: unknown): ExperimentConfig {
   return parsed.data
 }
 
-/**
- * Loads the forge price experiment config from PHASE_EXPERIMENT_CONFIG (JSON).
- * Returns null when unset, unparseable, or the requested experiment is absent —
- * every caller fails safe to control.
- */
-export function loadForgeExperimentConfig(): ExperimentConfig | null {
+export function loadExperimentConfigById(experimentId: string): ExperimentConfig | null {
   const raw = process.env.PHASE_EXPERIMENT_CONFIG?.trim()
   if (!raw) return null
   let parsed: unknown
@@ -120,9 +117,25 @@ export function loadForgeExperimentConfig(): ExperimentConfig | null {
   const list = Array.isArray(parsed) ? parsed : [parsed]
   for (const entry of list) {
     const safe = ExperimentConfigSchema.safeParse(entry)
-    if (safe.success && safe.data.experimentId === FORGE_PRICE_EXPERIMENT_ID) return safe.data
+    if (safe.success && safe.data.experimentId === experimentId) return safe.data
   }
   return null
+}
+
+/**
+ * Loads the forge price experiment config from PHASE_EXPERIMENT_CONFIG (JSON).
+ * Returns null when unset, unparseable, or the requested experiment is absent —
+ * every caller fails safe to control.
+ */
+export function loadForgeExperimentConfig(): ExperimentConfig | null {
+  return loadExperimentConfigById(FORGE_PRICE_EXPERIMENT_ID)
+}
+
+/**
+ * Loads the chamber copy/price experiment config from PHASE_EXPERIMENT_CONFIG (JSON).
+ */
+export function loadChamberExperimentConfig(): ExperimentConfig | null {
+  return loadExperimentConfigById(CHAMBER_COPY_EXPERIMENT_ID)
 }
 
 export type ExperimentAssignment = {
@@ -145,19 +158,33 @@ type StoredSubjectAssignment = {
   assignedAt: number
 }
 
+type LockedChallengePrice = {
+  challengeId: string
+  subjectKey: string
+  experimentId: string
+  variantId: string
+  amountStroops: string
+  lockedAt: number
+}
+
 type ExperimentAssignmentsStore = {
   version: number
   experiments: Record<string, { salt: string; subjects: Record<string, StoredSubjectAssignment> }>
+  challengeLocks?: Record<string, LockedChallengePrice>
 }
 
 function emptyStore(): ExperimentAssignmentsStore {
-  return { version: 1, experiments: {} }
+  return { version: 1, experiments: {}, challengeLocks: {} }
 }
 
 function normalizeStore(raw: unknown): ExperimentAssignmentsStore {
   const s = raw as ExperimentAssignmentsStore | undefined
   if (!s || typeof s !== "object" || !s.experiments || typeof s.experiments !== "object") return emptyStore()
-  return { version: typeof s.version === "number" && s.version > 0 ? s.version : 1, experiments: s.experiments }
+  return {
+    version: typeof s.version === "number" && s.version > 0 ? s.version : 1,
+    experiments: s.experiments,
+    challengeLocks: s.challengeLocks && typeof s.challengeLocks === "object" ? s.challengeLocks : {},
+  }
 }
 
 function assignmentFromStored(experimentId: string, subjectKey: string, stored: StoredSubjectAssignment): ExperimentAssignment {
@@ -252,6 +279,7 @@ export async function assignExperimentVariant(
       if (existing) {
         store.experiments[config.experimentId] = entry
         store.version += 1
+        incSecurityCounter("experiment_assignment_sticky_hit")
         return assignmentFromStored(config.experimentId, subjectKey, existing)
       }
       const fresh = computeFreshAssignment(config, currentSalt, cleanSubject, subjectKey)
@@ -266,6 +294,7 @@ export async function assignExperimentVariant(
       }
       store.experiments[config.experimentId] = entry
       store.version += 1
+      incSecurityCounter("experiment_assignment_created")
       return fresh
     },
   )
@@ -301,13 +330,80 @@ export type ForgePriceResolution = {
   holdout: boolean
 }
 
+function challengeLockKey(challengeId: string, subject: string): string {
+  return `${challengeId.trim()}:${experimentSubjectKey(subject)}`
+}
+
+/**
+ * Idempotently locks a 402 challenge's price for a subject so a variant
+ * cannot change price mid-challenge.
+ */
+export async function lockChallengePrice(input: {
+  challengeId: string
+  subject: string
+  experimentId: string
+  variantId: string
+  amountStroops: string
+  now?: number
+}): Promise<LockedChallengePrice> {
+  const cleanChallenge = input.challengeId.trim()
+  const cleanSubject = input.subject.trim()
+  if (!cleanChallenge || !cleanSubject) {
+    throw new ExperimentError("VALIDATION_FAILED", "challengeId and subject are required")
+  }
+  const key = challengeLockKey(cleanChallenge, cleanSubject)
+  const subjectKey = experimentSubjectKey(cleanSubject)
+  const now = input.now ?? Date.now()
+
+  return updateStoreWithReader<ExperimentAssignmentsStore, LockedChallengePrice>(
+    "experimentAssignments",
+    normalizeStore,
+    (store) => {
+      const locks = store.challengeLocks ?? {}
+      const existing = locks[key]
+      if (existing) {
+        return existing
+      }
+      const locked: LockedChallengePrice = {
+        challengeId: cleanChallenge,
+        subjectKey,
+        experimentId: input.experimentId,
+        variantId: input.variantId,
+        amountStroops: input.amountStroops,
+        lockedAt: now,
+      }
+      locks[key] = locked
+      store.challengeLocks = locks
+      store.version += 1
+      incSecurityCounter("experiment_challenge_locked")
+      return locked
+    },
+  )
+}
+
+export async function resolveLockedChallengePrice(
+  challengeId?: string,
+  subject?: string,
+): Promise<LockedChallengePrice | null> {
+  const cleanChallenge = challengeId?.trim()
+  const cleanSubject = subject?.trim()
+  if (!cleanChallenge || !cleanSubject) return null
+  const store = normalizeStore(
+    await readStore<ExperimentAssignmentsStore>("experimentAssignments", emptyStore),
+  )
+  return store.challengeLocks?.[challengeLockKey(cleanChallenge, cleanSubject)] ?? null
+}
+
 /**
  * Resolves the forge price for a subject. Flag off, no config, no subject,
- * holdout, or control variant → REQUIRED_AMOUNT. Everything else fails safe to
- * control on any error path: a pricing experiment must never make the forge
- * unpayable or accidentally free.
+ * holdout, or control variant → REQUIRED_AMOUNT. If `challengeId` is provided
+ * and already locked, returns the locked price so a variant cannot change price
+ * mid-challenge.
  */
-export async function resolveForgeRequiredAmountStroops(subject?: string): Promise<ForgePriceResolution> {
+export async function resolveForgeRequiredAmountStroops(
+  subject?: string,
+  challengeId?: string,
+): Promise<ForgePriceResolution> {
   const control = (): ForgePriceResolution => ({
     experimentId: FORGE_PRICE_EXPERIMENT_ID,
     variantId: EXPERIMENT_CONTROL_VARIANT_ID,
@@ -315,9 +411,20 @@ export async function resolveForgeRequiredAmountStroops(subject?: string): Promi
     holdout: false,
   })
   if (!isExperimentationEnabled()) return control()
+  const cleanSubject = subject?.trim()
+  if (cleanSubject && challengeId?.trim()) {
+    const locked = await resolveLockedChallengePrice(challengeId, cleanSubject)
+    if (locked) {
+      return {
+        experimentId: locked.experimentId,
+        variantId: locked.variantId,
+        amountStroops: locked.amountStroops,
+        holdout: false,
+      }
+    }
+  }
   const config = loadForgeExperimentConfig()
   if (!config || !config.enabled) return control()
-  const cleanSubject = subject?.trim()
   if (!cleanSubject) return control()
   try {
     const assignment = await assignExperimentVariant(config, cleanSubject)
@@ -348,5 +455,49 @@ export async function resolveForgeExperimentCopyKey(subject?: string): Promise<s
     return assignment.holdout ? EXPERIMENT_CONTROL_VARIANT_ID : assignment.copyKey
   } catch {
     return EXPERIMENT_CONTROL_VARIANT_ID
+  }
+}
+
+/**
+ * Resolves chamber price and copy variant for a subject.
+ * Uses `chamber_copy_v1` if configured, otherwise falls back to `forge_price_v1`
+ * copyKey so chamber & forge share consistent funnel experiments.
+ * Flag off -> control price and copy everywhere.
+ */
+export async function resolveChamberExperiment(subject?: string): Promise<{
+  experimentId: string
+  variantId: string
+  copyKey: string
+  amountStroops: string
+  holdout: boolean
+}> {
+  const control = {
+    experimentId: CHAMBER_COPY_EXPERIMENT_ID,
+    variantId: EXPERIMENT_CONTROL_VARIANT_ID,
+    copyKey: EXPERIMENT_CONTROL_VARIANT_ID,
+    amountStroops: REQUIRED_AMOUNT,
+    holdout: false,
+  }
+  if (!isExperimentationEnabled()) return control
+  const cleanSubject = subject?.trim()
+  if (!cleanSubject) return control
+  const config = loadChamberExperimentConfig() ?? loadForgeExperimentConfig()
+  if (!config || !config.enabled) return control
+  try {
+    const assignment = await assignExperimentVariant(config, cleanSubject)
+    if (assignment.holdout) return { ...control, experimentId: config.experimentId, holdout: true }
+    const price =
+      assignment.priceStroops && /^\d{1,19}$/.test(assignment.priceStroops) && BigInt(assignment.priceStroops) > 0n
+        ? assignment.priceStroops
+        : REQUIRED_AMOUNT
+    return {
+      experimentId: config.experimentId,
+      variantId: assignment.variantId,
+      copyKey: assignment.copyKey,
+      amountStroops: price,
+      holdout: assignment.holdout,
+    }
+  } catch {
+    return control
   }
 }

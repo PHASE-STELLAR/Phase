@@ -5,12 +5,14 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import {
+import * as dependencyCadenceModule from "../lib/dependency-cadence";
+const dependencyCadence = (dependencyCadenceModule as any).default ?? dependencyCadenceModule;
+const {
   CANONICAL_WASM_TARGET,
   auditManifestAlignment,
   verifyStellarSdkSorobanEncodingParity,
-  type PackageManifestLike,
-} from "../lib/dependency-cadence";
+} = dependencyCadence;
+import type { PackageManifestLike } from "../lib/dependency-cadence";
 
 const rootDir = process.cwd();
 const rootPkg = JSON.parse(

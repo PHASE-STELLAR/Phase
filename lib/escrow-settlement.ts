@@ -5,6 +5,7 @@
  */
 
 import { z } from "zod"
+import { bpsShare, isDecimalAmountParsingEnabled, numberToStroops, stroopsToNumber } from "@/lib/decimal-amount"
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -498,6 +499,15 @@ export function auditEscrowSettlementWiring(): { ok: boolean; note: string } {
 export function previewEscrowFanOut(amount: number, payees: Array<{ wallet: string; bps: number }>): Array<{ wallet: string; amount: number }> {
   const total = payees.reduce((a, p) => a + p.bps, 0);
   if (total > 10000) throw new Error("INVALID_SPLIT_PAYEES");
+  if (isDecimalAmountParsingEnabled()) {
+    const units = numberToStroops(amount);
+    let assignedUnits = 0n;
+    return payees.map((p, i) => {
+      const share = i < payees.length - 1 ? bpsShare(units, p.bps, "half-up") : units - assignedUnits;
+      assignedUnits += share;
+      return { wallet: p.wallet, amount: stroopsToNumber(share) };
+    });
+  }
   let assigned = 0;
   return payees.map((p, i) => {
     if (i < payees.length - 1) {
@@ -507,4 +517,26 @@ export function previewEscrowFanOut(amount: number, payees: Array<{ wallet: stri
     }
     return { wallet: p.wallet, amount: Math.round((amount - assigned) * 1e7) / 1e7 };
   });
+}
+
+/**
+ * Validate whether an escrow record authorizes custodian release of a token to a recipient.
+ * Pure check — does not mutate escrow state.
+ */
+export function validateEscrowCustodianRelease(
+  escrow: Escrow,
+  tokenId: number,
+  recipient: string,
+): { valid: true } | { valid: false; code: string; error: string } {
+  if (escrow.tokenId !== tokenId) {
+    return { valid: false, code: "ESCROW_TOKEN_MISMATCH", error: "Escrow tokenId does not match release tokenId." };
+  }
+  if (escrow.status !== "funded" && escrow.status !== "completed") {
+    return { valid: false, code: "ESCROW_INVALID_STATUS", error: `Escrow status '${escrow.status}' does not permit release.` };
+  }
+  const normalized = recipient.toUpperCase();
+  if (normalized !== escrow.buyer.toUpperCase() && normalized !== escrow.seller.toUpperCase()) {
+    return { valid: false, code: "ESCROW_RECIPIENT_MISMATCH", error: "Recipient is not a party to this escrow." };
+  }
+  return { valid: true };
 }

@@ -1,7 +1,7 @@
 /**
  * Dynamic i18n Dictionary Loader (Issue #44)
  * Replaces monolithic lib/phase-copy.ts with modular JSON dictionaries
- * 
+ *
  * Benefits:
  * - Reduces initial bundle size by ~80KB
  * - Enables on-demand loading of language dictionaries
@@ -9,7 +9,7 @@
  * - Provides fallback mechanism for missing translations
  */
 
-import type { AppLang } from "@/components/lang-context"
+import type { AppLang } from "@/components/lang-context";
 
 export type TranslationDomain =
   | "common"
@@ -19,15 +19,15 @@ export type TranslationDomain =
   | "profile"
   | "signals"
   | "marketplace"
-  | "wallet"
+  | "wallet";
 
-type TranslationDictionary = Record<string, string | Record<string, string>>
+type TranslationDictionary = Record<string, string | Record<string, string>>;
 
 // In-memory cache for loaded translations
-const translationCache = new Map<string, TranslationDictionary>()
+const translationCache = new Map<string, TranslationDictionary>();
 
 // Track loading state to prevent duplicate fetches
-const loadingPromises = new Map<string, Promise<TranslationDictionary>>()
+const loadingPromises = new Map<string, Promise<TranslationDictionary>>();
 
 /**
  * Load a translation dictionary for a specific domain and language
@@ -37,16 +37,16 @@ export async function loadTranslations(
   domain: TranslationDomain,
   lang: AppLang,
 ): Promise<TranslationDictionary> {
-  const cacheKey = `${lang}:${domain}`
+  const cacheKey = `${lang}:${domain}`;
 
   // Return cached version if available
   if (translationCache.has(cacheKey)) {
-    return translationCache.get(cacheKey)!
+    return translationCache.get(cacheKey)!;
   }
 
   // Return in-flight promise if already loading
   if (loadingPromises.has(cacheKey)) {
-    return loadingPromises.get(cacheKey)!
+    return loadingPromises.get(cacheKey)!;
   }
 
   // Start new load
@@ -54,29 +54,32 @@ export async function loadTranslations(
     try {
       const response = await fetch(`/locales/${lang}/${domain}.json`, {
         cache: "force-cache", // Aggressive caching for immutable content
-      })
+      });
 
       if (!response.ok) {
-        throw new Error(`Failed to load ${lang}/${domain}: ${response.status}`)
+        throw new Error(`Failed to load ${lang}/${domain}: ${response.status}`);
       }
 
-      const data = await response.json()
-      translationCache.set(cacheKey, data)
-      return data
+      const data = await response.json();
+      translationCache.set(cacheKey, data);
+      return data;
     } catch (error) {
-      console.error(`[i18n] Failed to load translations for ${cacheKey}:`, error)
-      
-      // Return empty object as fallback to prevent app crashes
-      const fallback: TranslationDictionary = {}
-      translationCache.set(cacheKey, fallback)
-      return fallback
-    } finally {
-      loadingPromises.delete(cacheKey)
-    }
-  })()
+      console.error(
+        `[i18n] Failed to load translations for ${cacheKey}:`,
+        error,
+      );
 
-  loadingPromises.set(cacheKey, loadPromise)
-  return loadPromise
+      // Return empty object as fallback to prevent app crashes
+      const fallback: TranslationDictionary = {};
+      translationCache.set(cacheKey, fallback);
+      return fallback;
+    } finally {
+      loadingPromises.delete(cacheKey);
+    }
+  })();
+
+  loadingPromises.set(cacheKey, loadPromise);
+  return loadPromise;
 }
 
 /**
@@ -89,25 +92,25 @@ export async function translate(
   lang: AppLang,
   fallback?: string,
 ): Promise<string> {
-  const translations = await loadTranslations(domain, lang)
-  
+  const translations = await loadTranslations(domain, lang);
+
   // Support nested keys (e.g., "wallet.connect.label")
-  const keys = key.split(".")
-  let value: any = translations
-  
+  const keys = key.split(".");
+  let value: any = translations;
+
   for (const k of keys) {
     if (value && typeof value === "object" && k in value) {
-      value = value[k]
+      value = value[k];
     } else {
       // Key not found - log in development and return fallback
       if (process.env.NODE_ENV === "development") {
-        console.warn(`[i18n] Missing translation: ${domain}.${key} (${lang})`)
+        console.warn(`[i18n] Missing translation: ${domain}.${key} (${lang})`);
       }
-      return fallback || key
+      return fallback || key;
     }
   }
-  
-  return typeof value === "string" ? value : (fallback || key)
+
+  return typeof value === "string" ? value : fallback || key;
 }
 
 /**
@@ -118,51 +121,110 @@ export async function preloadLanguage(
   lang: AppLang,
   domains: TranslationDomain[] = ["common"],
 ): Promise<void> {
-  await Promise.all(domains.map(domain => loadTranslations(domain, lang)))
+  await Promise.all(domains.map((domain) => loadTranslations(domain, lang)));
 }
 
 /**
  * Clear translation cache (useful for testing or forced refresh)
  */
 export function clearTranslationCache(): void {
-  translationCache.clear()
-  loadingPromises.clear()
+  translationCache.clear();
+  loadingPromises.clear();
+}
+
+/**
+ * Build-time / CI check: verify that every key present in the EN dictionary
+ * for a domain also exists in every other required locale (#731).
+ *
+ * Throws with a descriptive message listing all missing keys so CI fails fast.
+ *
+ * Usage (e.g. in a scripts/check-i18n.ts file run from package.json):
+ *   import { validateLocaleKeys } from "@/lib/i18n-loader"
+ *   await validateLocaleKeys(["common", "chamber"], ["en", "es"])
+ */
+export async function validateLocaleKeys(
+  domains: TranslationDomain[],
+  locales: AppLang[],
+): Promise<void> {
+  if (locales.length < 2) return;
+
+  const [primary, ...rest] = locales;
+  const missing: string[] = [];
+
+  for (const domain of domains) {
+    const primaryDict = await loadTranslations(domain, primary);
+    const primaryKeys = flattenKeys(primaryDict);
+
+    for (const locale of rest) {
+      const localeDict = await loadTranslations(domain, locale);
+      const localeKeys = new Set(flattenKeys(localeDict));
+
+      for (const key of primaryKeys) {
+        if (!localeKeys.has(key)) {
+          missing.push(
+            `[${domain}] ${locale} missing key: "${key}" (present in ${primary})`,
+          );
+        }
+      }
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `i18n locale key validation failed — ${missing.length} missing key(s):\n` +
+        missing.map((m) => `  • ${m}`).join("\n"),
+    );
+  }
+}
+
+/** Flatten a nested translation dictionary into dot-separated keys. */
+function flattenKeys(obj: TranslationDictionary, prefix = ""): string[] {
+  const keys: string[] = [];
+  for (const [k, v] of Object.entries(obj)) {
+    const full = prefix ? `${prefix}.${k}` : k;
+    if (typeof v === "object" && v !== null) {
+      keys.push(...flattenKeys(v as TranslationDictionary, full));
+    } else {
+      keys.push(full);
+    }
+  }
+  return keys;
 }
 
 /**
  * Get cache statistics for monitoring bundle size reduction
  */
 export function getTranslationCacheStats(): {
-  cachedDomains: number
-  totalKeys: number
-  memoryEstimate: string
+  cachedDomains: number;
+  totalKeys: number;
+  memoryEstimate: string;
 } {
-  let totalKeys = 0
-  let totalBytes = 0
+  let totalKeys = 0;
+  let totalBytes = 0;
 
   for (const [key, dict] of translationCache.entries()) {
-    const keyCount = countKeys(dict)
-    totalKeys += keyCount
-    totalBytes += JSON.stringify(dict).length
+    const keyCount = countKeys(dict);
+    totalKeys += keyCount;
+    totalBytes += JSON.stringify(dict).length;
   }
 
   return {
     cachedDomains: translationCache.size,
     totalKeys,
     memoryEstimate: `${(totalBytes / 1024).toFixed(2)} KB`,
-  }
+  };
 }
 
 function countKeys(obj: any): number {
-  if (typeof obj !== "object" || obj === null) return 0
-  let count = 0
+  if (typeof obj !== "object" || obj === null) return 0;
+  let count = 0;
   for (const key in obj) {
-    count++
+    count++;
     if (typeof obj[key] === "object") {
-      count += countKeys(obj[key])
+      count += countKeys(obj[key]);
     }
   }
-  return count
+  return count;
 }
 
 /**
@@ -175,26 +237,28 @@ export function getTranslationSync(
   lang: AppLang,
   fallback?: string,
 ): string {
-  const cacheKey = `${lang}:${domain}`
-  const translations = translationCache.get(cacheKey)
-  
+  const cacheKey = `${lang}:${domain}`;
+  const translations = translationCache.get(cacheKey);
+
   if (!translations) {
     if (process.env.NODE_ENV === "development") {
-      console.warn(`[i18n] Domain ${domain} not loaded for ${lang}. Call loadTranslations() first.`)
+      console.warn(
+        `[i18n] Domain ${domain} not loaded for ${lang}. Call loadTranslations() first.`,
+      );
     }
-    return fallback || key
+    return fallback || key;
   }
-  
-  const keys = key.split(".")
-  let value: any = translations
-  
+
+  const keys = key.split(".");
+  let value: any = translations;
+
   for (const k of keys) {
     if (value && typeof value === "object" && k in value) {
-      value = value[k]
+      value = value[k];
     } else {
-      return fallback || key
+      return fallback || key;
     }
   }
-  
-  return typeof value === "string" ? value : (fallback || key)
+
+  return typeof value === "string" ? value : fallback || key;
 }

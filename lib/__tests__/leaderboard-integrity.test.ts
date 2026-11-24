@@ -154,6 +154,14 @@ describe("phase-178 leaderboard integrity", () => {
     assert.ok(score.signals.includes("sybil_suspect"))
   })
 
+  it("excludes flagged/excluded wallets from ranking", () => {
+    const a = candidate({ wallet: "GAAAA", events: [{ points: 10, at: NOW }] })
+    const b = candidate({ wallet: "GBBBB", events: [{ points: 100, at: NOW }] })
+    ;(b as any).excluded = true
+    const ranked = rankLeaderboard([a, b], {}, NOW)
+    assert.deepEqual(ranked.map((s) => s.wallet), ["GAAAA"])
+  })
+
   it("ranks descending with a stable wallet tie-break and caps the top list", () => {
     const a = candidate({ wallet: "GAAAA", events: [{ points: 10, at: NOW }] })
     const b = candidate({ wallet: "GBBBB", events: [{ points: 10, at: NOW }] })

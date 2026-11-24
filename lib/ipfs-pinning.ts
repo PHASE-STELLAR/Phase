@@ -406,3 +406,5 @@ export async function fetchWithMultiGatewayFallback(
   }
   return { ok: false, error: "All gateways failed or checksum mismatch" }
 }
+
+export { ipfsClient, IpfsClient } from "@/lib/ipfs-client"

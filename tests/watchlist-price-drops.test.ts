@@ -19,6 +19,16 @@ import {
   isPhase79Enabled,
   processPriceDropCli,
 } from "../scripts/reset-phase"
+import { NextRequest } from "next/server"
+import {
+  evaluateMarketPriceDrops,
+  getWalletWatchlist,
+  isWatchlistEnabled,
+  upsertWatchlistItem,
+} from "@/lib/watchlist-store"
+import { GET as watchlistGet, POST as watchlistPost } from "@/app/api/watchlist/route"
+import { pickCopy } from "@/lib/phase-copy"
+import { resetSecurityCounters, snapshotSecurityCounters } from "@/lib/security-counters"
 
 const WALLET_A = "GA" + "A".repeat(54)
 const WALLET_B = "GB" + "B".repeat(53) + "A"
@@ -168,6 +178,115 @@ async function testWiringAudit() {
   console.log("✓ wiring audit succeeds")
 }
 
+async function testPhase255WatchlistStoreAndAlerts() {
+  resetSecurityCounters()
+
+  // 1. Flag off = route 404, alerts off
+  delete process.env.NEXT_PUBLIC_FEATURE_PHASE_255
+  delete process.env.FEATURE_PHASE_255
+  assert.equal(isWatchlistEnabled(), false)
+
+  const offGet = await watchlistGet(new NextRequest("https://phase.example/api/watchlist"))
+  assert.equal(offGet.status, 404)
+  const offPost = await watchlistPost(
+    new NextRequest("https://phase.example/api/watchlist", {
+      method: "POST",
+      body: JSON.stringify({ collectionId: 0, tokenId: 99, targetPrice: 50 }),
+    }),
+  )
+  assert.equal(offPost.status, 404)
+  const offAlerts = await evaluateMarketPriceDrops({
+    collectionId: 0,
+    tokenId: 99,
+    previousPrice: 100,
+    newPrice: 40,
+  })
+  assert.equal(offAlerts.alerts.length, 0)
+
+  // 2. Flag on: version-guarded upsert + concurrent edit returns 409
+  process.env.NEXT_PUBLIC_FEATURE_PHASE_255 = "1"
+  process.env.FEATURE_PHASE_255 = "1"
+  assert.equal(isWatchlistEnabled(), true)
+
+  const add1 = await upsertWatchlistItem(WALLET_A, {
+    collectionId: 0,
+    tokenId: 101,
+    targetPrice: 80,
+    expectedVersion: 0,
+  })
+  assert.equal(add1.ok, true)
+  if (!add1.ok) return
+  assert.equal(add1.version, 1)
+
+  const staleEdit = await upsertWatchlistItem(WALLET_A, {
+    collectionId: 0,
+    tokenId: 102,
+    targetPrice: 50,
+    expectedVersion: 0, // stale
+  })
+  assert.equal(staleEdit.ok, false)
+  if (!staleEdit.ok) {
+    assert.equal(staleEdit.status, 409)
+    assert.equal(staleEdit.code, "VERSION_CONFLICT")
+  }
+
+  // 3. Threshold crossing produces one alert, deduped in same window
+  const baseNow = 10_000_000
+  const drop1 = await evaluateMarketPriceDrops({
+    collectionId: 0,
+    tokenId: 101,
+    previousPrice: 100,
+    newPrice: 75,
+    nowMs: baseNow,
+    windowMs: 3_600_000,
+  })
+  assert.equal(drop1.alerts.length, 1)
+
+  const drop2SameWindow = await evaluateMarketPriceDrops({
+    collectionId: 0,
+    tokenId: 101,
+    previousPrice: 75,
+    newPrice: 70,
+    nowMs: baseNow + 10_000,
+    windowMs: 3_600_000,
+  })
+  assert.equal(drop2SameWindow.alerts.length, 0)
+  assert.equal(drop2SameWindow.dedupedCount, 1)
+
+  // 4. Price reversal above target resets the trigger, allowing next drop in new window
+  const reversal = await evaluateMarketPriceDrops({
+    collectionId: 0,
+    tokenId: 101,
+    previousPrice: 70,
+    newPrice: 95,
+    nowMs: baseNow + 20_000,
+    windowMs: 3_600_000,
+  })
+  assert.equal(reversal.rearmedCount, 1)
+
+  const listAfterReversal = await getWalletWatchlist(WALLET_A)
+  assert.equal(listAfterReversal.items[0]?.armed, true)
+
+  const dropAfterReversal = await evaluateMarketPriceDrops({
+    collectionId: 0,
+    tokenId: 101,
+    previousPrice: 95,
+    newPrice: 78,
+    nowMs: baseNow + 3_700_000, // next window
+    windowMs: 3_600_000,
+  })
+  assert.equal(dropAfterReversal.alerts.length, 1)
+
+  // 5. Closed counters & EN/ES copy
+  const counters = snapshotSecurityCounters()
+  assert.ok((counters.watchlist_mutation ?? 0) >= 1)
+  assert.ok((counters.watchlist_price_drop_alert ?? 0) >= 3)
+  assert.ok(pickCopy("en").watchlist.conflictError.length > 0)
+  assert.ok(pickCopy("es").watchlist.conflictError.length > 0)
+
+  console.log("✓ phase-255 watchlist store, threshold alerts, dedupe, reversal reset & 409 guard passed")
+}
+
 async function run() {
   await testFlagEnabled()
   await testEvaluatePriceDrop()
@@ -175,7 +294,8 @@ async function run() {
   await testProcessPriceDropNotification()
   await testFlagDisabledBlocksWatchlist()
   await testWiringAudit()
-  console.log("\nAll watchlist price-drop (phase-79) tests passed.\n")
+  await testPhase255WatchlistStoreAndAlerts()
+  console.log("\nAll watchlist price-drop (phase-79 + phase-255) tests passed.\n")
 }
 
 run().catch((e) => {

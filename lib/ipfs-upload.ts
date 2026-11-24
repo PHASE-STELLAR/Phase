@@ -116,3 +116,16 @@ export async function uploadToIPFSWithFlag(fileOrBlob: Blob | File): Promise<str
   }
   return uploadToIPFS(fileOrBlob)
 }
+
+// ─── Unified IPFS Client (Issue #651) ────────────────────────────────────────
+export {
+  ipfsClient,
+  IpfsClient,
+  type IpfsClientUploadOptions,
+  type IpfsClientUploadResult,
+  type IpfsClientRetrieveOptions,
+  type IpfsClientRetrieveResult,
+  type IpfsClientPinOptions,
+  type IpfsClientPinResult,
+  type IpfsClientVerifyResult,
+} from "@/lib/ipfs-client"

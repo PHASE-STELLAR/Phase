@@ -1,17 +1,22 @@
 import { NextRequest, NextResponse } from "next/server"
-import { isExperimentationEnabled, resolveForgeExperimentCopyKey, resolveForgeRequiredAmountStroops } from "@/lib/experiments"
+import {
+  isExperimentationEnabled,
+  resolveChamberExperiment,
+  resolveForgeExperimentCopyKey,
+  resolveForgeRequiredAmountStroops,
+} from "@/lib/experiments"
 import { forgePriceDisplay } from "@/lib/forge/payment-verifier"
 import { pickForgeExperimentCopy } from "@/lib/phase-copy"
 
 export const dynamic = "force-dynamic"
 
 /**
- * GET /api/experiments/forge — spike 612 (phase-174).
+ * GET /api/experiments/forge — spike 612 / #706 (phase-174).
  *
- * Public, read-only view of the forge price/copy experiment for a subject.
- * The wallet is hashed server-side and never echoed or stored raw; the sticky
- * assignment store is only touched through the resolver. 404 when the flag is
- * off so the route is invisible in the zero-regression path.
+ * Public, read-only view of the forge/chamber price & copy experiment for a
+ * subject. The wallet is hashed server-side and never echoed or stored raw;
+ * the sticky assignment store is only touched through the resolver. 404 when
+ * the flag is off so the route is invisible in the zero-regression path.
  */
 export async function GET(request: NextRequest) {
   if (!isExperimentationEnabled()) {
@@ -19,6 +24,27 @@ export async function GET(request: NextRequest) {
   }
   const wallet = request.nextUrl.searchParams.get("wallet")?.trim() || undefined
   const lang = request.nextUrl.searchParams.get("lang")?.trim()
+  const surface = request.nextUrl.searchParams.get("surface")?.trim() === "chamber" ? "chamber" : "forge"
+
+  if (surface === "chamber") {
+    const chamber = await resolveChamberExperiment(wallet)
+    const variantCopy = pickForgeExperimentCopy(lang, chamber.copyKey)
+    return NextResponse.json({
+      surface: "chamber",
+      experimentId: chamber.experimentId,
+      variantId: chamber.variantId,
+      copyKey: chamber.copyKey,
+      amountStroops: chamber.amountStroops,
+      priceDisplay: forgePriceDisplay(chamber.amountStroops),
+      label: variantCopy.label,
+      copy: {
+        paymentGateExplainer: variantCopy.paymentGateExplainer,
+        paymentGateHint: variantCopy.paymentGateHint,
+        chamberBanner: variantCopy.chamberBanner,
+        chamberCta: variantCopy.chamberCta,
+      },
+    })
+  }
 
   const [price, copyKey] = await Promise.all([
     resolveForgeRequiredAmountStroops(wallet),
@@ -27,6 +53,7 @@ export async function GET(request: NextRequest) {
   const variantCopy = pickForgeExperimentCopy(lang, copyKey)
 
   return NextResponse.json({
+    surface: "forge",
     experimentId: price.experimentId,
     variantId: price.variantId,
     copyKey,
@@ -38,6 +65,8 @@ export async function GET(request: NextRequest) {
       // price, the chamber substitutes its on-chain collection price.
       paymentGateExplainer: variantCopy.paymentGateExplainer,
       paymentGateHint: variantCopy.paymentGateHint,
+      chamberBanner: variantCopy.chamberBanner,
+      chamberCta: variantCopy.chamberCta,
     },
   })
 }

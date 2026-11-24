@@ -26,14 +26,20 @@
  * Not spike 557 (backend full ingestion + cursors) and not 558 (getEvents
  * indexer + reorg guard) — this is the per-wallet UI timeline above them.
  *
- * Feature flag: phase-173.
- * Rollback: unset NEXT_PUBLIC_FEATURE_PHASE_173 / FEATURE_PHASE_173; the
+ * Feature flag: phase-226 (issue #650; the spike rode phase-173, which is the
+ * preview-isolation flag).
+ * Rollback: unset NEXT_PUBLIC_FEATURE_PHASE_226 / FEATURE_PHASE_226; the
  * route returns 404, the timeline component renders nothing, and the cache is
  * never read or written.
+ *
+ * Isolation: Horizon reads go through the dedicated `history` bulkhead
+ * partition, so timeline traffic can never hold the slots other routes use;
+ * when that partition is saturated the read is shed and the last cached page
+ * is served instead.
  */
 
 import { isFeatureEnabled } from "@/lib/feature-flags";
-import { isHorizon429, withHorizonBulkhead } from "@/lib/horizon-bulkhead";
+import { HorizonBulkheadFullError, isHorizon429, withHorizonBulkhead } from "@/lib/horizon-bulkhead";
 import {
   isWalletHistoryCacheEnabled,
   isWalletHistoryCacheEntryFresh,
@@ -56,6 +62,7 @@ export class WalletHistoryError extends Error {
     | "FLAG_DISABLED"
     | "INVALID_ADDRESS"
     | "HORIZON_RATE_LIMITED"
+    | "HORIZON_BUSY"
     | "HORIZON_ERROR";
   constructor(code: WalletHistoryError["code"], message: string) {
     super(message);
@@ -64,8 +71,43 @@ export class WalletHistoryError extends Error {
   }
 }
 
-export function isWalletHistory173Enabled(): boolean {
-  return isFeatureEnabled("phase-173");
+export function isWalletHistoryEnabled(): boolean {
+  return isFeatureEnabled("phase-226");
+}
+
+/**
+ * Closed counters (#650): one counter per outcome, fixed at compile time, so
+ * the set never grows with wallets, cursors or error text.
+ */
+export type WalletHistoryOutcome =
+  | "fresh"
+  | "miss"
+  | "off"
+  | "stale"
+  | "flag_off"
+  | "invalid"
+  | "rate_limited"
+  | "busy"
+  | "error";
+
+const OUTCOMES: readonly WalletHistoryOutcome[] = [
+  "fresh", "miss", "off", "stale", "flag_off", "invalid", "rate_limited", "busy", "error",
+];
+const outcomeCounters = new Map<WalletHistoryOutcome, number>(OUTCOMES.map((o) => [o, 0]));
+
+export function countWalletHistoryOutcome(outcome: WalletHistoryOutcome): void {
+  outcomeCounters.set(outcome, (outcomeCounters.get(outcome) ?? 0) + 1);
+}
+
+export function getWalletHistoryCounters(): Record<WalletHistoryOutcome, number> {
+  return Object.fromEntries(OUTCOMES.map((o) => [o, outcomeCounters.get(o) ?? 0])) as Record<
+    WalletHistoryOutcome,
+    number
+  >;
+}
+
+export function resetWalletHistoryCounters(): void {
+  for (const o of OUTCOMES) outcomeCounters.set(o, 0);
 }
 
 /** Stellar ed25519 public account (G…, 56 chars base32). */
@@ -367,7 +409,7 @@ async function getHorizonJson(url: string): Promise<{ records: RawRecord[]; tail
       throw err;
     }
     return r.json() as Promise<{ _embedded?: { records?: RawRecord[] }; _links?: unknown }>;
-  });
+  }, { partition: "history" });
   const records = res?._embedded?.records ?? [];
   const tail = records.length > 0 ? (records[records.length - 1].paging_token ?? null) : null;
   return { records, tail };
@@ -416,14 +458,16 @@ export async function getWalletTimeline(
   address: string,
   opts: { cursor?: string | null; limit?: number; horizonUrl?: string } = {},
 ): Promise<WalletTimelinePage> {
-  if (!isWalletHistory173Enabled()) {
+  if (!isWalletHistoryEnabled()) {
+    countWalletHistoryOutcome("flag_off");
     throw new WalletHistoryError(
       "FLAG_DISABLED",
-      "Wallet history is disabled (phase-173 flag off)",
+      "Wallet history is disabled (phase-226 flag off)",
     );
   }
   const wallet = address.trim().toUpperCase();
   if (!isValidStellarAddress(wallet)) {
+    countWalletHistoryOutcome("invalid");
     throw new WalletHistoryError("INVALID_ADDRESS", `Invalid Stellar address: ${address}`);
   }
   const cursor = opts.cursor?.trim() || null;
@@ -434,6 +478,7 @@ export async function getWalletTimeline(
 
   const cached = cacheOn ? getCachedWalletHistory(wallet, cursor) : null;
   if (cached && isWalletHistoryCacheEntryFresh(cached)) {
+    countWalletHistoryOutcome("fresh");
     return {
       address: wallet,
       events: cached.events,
@@ -458,6 +503,7 @@ export async function getWalletTimeline(
     if (cacheOn) {
       setCachedWalletHistory(wallet, cursor, events, page.next_cursor);
     }
+    countWalletHistoryOutcome(cacheOn ? "miss" : "off");
     return {
       address: wallet,
       events,
@@ -467,7 +513,9 @@ export async function getWalletTimeline(
     };
   } catch (err) {
     if (cached) {
-      // Stale-on-error: serve the last-known timeline rather than failing.
+      // Stale-on-error: serve the last-known timeline rather than failing
+      // (Horizon outage, 429, or the history bulkhead shedding the read).
+      countWalletHistoryOutcome("stale");
       return {
         address: wallet,
         events: cached.events,
@@ -476,13 +524,22 @@ export async function getWalletTimeline(
         indexed_at: cached.cached_at,
       };
     }
+    if (err instanceof HorizonBulkheadFullError) {
+      countWalletHistoryOutcome("busy");
+      throw new WalletHistoryError(
+        "HORIZON_BUSY",
+        "History reads are at capacity; retry shortly.",
+      );
+    }
     if (isHorizon429(err)) {
+      countWalletHistoryOutcome("rate_limited");
       throw new WalletHistoryError(
         "HORIZON_RATE_LIMITED",
         "Horizon rate-limited the history read; retry shortly.",
       );
     }
     if (err instanceof WalletHistoryError) throw err;
+    countWalletHistoryOutcome("error");
     throw new WalletHistoryError(
       "HORIZON_ERROR",
       `Horizon history fetch failed: ${err instanceof Error ? err.message : String(err)}`,

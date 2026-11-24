@@ -1,3 +1,50 @@
+
+import { createHash } from "node:crypto"
+
+export function computePayloadChecksum(payload: unknown): string {
+  const normalized = JSON.stringify(payload, Object.keys(payload as any || {}).sort())
+  return createHash("sha256").update(normalized || "", "utf8").digest("hex")
+}
+
+export type MigrationManifest = {
+  version: 2
+  generatedAt: string
+  isDryRun: boolean
+  totalProcessed: number
+  records: Array<{
+    id: string | number
+    beforeChecksum: string
+    afterChecksum: string
+    diff: string[]
+  }>
+  rollbackPlan: string
+}
+
+export function generateMigrationManifest(params: {
+  records: Array<{ id: string | number; before: unknown; after: unknown }>
+  isDryRun: boolean
+}): MigrationManifest {
+  return {
+    version: 2,
+    generatedAt: new Date().toISOString(),
+    isDryRun: params.isDryRun,
+    totalProcessed: params.records.length,
+    records: params.records.map((r) => {
+      const bSum = computePayloadChecksum(r.before)
+      const aSum = computePayloadChecksum(r.after)
+      const beforeKeys = Object.keys(r.before as any || {})
+      const afterKeys = Object.keys(r.after as any || {})
+      const diff = afterKeys.filter((k) => !beforeKeys.includes(k)).map((k) => `+${k}`)
+      return {
+        id: r.id,
+        beforeChecksum: bSum,
+        afterChecksum: aSum,
+        diff,
+      }
+    }),
+    rollbackPlan: "Unset FEATURE_PHASE_124. Revert to original v1 payloads if stored or parse v2 as v1 (fields are additive).",
+  }
+}
 /**
  * Metadata version migration tool — phase-124
  *
@@ -27,7 +74,7 @@ export const MetadataVersionSchema = z.union([z.literal(1), z.literal(2)])
 // ── Schemas ─────────────────────────────────────────────────────────────
 
 export const NftMetadataV1Schema = z.object({
-  version: z.literal(1).optional(),
+  version: z.union([z.literal(1), z.literal(2)]).optional(),
   name: z.string().min(1).max(256),
   description: z.string().max(2048).optional().default(""),
   image: z.string().max(1024).optional().default(""),
@@ -115,6 +162,8 @@ function migrateV1ToV2(v1: NftMetadataV1, opts?: { baseUrl?: string }): NftMetad
 // ── Public API ──────────────────────────────────────────────────────────
 
 export type MigrateOptions = {
+  apply?: boolean
+  diffOnly?: boolean
   dryRun?: boolean
   baseUrl?: string
   strict?: boolean

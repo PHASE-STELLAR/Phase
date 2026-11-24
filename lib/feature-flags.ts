@@ -76,6 +76,8 @@ import { incSecurityCounter } from "@/lib/security-counters"
  * - phase-167: WalletConnect v2 mobile session resilience with reconnect and chain-switch (spike 623 / issue #486)
  * - phase-168: xBull full support with sign, trustline and Freighter-difference matrix (spike 624 / issue #487)
  * - phase-169: Ledger blind-signing to clear-signing review for Soroban transactions (spike 625 / issue #488)
+ * - phase-224: Freighter mobile browser support — UA detection, keyboard avoidance, same-tab friendbot, return-flow marker (spike 627 / issue #648)
+ * - phase-225: Biometric unlock for returning wallets — WebAuthn platform gate, AES-GCM envelope, attempt lockout, recovery (spike 628 / issue #649)
  * - phase-174: A/B experimentation framework for forge and chamber copy plus
  *   pricing with sticky salted bucketing (spike 612 / issue #475)
  * - phase-175: Search analytics — hashed query logs, zero-result rate,
@@ -88,15 +90,69 @@ import { incSecurityCounter } from "@/lib/security-counters"
  * - phase-171: backup and disaster-recovery snapshots for sidecars, SQLite and the secrets map (spike 605 / issue #469)
  * - phase-172: SQLite to Postgres migration rehearsal with dual-write, parity and rollback (spike 604 / issue #468)
  * - phase-173: Vercel preview-environment isolation for data roots, secrets, contracts and cron (spike 603 / issue #467)
+ * - phase-226: Horizon wallet-history timeline on the dashboard: settle/forge correlation, stale-on-error cache, isolated Horizon bulkhead partition, closed counters (issue #650)
+ * - phase-228: per-PR Soroban contract deploy, preview CI job, branch-DB seeding and env collision guard (issue #655)
  * - phase-178: leaderboard integrity with anti-farm scoring, time decay and sybil discount (spike 616 / issue #479)
  * - phase-179: data retention and GDPR erasure with TTL sweeps and wallet deletion (spike 617 / issue #480)
  * - phase-180: analytics warehouse export with Parquet and NDJSON, schema-versioned and redacted (spike 618 / issue #481)
  * - phase-181: anomaly detection on volume, counters and balances with webhook alert routing (spike 619 / issue #482)
  * - phase-182: liquidity pools — classic PHASELQ/XLM pool + Soroswap router adapter, quotes,
  *   deposits/withdrawals, and pool-aware wash screening (spike 574 / issue #438)
+ * - phase-280: SEP-0001 stellar.toml generation from env at build time with published
+ *   document validation and testnet fencing (spike 648 / issue #739)
+ * - phase-281: Friendbot testnet bootstrap integration with idempotent per-account request,
+ *   same-tab strategy with popup fallback, fail closed on mainnet (spike 650 / issue #740)
+ * - phase-282: Secret rotation automation with runbook definition, dry-run mode, audit
+ *   events and deployed reference verification (spike 651 / issue #741)
+ * - phase-286: Admin operator console with unified surface, action gating, audit trails
+ *   and EN/ES localization (issue #745)
+ * - phase-287: Phase NFT verification flow with Soroban simulation, metadata digest
+ *   and idempotent outcomes (issue #748)
+ * - phase-288: NFT listing and bulk listing integration with atomic transactions
+ *   and per-item error handling (issue #749)
+ * - phase-289: AI pipeline step orchestration with centralized schema validation,
+ *   bounded retries and deterministic fallback (issue #750)
+ * - phase-251: Phase NFT custodian release flow with signed authorization,
+ *   atomic SQLite nonce consumption, artifact verification and audit events (issue #702)
+ * - phase-248: Inbound deep links with strict same-origin intent schema, 15-minute
+ *   lifetime, review screen, Chamber rewrite and custom scheme fencing (issue #699)
+ * - phase-250: Explorer metadata contract integration with typed adapter, digest
+ *   comparison, verified badge, and short-TTL stale-on-error fence (issue #701)
+ * - phase-249: Proof-relay contract verification integration with canonical bytes,
+ *   timeout, typed failure, and SQLite idempotent recording (issue #700)
+ * - phase-259: Forge paint canvas with deterministic seal image, digest-keyed cache,
+ *   tamper verification, renderer fallback and closed counters (issue #712)
+ * - phase-246: Sybil resistance for rewards and governance with bounded score,
+ *   persisted decisions, closed reason codes, and admin inspect route (issue #697)
+ * - phase-247: Unified Turnstile, deny-list, sybil, and compliance pre-credit gate
+ *   with fail-closed 503 + Retry-After and keyed-hash persistence (issue #698)
+ * - phase-244: Profile 2FA bound to SEP-10 session with lockout cooldown,
+ *   auditable recovery, hashed secrets, and EN/ES copy (issue #695)
+ * - phase-245: Artist attestation and alias control with wallet signatures,
+ *   version-guarded primary alias uniqueness, audit trail, and EN/ES copy (issue #696)
+ * - phase-257: Lore versioning with explicit append-only rollback, If-Match
+ *   optimistic concurrency guard, author proof and EN/ES copy (issue #710)
+ * - phase-251: Market orderbook & offer expiry integration
+ * - phase-252: Webhook alerts and push notification delivery integration with
+ *   per-wallet dedupe keys, bounded-concurrency batching, circuit breakers and
+ *   stale subscription pruning (issue #703)
+ * - phase-253: Analytics warehouse export integration with signed one-use
+ *   grants, closed-label sanitization, paginated streaming and audit events (issue #704)
+ * - phase-254: Bounty claim and quest reward integration bound to versioned
+ *   quest snapshots, signed session wallet, idempotent version-guarded ledger (issue #705)
+ * - phase-258: Design Studio editor for artifact metadata with Zod schema
+ *   validation, preview before commit, If-Match 409 draft guard and EN/ES copy (issue #711)
  *
- * phase-182 is default off. Rollback: unset the env keys and restart; the LP
- * sidecar (`liquidity-pools.json`) and additive SQLite tables stay inert.
+ * - phase-265: one decimal-amount parser for forge, market and x402 amounts with explicit
+ *   decimal places and rounding modes (issue #723)
+ * - phase-266: Zod env schemas per surface, fail-closed startup validation and preview
+ *   secret isolation (issue #724)
+ * - phase-267: closed security-counter and reason-code registry with emit-time label
+ *   rejection (issue #725)
+ * - phase-268: edge runtime hardening — edge-safe helpers and a degraded in-memory
+ *   fallback for file-backed stores on edge (issue #726)
+ *
+ * phase-182/265/266/267/268/280/281/282/286/287/288/289 are default off. Rollback: unset the env keys and restart.
  */
 
 export type PhaseFeatureFlag =
@@ -204,7 +260,48 @@ export type PhaseFeatureFlag =
   | "phase-179"
   | "phase-180"
   | "phase-181"
-  | "phase-182";
+  | "phase-182"
+  | "phase-280"
+  | "phase-281"
+  | "phase-265"
+  | "phase-266"
+  | "phase-267"
+  | "phase-268"
+  | "phase-282"
+  | "phase-262"
+  | "phase-263"
+  | "phase-264"
+  | "phase-286"
+  | "phase-287"
+  | "phase-288"
+  | "phase-289"
+  | "phase-224"
+  | "phase-225"
+  | "phase-228"
+  | "phase-251"
+  | "phase-252"
+  | "phase-248"
+  | "phase-250"
+  | "phase-249"
+  | "phase-253"
+  | "phase-254"
+  | "phase-257"
+  | "phase-259"
+  | "phase-246"
+  | "phase-247"
+  | "phase-244"
+  | "phase-245"
+  | "phase-226"
+  | "phase-232"
+  | "phase-233"
+  | "phase-234"
+  | "phase-235"
+  | "phase-236"
+  | "phase-240"
+  | "phase-241"
+  | "phase-242"
+  | "phase-243"
+  | "phase-227";
 
 
 const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
@@ -309,6 +406,48 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-171": ["NEXT_PUBLIC_FEATURE_PHASE_171", "FEATURE_PHASE_171"],
   "phase-172": ["NEXT_PUBLIC_FEATURE_PHASE_172", "FEATURE_PHASE_172"],
   "phase-173": ["NEXT_PUBLIC_FEATURE_PHASE_173", "FEATURE_PHASE_173"],
+  "phase-280": ["NEXT_PUBLIC_FEATURE_PHASE_280", "FEATURE_PHASE_280"],
+  "phase-281": ["NEXT_PUBLIC_FEATURE_PHASE_281", "FEATURE_PHASE_281"],
+  "phase-282": ["NEXT_PUBLIC_FEATURE_PHASE_282", "FEATURE_PHASE_282"],
+  "phase-265": ["NEXT_PUBLIC_FEATURE_PHASE_265", "FEATURE_PHASE_265"],
+  "phase-266": ["NEXT_PUBLIC_FEATURE_PHASE_266", "FEATURE_PHASE_266"],
+  "phase-267": ["NEXT_PUBLIC_FEATURE_PHASE_267", "FEATURE_PHASE_267"],
+  "phase-268": ["NEXT_PUBLIC_FEATURE_PHASE_268", "FEATURE_PHASE_268"],
+  "phase-262": ["NEXT_PUBLIC_FEATURE_PHASE_262", "FEATURE_PHASE_262"],
+  "phase-263": ["NEXT_PUBLIC_FEATURE_PHASE_263", "FEATURE_PHASE_263"],
+  "phase-264": ["NEXT_PUBLIC_FEATURE_PHASE_264", "FEATURE_PHASE_264"],
+  "phase-286": ["NEXT_PUBLIC_FEATURE_PHASE_286", "FEATURE_PHASE_286"],
+  "phase-287": ["NEXT_PUBLIC_FEATURE_PHASE_287", "FEATURE_PHASE_287"],
+  "phase-288": ["NEXT_PUBLIC_FEATURE_PHASE_288", "FEATURE_PHASE_288"],
+  "phase-289": ["NEXT_PUBLIC_FEATURE_PHASE_289", "FEATURE_PHASE_289"],
+  "phase-224": ["NEXT_PUBLIC_FEATURE_PHASE_224", "FEATURE_PHASE_224"],
+  "phase-225": ["NEXT_PUBLIC_FEATURE_PHASE_225", "FEATURE_PHASE_225"],
+  "phase-228": ["NEXT_PUBLIC_FEATURE_PHASE_228", "FEATURE_PHASE_228"],
+  "phase-251": ["NEXT_PUBLIC_FEATURE_PHASE_251", "FEATURE_PHASE_251"],
+  "phase-252": ["NEXT_PUBLIC_FEATURE_PHASE_252", "FEATURE_PHASE_252"],
+  "phase-248": ["NEXT_PUBLIC_FEATURE_PHASE_248", "FEATURE_PHASE_248"],
+  "phase-250": ["NEXT_PUBLIC_FEATURE_PHASE_250", "FEATURE_PHASE_250"],
+  "phase-249": ["NEXT_PUBLIC_FEATURE_PHASE_249", "FEATURE_PHASE_249"],
+  "phase-253": ["NEXT_PUBLIC_FEATURE_PHASE_253", "FEATURE_PHASE_253"],
+  "phase-254": ["NEXT_PUBLIC_FEATURE_PHASE_254", "FEATURE_PHASE_254"],
+  "phase-257": ["NEXT_PUBLIC_FEATURE_PHASE_257", "FEATURE_PHASE_257"],
+  "phase-258": ["NEXT_PUBLIC_FEATURE_PHASE_258", "FEATURE_PHASE_258"],
+  "phase-259": ["NEXT_PUBLIC_FEATURE_PHASE_259", "FEATURE_PHASE_259"],
+  "phase-246": ["NEXT_PUBLIC_FEATURE_PHASE_246", "FEATURE_PHASE_246"],
+  "phase-247": ["NEXT_PUBLIC_FEATURE_PHASE_247", "FEATURE_PHASE_247"],
+  "phase-244": ["NEXT_PUBLIC_FEATURE_PHASE_244", "FEATURE_PHASE_244"],
+  "phase-245": ["NEXT_PUBLIC_FEATURE_PHASE_245", "FEATURE_PHASE_245"],
+  "phase-226": ["NEXT_PUBLIC_FEATURE_PHASE_226", "FEATURE_PHASE_226"],
+  "phase-232": ["NEXT_PUBLIC_FEATURE_PHASE_232", "FEATURE_PHASE_232"],
+  "phase-233": ["NEXT_PUBLIC_FEATURE_PHASE_233", "FEATURE_PHASE_233"],
+  "phase-234": ["NEXT_PUBLIC_FEATURE_PHASE_234", "FEATURE_PHASE_234"],
+  "phase-235": ["NEXT_PUBLIC_FEATURE_PHASE_235", "FEATURE_PHASE_235"],
+  "phase-236": ["NEXT_PUBLIC_FEATURE_PHASE_236", "FEATURE_PHASE_236"],
+  "phase-240": ["NEXT_PUBLIC_FEATURE_PHASE_240", "FEATURE_PHASE_240"],
+  "phase-241": ["NEXT_PUBLIC_FEATURE_PHASE_241", "FEATURE_PHASE_241"],
+  "phase-242": ["NEXT_PUBLIC_FEATURE_PHASE_242", "FEATURE_PHASE_242"],
+  "phase-243": ["NEXT_PUBLIC_FEATURE_PHASE_243", "FEATURE_PHASE_243"],
+  "phase-227": ["NEXT_PUBLIC_FEATURE_PHASE_227", "FEATURE_PHASE_227"],
 };
 
 /** Canonical ordered list of all feature flags (fixes prior missing phase-134/135 & duplicate phase-128). */
@@ -403,6 +542,48 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-180",
   "phase-181",
   "phase-182",
+  "phase-280",
+  "phase-281",
+  "phase-282",
+  "phase-265",
+  "phase-266",
+  "phase-267",
+  "phase-268",
+  "phase-262",
+  "phase-263",
+  "phase-264",
+  "phase-286",
+  "phase-287",
+  "phase-288",
+  "phase-289",
+  "phase-224",
+  "phase-225",
+  "phase-228",
+  "phase-251",
+  "phase-252",
+  "phase-248",
+  "phase-250",
+  "phase-249",
+  "phase-253",
+  "phase-254",
+  "phase-257",
+  "phase-258",
+  "phase-259",
+  "phase-246",
+  "phase-247",
+  "phase-244",
+  "phase-245",
+  "phase-226",
+  "phase-232",
+  "phase-233",
+  "phase-234",
+  "phase-235",
+  "phase-236",
+  "phase-240",
+  "phase-241",
+  "phase-242",
+  "phase-243",
+  "phase-227",
 ] as const;
 
 function isTruthy(v: string | undefined): boolean {
@@ -531,6 +712,14 @@ export function getEnabledFeatureFlags(): PhaseFeatureFlag[] {
     "phase-180",
     "phase-181",
     "phase-182",
+    "phase-280",
+    "phase-281",
+    "phase-282",
+    "phase-265",
+    "phase-266",
+    "phase-267",
+    "phase-268",
+    "phase-227",
   ];
 
   // Filtering is evaluated at call time, allowing runtime test overrides.
@@ -634,6 +823,11 @@ function envFlagState(flag: PhaseFeatureFlag): {
     "phase-180": process.env.NEXT_PUBLIC_FEATURE_PHASE_180,
     "phase-181": process.env.NEXT_PUBLIC_FEATURE_PHASE_181,
     "phase-182": process.env.NEXT_PUBLIC_FEATURE_PHASE_182,
+    "phase-265": process.env.NEXT_PUBLIC_FEATURE_PHASE_265,
+    "phase-266": process.env.NEXT_PUBLIC_FEATURE_PHASE_266,
+    "phase-267": process.env.NEXT_PUBLIC_FEATURE_PHASE_267,
+    "phase-268": process.env.NEXT_PUBLIC_FEATURE_PHASE_268,
+    "phase-227": process.env.NEXT_PUBLIC_FEATURE_PHASE_227,
   }
   const keys = FLAG_ENV_MAP[flag] ?? [
     `NEXT_PUBLIC_FEATURE_${flag.replace(/-/g, "_").toUpperCase()}`,
@@ -1167,6 +1361,17 @@ export function isFunnelRetentionEnabled(wallet?: string): boolean {
 
 export function phase177RollbackNote(): string {
   return flagRollbackNote("phase-177");
+}
+
+/**
+ * Issue #654 / phase-227: Backup and disaster recovery: off-box shipping and scheduled snapshots.
+ */
+export function isPhase227Enabled(): boolean {
+  return isFeatureEnabled("phase-227");
+}
+
+export function phase227RollbackNote(): string {
+  return flagRollbackNote("phase-227");
 }
 
 

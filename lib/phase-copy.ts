@@ -49,6 +49,12 @@ export type ChamberLogsCopy = {
   classicTrustlineConfirmed: string
   classicTrustlineRejected: string
   classicTrustlineAccountMissing: string
+  /** Friendbot bootstrap: request initiated — phase-281. */
+  friendbotFundingInitiated: string
+  /** Friendbot bootstrap: popup fallback message. */
+  friendbotFundingPopup: string
+  /** Friendbot bootstrap: mainnet refusal message. */
+  friendbotMainnetRefusal: string
 }
 
 export type ArtifactLabelsCopy = {
@@ -162,6 +168,8 @@ export type ForgeExperimentVariantCopy = {
   /** `{amount}` = formatted variant price. */
   paymentGateExplainer: string
   paymentGateHint: string
+  chamberBanner: string
+  chamberCta: string
 }
 
 export type ForgeExperimentCopy = {
@@ -301,6 +309,12 @@ export type IntegrationCopy = {
 export const phaseCopy: Record<
   AppLang,
   {
+    worldExport: Record<
+      "disabled" | "invalidCollection" | "notFound" | "invalidFormat" | "invalidCursor" | "tooLarge" | "worldId" | "worldPrompt" | "narratorTone" | "createdAt" | "narratives" | "artifact" | "loreInput" | "narrative" | "generated",
+      string
+    >
+    profileCompleteness: Record<"progressHint" | "staleProfile" | "invalidAvatar", string>
+    toastQueue: Record<"biometricGateClosed", string>
     integrations: IntegrationCopy
     /** Spike 574 (phase-182): classic PHASELQ/XLM pool + Soroswap surface. */
     liquidityPools: Record<
@@ -373,6 +387,8 @@ export const phaseCopy: Record<
       cancelListing: string
       listingLoadError: string
       transferWasmHint: string
+      /** Wallet history timeline (#650, phase-226). */
+      wallet_history: Record<"historyTitle" | "historyCached" | "historyRefresh" | "historyLoading" | "historyEmpty" | "historyUnavailable" | "historyLoadOlder" | "historySent" | "historyReceived" | "historyTrade" | "historyTrustline" | "historyAccount" | "historySettlement" | "historyForge" | "historyTx" | "historyTxFailed", string>
       /** Bóveda PHASE: lista por RPC (owner_of), sin indexador de terceros. */
       vaultRpcTitle: string
       vaultRpcBlurb: string
@@ -404,6 +420,37 @@ export const phaseCopy: Record<
       cancel: string
       clear: string
       seal: string
+    }
+    studioMetadata: {
+      panelTitle: string
+      nameLabel: string
+      descriptionLabel: string
+      imageLabel: string
+      externalUrlLabel: string
+      collectionIdLabel: string
+      attributesLabel: string
+      addAttribute: string
+      traitTypePlaceholder: string
+      traitValuePlaceholder: string
+      previewTitle: string
+      previewToggle: string
+      saveDraft: string
+      commitMetadata: string
+      draftSaved: string
+      committed: string
+      staleConflict: string
+      validationFailed: string
+      versionLabel: string
+    }
+    bountyClaim: {
+      unauthorized: string
+      walletMismatch: string
+      snapshotMissing: string
+      staleSnapshot: string
+      notEligible: string
+      alreadyClaimed: string
+      versionConflict: string
+      claimSuccess: string
     }
     studioEditor: {
       tools: string
@@ -585,6 +632,7 @@ export const phaseCopy: Record<
         /** Índice 0 vacío; 1..13 = PhaseError on-chain (ver contracts/phase-protocol). */
         phaseHostContractErrors: readonly string[]
         phaseHostContractUnknown: string
+        forgeQuotaExceeded: string
       }
       placeholders: {
         collectionName: string
@@ -811,6 +859,7 @@ export const phaseCopy: Record<
       /** Índice 0 vacío; 1..13 = PhaseError on-chain. */
       phaseHostContractErrors: readonly string[]
       phaseHostContractUnknown: string
+        forgeQuotaExceeded: string
       logs: ChamberLogsCopy
       artifact: ArtifactLabelsCopy
     }
@@ -825,9 +874,80 @@ export const phaseCopy: Record<
     ledgerClearSigning: Record<"title" | "description" | "targetContract" | "hostFunction" | "verificationCode" | "matchCodePrompt" | "acknowledgePrompt" | "approveButton" | "cancelButton" | "blindSigningDisabled" | "gate13RiskAlert", string>
     featureFlagOps: Record<"title" | "killSwitchActive" | "rolloutLabel" | "drillPassed" | "versionConflict", string>
     dependencyCadence: Record<"title" | "sdkAligned" | "skewDetected" | "bytecodeGateBlocked", string>
+    searchAnalytics: Record<"zeroResultsTitle" | "zeroResultsHint" | "didYouMean" | "clickthroughLabel" | "zeroResultRateLabel" | "typoSuccessLabel", string>
+    loreVersioning: Record<"historyTitle" | "versionLabel" | "rollbackAction" | "rolledBackFrom" | "conflictError" | "authorProofLabel", string>
+    gasEstimatePreview: Record<
+      | "title"
+      | "estimatedFeeLabel"
+      | "maxBoundLabel"
+      | "baseFeeLabel"
+      | "resourceFeeLabel"
+      | "updatedAtLabel"
+      | "staleBadge"
+      | "refreshAction"
+      | "simulatingLabel"
+      | "fallbackNotice"
+      | "disclaimer",
+      string
+    >
+    referralQuest: Record<
+      | "title"
+      | "subtitle"
+      | "issueCodeAction"
+      | "enrollAction"
+      | "codeLabel"
+      | "selfReferralError"
+      | "alreadyEnrolledError"
+      | "codeUsedError"
+      | "capReachedError"
+      | "versionConflictError"
+      | "authRequiredError"
+      | "enrolledSuccess",
+      string
+    >
+    watchlist: Record<
+      | "title"
+      | "emptyState"
+      | "addAction"
+      | "removeAction"
+      | "targetPriceLabel"
+      | "dropPctLabel"
+      | "armedStatus"
+      | "alertedStatus"
+      | "alertTitle"
+      | "alertBody"
+      | "conflictError"
+      | "authRequiredError",
+      string
+    >
   }
 > = {
   en: {
+    worldExport: {
+      disabled: "World export is disabled.",
+      invalidCollection: "collection_id must be a positive integer.",
+      notFound: "World not found.",
+      invalidFormat: "format must be 'json', 'markdown', or 'ndjson'.",
+      invalidCursor: "cursor must be a non-negative integer.",
+      tooLarge: "An individual narrative is too large to export in a bounded page.",
+      worldId: "World ID",
+      worldPrompt: "World Prompt",
+      narratorTone: "Narrator Tone",
+      createdAt: "Created",
+      narratives: "Narratives",
+      artifact: "Artifact",
+      loreInput: "Lore Input",
+      narrative: "Narrative",
+      generated: "Generated",
+    },
+    profileCompleteness: {
+      progressHint: "Profile completeness: {score}%",
+      staleProfile: "This profile changed elsewhere. Refresh and retry.",
+      invalidAvatar: "Avatar must be a supported image under 5 MB.",
+    },
+    toastQueue: {
+      biometricGateClosed: "[ ERROR: BIOMETRIC_TRUST_GATE_CLOSED ]",
+    },
     liquidityPools: {
       title: "Liquidity pools",
       subtitle: "Provide PHASELQ and XLM, or swap between them through the classic pool.",
@@ -943,6 +1063,24 @@ export const phaseCopy: Record<
       listingLoadError: "Could not load listings.",
       transferWasmHint:
         "If simulation fails, redeploy the PHASE WASM with transfer_phase_nft and update CONTRACT_ID.",
+      wallet_history: {
+        historyTitle: "[ HISTORY // HORIZON ]",
+        historyCached: "cached",
+        historyRefresh: "refresh",
+        historyLoading: "Loading…",
+        historyEmpty: "No activity yet.",
+        historyUnavailable: "History unavailable",
+        historyLoadOlder: "load older",
+        historySent: "Sent",
+        historyReceived: "Received",
+        historyTrade: "Trade",
+        historyTrustline: "Trustline",
+        historyAccount: "Account",
+        historySettlement: "Settlement",
+        historyForge: "Forge invoice",
+        historyTx: "Transaction",
+        historyTxFailed: "Failed transaction",
+      },
       vaultRpcTitle: "[ PHASE_VAULT // SOROBAN_RPC ]",
       vaultRpcBlurb:
         "Your PHASE utility NFTs listed by this app via Soroban simulation (total_supply + owner_of). No third-party indexer required for this view.",
@@ -973,6 +1111,37 @@ export const phaseCopy: Record<
       cancel: "Cancel",
       clear: "Clear",
       seal: "Seal",
+    },
+    studioMetadata: {
+      panelTitle: "Artifact Metadata",
+      nameLabel: "Name",
+      descriptionLabel: "Description",
+      imageLabel: "Image URI (https:// or ipfs://)",
+      externalUrlLabel: "External URL (https://)",
+      collectionIdLabel: "Collection ID (optional)",
+      attributesLabel: "Attributes",
+      addAttribute: "Add attribute",
+      traitTypePlaceholder: "Trait type",
+      traitValuePlaceholder: "Value",
+      previewTitle: "Metadata Preview (SEP-50)",
+      previewToggle: "Preview JSON",
+      saveDraft: "Save Draft",
+      commitMetadata: "Commit Metadata",
+      draftSaved: "Draft saved",
+      committed: "Metadata committed",
+      staleConflict: "Draft is stale (409). Reload latest version before saving.",
+      validationFailed: "Metadata schema validation failed",
+      versionLabel: "Version",
+    },
+    bountyClaim: {
+      unauthorized: "Signed wallet session is required to claim a bounty.",
+      walletMismatch: "Claim wallet does not match the signed session wallet.",
+      snapshotMissing: "No active quest snapshot found for this wallet.",
+      staleSnapshot: "Quest snapshot is stale or tampered. Refresh quest progress and try again.",
+      notEligible: "Quest eligibility requirements are not met in the current snapshot.",
+      alreadyClaimed: "Bounty reward has already been claimed for this wallet.",
+      versionConflict: "Concurrent claim conflict. Please retry.",
+      claimSuccess: "Bounty reward claimed successfully.",
     },
     studioEditor: {
       tools: "Tools",
@@ -1153,6 +1322,7 @@ export const phaseCopy: Record<
           "[ PROTOCOL_HALTED: ERROR_IN_FUSION_CHAMBER ] — Check PHASELQ balance, contract IDs, IPFS config, and the browser console for the underlying error.",
         phaseHostContractErrors: PHASE_HOST_CONTRACT_ERRORS_EN,
         phaseHostContractUnknown: PHASE_HOST_CONTRACT_UNKNOWN_EN,
+        forgeQuotaExceeded: "Daily Forge quota reached for this wallet tier. Please wait for the daily reset at 00:00 UTC or upgrade your tier.",
       },
       placeholders: {
         collectionName: "Crypto-Art 2026",
@@ -1345,6 +1515,7 @@ export const phaseCopy: Record<
       paymentGateExplainer: "Pay {amount} PHASELQ to the Forge Agent — your artifact is generated and minted on the Stellar ledger automatically.",
       phaseHostContractErrors: PHASE_HOST_CONTRACT_ERRORS_EN,
       phaseHostContractUnknown: PHASE_HOST_CONTRACT_UNKNOWN_EN,
+        forgeQuotaExceeded: "Daily Forge quota reached for this wallet tier. Please wait for the daily reset at 00:00 UTC or upgrade your tier.",
       logs: {
         chamberOnline: "Chamber online — waiting for wallet…",
         walletRequest: "Connecting wallet…",
@@ -1385,6 +1556,9 @@ export const phaseCopy: Record<
         classicTrustlineConfirmed: "Trustline active — classic asset ready",
         classicTrustlineRejected: "Trustline signature denied",
         classicTrustlineAccountMissing: "Account not found — add testnet XLM first",
+        friendbotFundingInitiated: "Requesting testnet XLM from Friendbot…",
+        friendbotFundingPopup: "Friendbot opening in popup — check for blocked popups",
+        friendbotMainnetRefusal: "Friendbot bootstrap unavailable on mainnet",
       },
       artifact: {
         registeredDefault: "PHASE utility artifact",
@@ -1526,16 +1700,22 @@ export const phaseCopy: Record<
           label: "Standard",
           paymentGateExplainer: "Pay {amount} PHASELQ to the Forge Agent — your artifact is generated and minted on the Stellar ledger automatically.",
           paymentGateHint: "One payment settles on-chain; your artifact is minted automatically.",
+          chamberBanner: "Settle on-chain in the Chamber to mint your artifact.",
+          chamberCta: "Execute Settlement",
         },
         price_cut: {
           label: "Launch price",
           paymentGateExplainer: "Launch price: pay {amount} PHASELQ to the Forge Agent — same on-chain settlement, same automatic mint.",
           paymentGateHint: "Launch pricing — one on-chain payment, artifact minted automatically.",
+          chamberBanner: "Launch pricing active — single on-chain settlement, instant mint.",
+          chamberCta: "Settle at Launch Price",
         },
         copy_urgent: {
           label: "Limited",
           paymentGateExplainer: "Secure your artifact for {amount} PHASELQ — settlement is on-chain and minting is automatic.",
           paymentGateHint: "Limited window — pay once on-chain and the Forge mints your artifact automatically.",
+          chamberBanner: "Limited window — lock your on-chain Chamber settlement now.",
+          chamberCta: "Lock Settlement Now",
         },
       },
     },
@@ -1580,10 +1760,92 @@ export const phaseCopy: Record<
       skewDetected: "Dependency or WASM target skew detected ({code})",
       bytecodeGateBlocked: "WASM bytecode changed without a verified staging dry-run",
     },
+    searchAnalytics: {
+      zeroResultsTitle: "No matching results found",
+      zeroResultsHint: "Try fewer keywords or check spelling.",
+      didYouMean: "Did you mean \"{suggestion}\"?",
+      clickthroughLabel: "Clickthrough rate",
+      zeroResultRateLabel: "Zero-result rate",
+      typoSuccessLabel: "Typo recovery rate",
+    },
+    loreVersioning: {
+      historyTitle: "Narrative Version History",
+      versionLabel: "Version {version}",
+      rollbackAction: "Restore as new version",
+      rolledBackFrom: "Restored from v{version}",
+      conflictError: "Edit conflict: narrative was updated by another collaborator (409).",
+      authorProofLabel: "Author proof",
+    },
+    gasEstimatePreview: {
+      title: "Estimated Network Fee",
+      estimatedFeeLabel: "Estimated fee",
+      maxBoundLabel: "Bounded max",
+      baseFeeLabel: "Base fee",
+      resourceFeeLabel: "Soroban resource fee",
+      updatedAtLabel: "Simulated {seconds}s ago",
+      staleBadge: "Estimate may be stale — refresh before signing",
+      refreshAction: "Re-simulate",
+      simulatingLabel: "Simulating transaction…",
+      fallbackNotice: "Live simulation unavailable ({reason}). Showing conservative bounded fallback.",
+      disclaimer: "Estimate only — not a guarantee. Final network fee is determined by the Stellar ledger at execution.",
+    },
+    referralQuest: {
+      title: "Referral Quest",
+      subtitle: "Share a one-use signed referral code. Attribution is bound to your SEP-10 session wallet.",
+      issueCodeAction: "Generate one-use code",
+      enrollAction: "Claim referral",
+      codeLabel: "Referral code",
+      selfReferralError: "Self-referral is not allowed.",
+      alreadyEnrolledError: "This wallet has already enrolled in a referral quest.",
+      codeUsedError: "This one-use referral code has already been redeemed.",
+      capReachedError: "Referrer has reached the maximum reward cap.",
+      versionConflictError: "Referral state changed concurrently (409). Please retry.",
+      authRequiredError: "Connect and verify your SEP-10 wallet session first.",
+      enrolledSuccess: "Referral attributed and bonus recorded.",
+    },
+    watchlist: {
+      title: "Watchlist & Price-Drop Alerts",
+      emptyState: "No watched artifacts yet. Add a token to get notified when its price drops.",
+      addAction: "Watch item",
+      removeAction: "Remove",
+      targetPriceLabel: "Target price (PHASELQ)",
+      dropPctLabel: "Drop threshold (%)",
+      armedStatus: "Armed",
+      alertedStatus: "Alerted",
+      alertTitle: "Price drop alert for {token}",
+      alertBody: "Price dropped from {previousPrice} to {newPrice} PHASELQ (-{dropPct}%).",
+      conflictError: "Watchlist changed concurrently (409). Please refresh and retry.",
+      authRequiredError: "Connect and verify your SEP-10 wallet session to manage your watchlist.",
+    },
   },
 
 
   es: {
+    worldExport: {
+      disabled: "La exportación de mundos está deshabilitada.",
+      invalidCollection: "collection_id debe ser un entero positivo.",
+      notFound: "No se encontró el mundo.",
+      invalidFormat: "format debe ser 'json', 'markdown' o 'ndjson'.",
+      invalidCursor: "cursor debe ser un entero no negativo.",
+      tooLarge: "Una narrativa supera el tamaño máximo de una página de exportación.",
+      worldId: "ID del mundo",
+      worldPrompt: "Descripción del mundo",
+      narratorTone: "Tono del narrador",
+      createdAt: "Creado",
+      narratives: "Narrativas",
+      artifact: "Artefacto",
+      loreInput: "Entrada de lore",
+      narrative: "Narrativa",
+      generated: "Generado",
+    },
+    profileCompleteness: {
+      progressHint: "Perfil completado: {score}%",
+      staleProfile: "Este perfil cambió en otro lugar. Actualizá y reintentá.",
+      invalidAvatar: "El avatar debe ser una imagen compatible de menos de 5 MB.",
+    },
+    toastQueue: {
+      biometricGateClosed: "[ ERROR: BIOMETRIC_TRUST_GATE_CLOSED ]",
+    },
     liquidityPools: {
       title: "Pools de liquidez",
       subtitle: "Aportá PHASELQ y XLM, o cambiá entre ambos por el pool clásico.",
@@ -1699,6 +1961,24 @@ export const phaseCopy: Record<
       listingLoadError: "No se pudieron cargar los anuncios.",
       transferWasmHint:
         "Si falla la simulación, redesplegá el WASM PHASE con transfer_phase_nft y actualizá CONTRACT_ID.",
+      wallet_history: {
+        historyTitle: "[ HISTORIAL // HORIZON ]",
+        historyCached: "en caché",
+        historyRefresh: "actualizar",
+        historyLoading: "Cargando…",
+        historyEmpty: "Aún no hay actividad.",
+        historyUnavailable: "Historial no disponible",
+        historyLoadOlder: "cargar anteriores",
+        historySent: "Enviado",
+        historyReceived: "Recibido",
+        historyTrade: "Intercambio",
+        historyTrustline: "Línea de confianza",
+        historyAccount: "Cuenta",
+        historySettlement: "Liquidación",
+        historyForge: "Factura de forja",
+        historyTx: "Transacción",
+        historyTxFailed: "Transacción fallida",
+      },
       vaultRpcTitle: "[ BÓVEDA_PHASE // RPC_SOROBAN ]",
       vaultRpcBlurb:
         "Tus NFT de utilidad PHASE listados por esta app vía simulación Soroban (total_supply + owner_of). Esta vista no depende de un indexador de terceros.",
@@ -1729,6 +2009,37 @@ export const phaseCopy: Record<
       cancel: "Cancelar",
       clear: "Borrar",
       seal: "Sellar",
+    },
+    studioMetadata: {
+      panelTitle: "Metadatos del artefacto",
+      nameLabel: "Nombre",
+      descriptionLabel: "Descripción",
+      imageLabel: "URI de imagen (https:// o ipfs://)",
+      externalUrlLabel: "URL externa (https://)",
+      collectionIdLabel: "ID de colección (opcional)",
+      attributesLabel: "Atributos",
+      addAttribute: "Agregar atributo",
+      traitTypePlaceholder: "Tipo de rasgo",
+      traitValuePlaceholder: "Valor",
+      previewTitle: "Vista previa de metadatos (SEP-50)",
+      previewToggle: "Previsualizar JSON",
+      saveDraft: "Guardar borrador",
+      commitMetadata: "Confirmar metadatos",
+      draftSaved: "Borrador guardado",
+      committed: "Metadatos confirmados",
+      staleConflict: "Borrador desactualizado (409). Recargá la última versión antes de guardar.",
+      validationFailed: "Falló la validación del esquema de metadatos",
+      versionLabel: "Versión",
+    },
+    bountyClaim: {
+      unauthorized: "Se requiere una sesión de wallet firmada para reclamar la recompensa.",
+      walletMismatch: "La wallet del reclamo no coincide con la sesión firmada.",
+      snapshotMissing: "No se encontró un snapshot de misiones activo para esta wallet.",
+      staleSnapshot: "El snapshot de misiones está desactualizado o alterado. Actualizá el progreso e intentá de nuevo.",
+      notEligible: "Los requisitos de la misión no se cumplen en el snapshot actual.",
+      alreadyClaimed: "La recompensa de esta misión ya fue reclamada por esta wallet.",
+      versionConflict: "Conflicto de reclamo concurrente. Por favor intentá de nuevo.",
+      claimSuccess: "Recompensa de misión reclamada con éxito.",
     },
     studioEditor: {
       tools: "Herramientas",
@@ -1910,6 +2221,7 @@ export const phaseCopy: Record<
           "[ PROTOCOL_HALTED: ERROR_IN_FUSION_CHAMBER ] — Revisá saldo PHASELQ, IDs de contrato, configuración IPFS y la consola del navegador para el error concreto.",
         phaseHostContractErrors: PHASE_HOST_CONTRACT_ERRORS_ES,
         phaseHostContractUnknown: PHASE_HOST_CONTRACT_UNKNOWN_ES,
+        forgeQuotaExceeded: "Cuota diaria de Forja alcanzada para el nivel de esta billetera. Espere el reinicio diario a las 00:00 UTC o mejore su nivel.",
       },
       placeholders: {
         collectionName: "Cripto-Arte 2026",
@@ -2103,6 +2415,7 @@ export const phaseCopy: Record<
       paymentGateExplainer: "Pagá {amount} PHASELQ al Forge Agent — tu artefacto se genera y se mintea en el ledger de Stellar automáticamente.",
       phaseHostContractErrors: PHASE_HOST_CONTRACT_ERRORS_ES,
       phaseHostContractUnknown: PHASE_HOST_CONTRACT_UNKNOWN_ES,
+        forgeQuotaExceeded: "Cuota diaria de Forja alcanzada para el nivel de esta billetera. Espere el reinicio diario a las 00:00 UTC o mejore su nivel.",
       logs: {
         chamberOnline: "Cámara en línea — esperando wallet…",
         walletRequest: "Conectando wallet…",
@@ -2143,6 +2456,9 @@ export const phaseCopy: Record<
         classicTrustlineConfirmed: "Trustline activa — asset clásico listo",
         classicTrustlineRejected: "Firma de trustline denegada",
         classicTrustlineAccountMissing: "Cuenta no encontrada — agregá XLM testnet primero",
+        friendbotFundingInitiated: "Solicitando XLM de testnet a Friendbot…",
+        friendbotFundingPopup: "Friendbot abriéndose en popup — revisá ventanas bloqueadas",
+        friendbotMainnetRefusal: "Bootstrap Friendbot no disponible en mainnet",
       },
       artifact: {
         registeredDefault: "Artefacto de utilidad PHASE",
@@ -2284,16 +2600,22 @@ export const phaseCopy: Record<
           label: "Estándar",
           paymentGateExplainer: "Pagá {amount} PHASELQ al Forge Agent — tu artefacto se genera y se mintea en el ledger de Stellar automáticamente.",
           paymentGateHint: "Un pago se liquida on-chain; tu artefacto se mintea automáticamente.",
+          chamberBanner: "Liquidá on-chain en la Cámara para mintear tu artefacto.",
+          chamberCta: "Ejecutar Liquidación",
         },
         price_cut: {
           label: "Precio de lanzamiento",
           paymentGateExplainer: "Precio de lanzamiento: pagá {amount} PHASELQ al Forge Agent — misma liquidación on-chain, mismo mint automático.",
           paymentGateHint: "Precio de lanzamiento — un pago on-chain y el Forge mintea tu artefacto automáticamente.",
+          chamberBanner: "Precio de lanzamiento activo — una liquidación on-chain, mint instantáneo.",
+          chamberCta: "Liquidar a Precio de Lanzamiento",
         },
         copy_urgent: {
           label: "Por tiempo limitado",
           paymentGateExplainer: "Asegurá tu artefacto por {amount} PHASELQ — la liquidación es on-chain y el mint es automático.",
           paymentGateHint: "Ventana limitada — pagá una vez on-chain y el Forge mintea tu artefacto automáticamente.",
+          chamberBanner: "Ventana limitada — asegurá tu liquidación on-chain en la Cámara ahora.",
+          chamberCta: "Asegurar Liquidación",
         },
       },
     },
@@ -2338,6 +2660,63 @@ export const phaseCopy: Record<
       skewDetected: "Desfase de dependencias o target WASM detectado ({code})",
       bytecodeGateBlocked: "El bytecode WASM cambió sin una prueba previa en staging verificada",
     },
+    searchAnalytics: {
+      zeroResultsTitle: "No se encontraron resultados",
+      zeroResultsHint: "Probá con menos palabras o revisá la ortografía.",
+      didYouMean: "¿Quisiste decir \"{suggestion}\"?",
+      clickthroughLabel: "Tasa de clics",
+      zeroResultRateLabel: "Tasa sin resultados",
+      typoSuccessLabel: "Tasa de corrección tipográfica",
+    },
+    loreVersioning: {
+      historyTitle: "Historial de Versiones Narrativas",
+      versionLabel: "Versión {version}",
+      rollbackAction: "Restaurar como nueva versión",
+      rolledBackFrom: "Restaurada desde v{version}",
+      conflictError: "Conflicto de edición: la narrativa fue actualizada por otro colaborador (409).",
+      authorProofLabel: "Prueba de autoría",
+    },
+    gasEstimatePreview: {
+      title: "Tarifa de Red Estimada",
+      estimatedFeeLabel: "Tarifa estimada",
+      maxBoundLabel: "Máximo acotado",
+      baseFeeLabel: "Tarifa base",
+      resourceFeeLabel: "Tarifa de recursos Soroban",
+      updatedAtLabel: "Simulado hace {seconds}s",
+      staleBadge: "La estimación puede estar desactualizada — volvé a simular antes de firmar",
+      refreshAction: "Re-simular",
+      simulatingLabel: "Simulando transacción…",
+      fallbackNotice: "Simulación en vivo no disponible ({reason}). Mostrando estimación acotada de respaldo.",
+      disclaimer: "Solo una estimación — no es una garantía. La tarifa final la determina el ledger de Stellar al ejecutarse.",
+    },
+    referralQuest: {
+      title: "Misión de Referidos",
+      subtitle: "Compartí un código de un solo uso. La atribución queda vinculada a tu sesión SEP-10.",
+      issueCodeAction: "Generar código de un solo uso",
+      enrollAction: "Reclamar referido",
+      codeLabel: "Código de referido",
+      selfReferralError: "No podés referirte a vos mismo.",
+      alreadyEnrolledError: "Esta billetera ya participó en una misión de referidos.",
+      codeUsedError: "Este código de referido de un solo uso ya fue utilizado.",
+      capReachedError: "El referente alcanzó el límite máximo de recompensas.",
+      versionConflictError: "El estado de referidos cambió concurrentemente (409). Intentá de nuevo.",
+      authRequiredError: "Conectá y verificá tu sesión de billetera SEP-10 primero.",
+      enrolledSuccess: "Referido atribuido y bonificación registrada.",
+    },
+    watchlist: {
+      title: "Lista de Seguimiento y Alertas de Precio",
+      emptyState: "Todavía no seguís ningún artefacto. Agregá un token para recibir alertas de baja.",
+      addAction: "Seguir ítem",
+      removeAction: "Quitar",
+      targetPriceLabel: "Precio objetivo (PHASELQ)",
+      dropPctLabel: "Umbral de baja (%)",
+      armedStatus: "Activa",
+      alertedStatus: "Alertada",
+      alertTitle: "Alerta de baja de precio para {token}",
+      alertBody: "El precio bajó de {previousPrice} a {newPrice} PHASELQ (-{dropPct}%).",
+      conflictError: "La lista cambió concurrentemente (409). Actualizá e intentá de nuevo.",
+      authRequiredError: "Conectá y verificá tu sesión SEP-10 para gestionar tu lista.",
+    },
   },
 
 
@@ -2369,4 +2748,10 @@ export function pickForgeExperimentCopy(lang: unknown, copyKey: string): ForgeEx
   const registry = pickCopy(lang).forgeExperiment.variants
   const key = copyKey.trim() || "control"
   return registry[key] ?? registry.control!
+}
+
+export function forgeQuotaErrorMessage(locale: "en" | "es" = "en"): string {
+  return locale === "es"
+    ? phaseCopyEs.forge.errors.forgeQuotaExceeded
+    : phaseCopyEn.forge.errors.forgeQuotaExceeded
 }

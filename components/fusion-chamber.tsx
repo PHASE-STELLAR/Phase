@@ -199,18 +199,26 @@ export function FusionChamber() {
   // chamber's actual price is the on-chain collection price (authoritative);
   // only the explainer copy varies here — price variants live in the
   // forge-agent 402 flow where the server resolves and verifies one amount.
-  const [expGateCopy, setExpGateCopy] = useState<{ paymentGateExplainer: string } | null>(null)
+  const [expGateCopy, setExpGateCopy] = useState<{
+    paymentGateExplainer: string
+    chamberBanner?: string
+    chamberCta?: string
+  } | null>(null)
   useEffect(() => {
     if (!isFeatureEnabled("phase-174")) return
     let cancelled = false
-    const params = new URLSearchParams({ lang })
+    const params = new URLSearchParams({ lang, surface: "chamber" })
     if (address) params.set("wallet", address)
     void fetch(`/api/experiments/forge?${params.toString()}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         const explainer = data?.copy?.paymentGateExplainer
         if (!cancelled && typeof explainer === "string" && data?.variantId !== "control") {
-          setExpGateCopy({ paymentGateExplainer: explainer })
+          setExpGateCopy({
+            paymentGateExplainer: explainer,
+            chamberBanner: typeof data?.copy?.chamberBanner === "string" ? data.copy.chamberBanner : undefined,
+            chamberCta: typeof data?.copy?.chamberCta === "string" ? data.copy.chamberCta : undefined,
+          })
         }
       })
       .catch(() => undefined)

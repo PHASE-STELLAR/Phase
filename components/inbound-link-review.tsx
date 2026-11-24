@@ -4,7 +4,7 @@ import { useWallet } from "@/components/wallet-provider"
 import { useLang } from "@/components/lang-context"
 import { pickCopy } from "@/lib/phase-copy"
 import { isFeatureEnabled } from "@/lib/feature-flags"
-import { INTENT_KEY, intentPath, parsePhaseLink, restoreIntent, type PhaseIntent } from "@/lib/deep-links"
+import { INTENT_KEY, buildChamberCollectionHref, canRecipientAuthorizeTransfer, intentPath, parsePhaseLink, restoreIntent, type PhaseIntent } from "@/lib/deep-links"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
 
 export function InboundLinkReview() {
@@ -14,7 +14,7 @@ export function InboundLinkReview() {
   const [intent, setIntent] = useState<PhaseIntent | null>(null)
   const [error, setError] = useState(false)
   const [busy, setBusy] = useState(false)
-  const enabled = isFeatureEnabled("phase-175")
+  const enabled = isFeatureEnabled("phase-248") || isFeatureEnabled("phase-175")
   useEffect(() => {
     if (!enabled) return
     try {
@@ -35,8 +35,15 @@ export function InboundLinkReview() {
     const url = new URL(window.location.href)
     url.searchParams.delete("phase_link")
     if (url.pathname.startsWith("/link/")) {
-      url.pathname = intent?.kind === "collection" ? "/chamber" : intent?.kind === "quest" ? "/forge" : "/dashboard"
-      url.search = intent?.kind === "collection" ? `?collection=${intent.id}` : ""
+      if (intent?.kind === "collection") {
+        const chamberHref = buildChamberCollectionHref(intent)
+        const [pathname, search] = chamberHref.split("?")
+        url.pathname = pathname
+        url.search = search ? `?${search}` : ""
+      } else {
+        url.pathname = intent?.kind === "quest" ? "/forge" : "/dashboard"
+        url.search = ""
+      }
     }
     window.history.replaceState(null, "", url.pathname + url.search)
   }
@@ -60,7 +67,9 @@ export function InboundLinkReview() {
       <SheetTitle>{copy.reviewLink}</SheetTitle>
       <SheetDescription>{copy.reviewLinkHint}</SheetDescription>
       {intent && <dl className="space-y-2 break-all text-sm"><dt>{copy.destination}</dt><dd>{intent.kind === "quest" ? copy.quest : intent.kind === "offer" ? copy.offer : pickCopy(lang).chamber.collectionId} / {intent.id} {intent.offerId}</dd>
-        {intent.recipient && <><dt>{copy.recipient}</dt><dd>{intent.recipient}</dd></>}
+        {intent.recipient && !canRecipientAuthorizeTransfer(intent) && (
+          <><dt>{copy.recipient} (untrusted context)</dt><dd>{intent.recipient}</dd></>
+        )}
         {intent.ref && <><dt>{copy.referral}</dt><dd>{intent.ref}</dd></>}
         <dt>{copy.signingWallet}</dt><dd>{address ?? copy.connect}</dd></dl>}
       {error && <p role="alert">{copy.linkError}</p>}

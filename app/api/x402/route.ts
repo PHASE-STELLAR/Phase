@@ -7,6 +7,7 @@ import {
   tokenContractIdForServer,
 } from "@/lib/phase-protocol"
 import { resolveForgeRequiredAmountStroops } from "@/lib/experiments"
+import { isDecimalAmountParsingEnabled, meetsRequiredStroops } from "@/lib/decimal-amount"
 
 export const dynamic = 'force-dynamic'
 
@@ -52,6 +53,7 @@ function decodeX402Token(raw: string): LocalX402Token | null {
 
 function isSatisfiedPayment(payload: LocalX402Token | null, requiredStroops: string = REQUIRED_AMOUNT): boolean {
   if (!payload) return false
+  if (isDecimalAmountParsingEnabled()) return Boolean(payload.invoice) && meetsRequiredStroops(payload.amount, requiredStroops)
   const amount = Number(payload.amount)
   return Boolean(payload.invoice) && Number.isFinite(amount) && amount >= parseRequiredAmount(requiredStroops)
 }

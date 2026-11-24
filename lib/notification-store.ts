@@ -31,6 +31,8 @@ export type NotificationType =
   | "quest_arc_completed"
   // phase-143 winback reactivation hook
   | "winback_reactivation"
+  // phase-255 watchlist price-drop alert
+  | "watchlist_price_drop"
 
 export type Notification = {
   id: string
@@ -39,12 +41,18 @@ export type Notification = {
   read: boolean
   created_at: number
   data: Record<string, unknown>
+  event_key?: string
 }
 
 type NotificationStore = Record<string, Notification[]>
+type NotificationStoreVersioned = {
+  version: number
+  notifications: Record<string, Notification[]>
+}
 type GatewayAuthRotationStore = Record<string, GatewayAuthRotation>
 
 const MAX_PER_WALLET = 50
+const NOTIFICATION_STORE_VERSION = 1
 // phase-98: profile-level notification preferences.
 // Rollback: unset NEXT_PUBLIC_FEATURE_PHASE_98 / FEATURE_PHASE_98; existing notifications remain readable.
 export type NotificationPreferences = {
@@ -72,6 +80,15 @@ export function isPhase128Enabled(): boolean {
 
 export function phase128RollbackNote(): string {
   return flagRollbackNote("phase-128")
+}
+
+function isPhase284Enabled(): boolean {
+  return isFeatureEnabled("phase-284")
+}
+
+function generateEventKey(type: NotificationType, data: Record<string, unknown>): string {
+  const relevantData = JSON.stringify({ type, ...data })
+  return createHash("sha256").update(relevantData, "utf8").digest("hex").slice(0, 16)
 }
 
 export const GatewayAuthRotationSchema = z.object({
@@ -182,7 +199,7 @@ export async function saveNotificationPreferences(
 ): Promise<NotificationPreferences> {
   // Read the merged defaults inside the lock so two concurrent preference
   // updates cannot both start from the same base and lose one field.
-  return updateStore<NotificationPreferenceStore, NotificationPreferences>(
+  const res = await updateStore<NotificationPreferenceStore, NotificationPreferences>(
     "notificationPreferences",
     (store) => {
       const current = {
@@ -198,6 +215,17 @@ export async function saveNotificationPreferences(
       return next
     },
   )
+
+  if (isAnalyticsWarehouseEnabled(wallet)) {
+    void recordWarehouseEvent({
+      surface: "notifications",
+      stage: "preferences_updated",
+      wallet,
+      metadata: { enabled: preferences.enabled },
+    }).catch(() => {})
+  }
+
+  return res
 }
 
 export async function shouldStoreNotification(wallet: string, type: NotificationType): Promise<boolean> {
@@ -218,6 +246,8 @@ export async function createNotification(
 ): Promise<void> {
   if (!(await shouldStoreNotification(wallet, type))) return
 
+  const eventKey = isPhase284Enabled() ? generateEventKey(type, data) : undefined
+
   const notif: Notification = {
     id: randomUUID(),
     wallet,
@@ -225,10 +255,19 @@ export async function createNotification(
     read: false,
     created_at: Date.now(),
     data,
+    event_key: eventKey,
   }
+
   await updateStore<NotificationStore>("notifications", (store) => {
     const list = store[wallet] ?? []
-    // Prepend newest first; cap at MAX_PER_WALLET
+
+    if (isPhase284Enabled() && eventKey) {
+      const existingIndex = list.findIndex((n) => n.event_key === eventKey)
+      if (existingIndex >= 0) {
+        list.splice(existingIndex, 1)
+      }
+    }
+
     store[wallet] = [notif, ...list].slice(0, MAX_PER_WALLET)
   })
 
@@ -237,7 +276,7 @@ export async function createNotification(
       surface: "notifications",
       stage: "notification_created",
       wallet,
-      metadata: { notificationId: notif.id, type },
+      metadata: { notificationId: notif.id, type, eventKey },
     }).catch(() => {})
   }
 }
@@ -330,6 +369,28 @@ export async function markAllRead(wallet: string): Promise<void> {
 export async function getUnreadCount(wallet: string): Promise<number> {
   const store = await readStore()
   return (store[wallet] ?? []).filter((n) => !n.read).length
+}
+
+export async function getUnreadCountWithDedup(wallet: string): Promise<number> {
+  if (!isPhase284Enabled()) {
+    return getUnreadCount(wallet)
+  }
+
+  const store = await readStore()
+  const notifications = store[wallet] ?? []
+  const seenEventKeys = new Set<string>()
+  let unreadCount = 0
+
+  for (const notif of notifications) {
+    if (notif.read) continue
+    const key = notif.event_key || notif.id
+    if (!seenEventKeys.has(key)) {
+      seenEventKeys.add(key)
+      unreadCount++
+    }
+  }
+
+  return unreadCount
 }
 
 // ── module #53 (phase-53): faucet analytics — claim funnel metrics ─────────

@@ -7,6 +7,7 @@ import { useLang } from "@/components/lang-context"
 import { WalletAvatar } from "./wallet-avatar"
 import { WalletBadge } from "./wallet-badge"
 import { QrCodeDialog } from "./qr-code-dialog"
+import { fillCopy, pickCopy } from "@/lib/phase-copy"
 
 // Social icons (inline SVG)
 function DiscordIcon({ className }: { className?: string }) {
@@ -34,6 +35,9 @@ export type ProfileSocials = {
 
 type ProfileData = ProfileSocials & {
   avatar_token_id?: number
+  avatar_image_url?: string
+  version?: number
+  completeness?: { score: number; completedFields: number; totalFields: number }
 }
 
 function SocialChip({
@@ -929,10 +933,15 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
     try {
       const res = await fetch(`/api/profile?wallet=${encodeURIComponent(address)}`)
       if (!res.ok) return
-      const json = (await res.json()) as { profile: ProfileData | null }
+      const json = (await res.json()) as {
+        profile: ProfileData | null
+        completeness?: ProfileData["completeness"]
+      }
       if (json.profile) {
         setProfile(json.profile)
         setForm(json.profile)
+      } else if (json.completeness) {
+        setProfile({ completeness: json.completeness })
       }
     } catch { /* ignore */ }
   }, [address])
@@ -984,10 +993,12 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
       const res = await fetch("/api/profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: address, ...form }),
+        body: JSON.stringify({ wallet: address, ...form, expected_version: profile.version ?? 0 }),
       })
       if (!res.ok) throw new Error("save failed")
-      setProfile(form)
+      const saved = (await res.json()) as { profile: ProfileData }
+      setProfile(saved.profile)
+      setForm(saved.profile)
       setEditing(false)
       setSaveMsg(t.saved)
       setTimeout(() => setSaveMsg(""), 2500)
@@ -1042,10 +1053,12 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
           telegram: profile.telegram,
           avatar_token_id: tokenId,
           avatar_image_url,
+          expected_version: profile.version ?? 0,
         }),
       })
       if (!res.ok) throw new Error("save failed")
-      setProfile((p) => ({ ...p, avatar_token_id: tokenId ?? undefined, avatar_image_url }))
+      const saved = (await res.json()) as { profile: ProfileData }
+      setProfile(saved.profile)
       setAvatarSelectorOpen(false)
     } catch { /* ignore */ }
     finally { setSavingAvatar(false) }
@@ -1112,6 +1125,11 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
                 [QR]
               </button>
             </div>
+            {profile.completeness && (
+              <p className="font-mono text-[8px] text-violet-500 mt-1">
+                {fillCopy(pickCopy(lang).profileCompleteness.progressHint, { score: profile.completeness.score })}
+              </p>
+            )}
           </div>
         </div>
 

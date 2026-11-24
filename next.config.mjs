@@ -1,12 +1,33 @@
+const phase172Enabled = ["1", "true", "yes", "on"].includes(
+  (process.env.NEXT_PUBLIC_FEATURE_PHASE_172 ?? "").trim().toLowerCase(),
+)
+const phase171Enabled = ["1", "true", "yes", "on"].includes(
+  (process.env.NEXT_PUBLIC_FEATURE_PHASE_171 ?? "").trim().toLowerCase(),
+)
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Spike 608 (phase-175): bonded with next 16.2.2 + react 19.2.0 + @stellar/stellar-sdk ^15.0.1
   transpilePackages: ["@creit.tech/stellar-wallets-kit"],
+  ...(phase172Enabled
+    ? {
+        optimizePackageImports: ["lucide-react", "@radix-ui/react-icons", "recharts", "date-fns"],
+        bundlePagesRouterDependencies: true,
+      }
+    : {}),
   // Rust build trees are committed in this repo; exclude from serverless traces (250 MB limit on Vercel).
   outputFileTracingExcludes: {
     "*": ["./contracts/**/*", "./scripts/**/*"],
   },
   images: {
+    ...(phase171Enabled
+      ? {
+          formats: ["image/avif", "image/webp"],
+          minimumCacheTTL: 86400,
+          deviceSizes: [320, 480, 640, 768, 1024, 1280, 1536, 1920],
+          imageSizes: [16, 32, 48, 64, 96, 128, 256, 384],
+        }
+      : {}),
     remotePatterns: [
       {
         protocol: "https",

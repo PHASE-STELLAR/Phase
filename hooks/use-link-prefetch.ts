@@ -1,5 +1,6 @@
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect } from "react"
+import { isFeatureEnabled } from "@/lib/feature-flags"
 
 interface PrefetchConfig {
   enabled?: boolean
@@ -7,6 +8,18 @@ interface PrefetchConfig {
 }
 
 const prefetchedRoutes = new Set<string>()
+
+export function canPrefetchSameOriginUrl(rawHref: string, origin: string): string | null {
+  try {
+    const url = new URL(rawHref, origin)
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null
+    if (url.origin !== origin) return null
+    if (isFeatureEnabled("phase-248") && url.pathname.startsWith("/link/")) return null
+    return url.pathname + url.search
+  } catch {
+    return null
+  }
+}
 
 export function useLinkPrefetch(config: PrefetchConfig = {}) {
   const { enabled = true, delay = 50 } = config
@@ -33,35 +46,15 @@ export function useLinkPrefetch(config: PrefetchConfig = {}) {
   const setupIntentBasedPrefetch = useCallback(() => {
     if (!enabled) return
 
-    const handleLinkHover = (e: MouseEvent) => {
-      const target = e.target as HTMLElement
-      const link = target.closest("a[href]") as HTMLAnchorElement | null
-      if (link?.href && !link.href.includes("javascript:")) {
-        try {
-          const url = new URL(link.href)
-          if (url.origin === window.location.origin) {
-            prefetchRoute(url.pathname + url.search)
-          }
-        } catch {
-          // Invalid URL
-        }
-      }
+    const maybePrefetchTarget = (target: EventTarget | null) => {
+      const link = (target as HTMLElement | null)?.closest("a[href]") as HTMLAnchorElement | null
+      if (!link?.href) return
+      const path = canPrefetchSameOriginUrl(link.href, window.location.origin)
+      if (path) prefetchRoute(path)
     }
 
-    const handleTouchStart = (e: TouchEvent) => {
-      const target = e.target as HTMLElement
-      const link = target.closest("a[href]") as HTMLAnchorElement | null
-      if (link?.href && !link.href.includes("javascript:")) {
-        try {
-          const url = new URL(link.href)
-          if (url.origin === window.location.origin) {
-            prefetchRoute(url.pathname + url.search)
-          }
-        } catch {
-          // Invalid URL
-        }
-      }
-    }
+    const handleLinkHover = (e: MouseEvent) => maybePrefetchTarget(e.target)
+    const handleTouchStart = (e: TouchEvent) => maybePrefetchTarget(e.target)
 
     document.addEventListener("mouseover", handleLinkHover, { passive: true })
     document.addEventListener("touchstart", handleTouchStart, { passive: true })

@@ -21,7 +21,7 @@
  * reversing; the Parquet/NDJSON helpers stay importable for tests.
  */
 
-import { createHash } from "node:crypto"
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 import { parquetWriteBuffer } from "hyparquet-writer"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 import { computeSha256 } from "@/lib/data-portability"
@@ -49,6 +49,10 @@ export function isWarehouseExportEnabled(): boolean {
   return isFeatureEnabled("phase-180")
 }
 
+export function isWarehouseIntegrationExportEnabled(): boolean {
+  return isFeatureEnabled("phase-253")
+}
+
 // ── phase-176 (spike 610): unified event recording ─────────────────────────
 // Restored after a merge left the callers (faucet, notifications, forge,
 // achievements) importing functions this module no longer exported. The event
@@ -66,14 +70,21 @@ export type WarehouseEventInput = {
   session_id?: string | null
   reason?: string | null
   correlation_id?: string | null
+  correlationId?: string | null
+  event_id?: string | null
+  eventId?: string | null
+  idempotency_key?: string | null
+  idempotencyKey?: string | null
   metadata?: Record<string, unknown>
   now?: number
+  ts?: number
   /** Forward-compatible: event payloads may add fields without a type break. */
   [key: string]: unknown
 }
 
 export function ensureAnalyticsEventTable(): void {
-  getDb().exec(`
+  const db = getDb()
+  db.exec(`
     CREATE TABLE IF NOT EXISTS analytics_events (
       event_id   TEXT PRIMARY KEY,
       surface    TEXT NOT NULL,
@@ -82,25 +93,141 @@ export function ensureAnalyticsEventTable(): void {
       session_id TEXT,
       metadata   TEXT,
       ts         INTEGER NOT NULL
-    )
+    );
+    CREATE TABLE IF NOT EXISTS session_stitches (
+      session_id  TEXT NOT NULL,
+      wallet      TEXT NOT NULL,
+      stitched_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, wallet)
+    );
   `)
-  getDb().exec("CREATE INDEX IF NOT EXISTS idx_analytics_events_surface_ts ON analytics_events (surface, ts)")
-  getDb().exec("CREATE INDEX IF NOT EXISTS idx_analytics_events_wallet_ts ON analytics_events (wallet, ts)")
+  db.exec("CREATE INDEX IF NOT EXISTS idx_analytics_events_surface_ts ON analytics_events (surface, ts)")
+  db.exec("CREATE INDEX IF NOT EXISTS idx_analytics_events_wallet_ts ON analytics_events (wallet, ts)")
+  db.exec("CREATE INDEX IF NOT EXISTS idx_analytics_events_session_ts ON analytics_events (session_id, ts)")
 }
 
 /**
- * Append one event. Metadata is JSON-encoded but never used as a counter label;
- * the closed-label rule applies to security counters, not to this row store.
+ * Associates an anonymous session_id with an authenticated wallet across SEP-10 or wallet login.
+ * Retroactively stitches earlier unauthenticated events for this session.
+ */
+export function stitchSession(sessionId: string, wallet: string, now: number = Date.now()): void {
+  const sId = (sessionId ?? "").trim()
+  const w = (wallet ?? "").trim().toUpperCase()
+  if (!sId || !w) return
+  ensureAnalyticsEventTable()
+  const db = getDb()
+  db.prepare(`
+    INSERT OR IGNORE INTO session_stitches (session_id, wallet, stitched_at)
+    VALUES (?, ?, ?)
+  `).run(sId, w, now)
+
+  // Associate all prior anonymous events for this session with this authenticated wallet
+  db.prepare(`
+    UPDATE analytics_events
+    SET wallet = ?
+    WHERE session_id = ? AND (wallet IS NULL OR wallet = '')
+  `).run(w, sId)
+
+  incSecurityCounter("warehouse_session_stitched")
+}
+
+/**
+ * Sanitizes metadata to prevent PII or credentials from leaking into the analytics store.
+ */
+export function sanitizeEventMetadata(metadata: Record<string, unknown> | undefined): string | null {
+  if (!metadata || typeof metadata !== "object") return null
+  const sanitized: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(metadata)) {
+    // Strip sensitive secret/auth keys
+    const lowerKey = key.toLowerCase()
+    if (lowerKey.includes("secret") || lowerKey.includes("jwt") || lowerKey.includes("token") || lowerKey.includes("seed") || lowerKey.includes("password")) {
+      continue
+    }
+    if (typeof value === "string") {
+      sanitized[key] = sanitizeWarehouseTextClosed(value)
+    } else if (typeof value === "number" || typeof value === "boolean" || value === null) {
+      sanitized[key] = value
+    } else if (Array.isArray(value)) {
+      sanitized[key] = value.slice(0, 20).map((v) => (typeof v === "string" ? sanitizeWarehouseTextClosed(v) : v))
+    } else if (typeof value === "object") {
+      try {
+        sanitized[key] = JSON.parse(JSON.stringify(value).slice(0, 500))
+      } catch {
+        sanitized[key] = "[COMPLEX_OBJECT]"
+      }
+    }
+  }
+  return JSON.stringify(sanitized)
+}
+
+/**
+ * Append one event idempotently.
+ *
+ * Idempotency:
+ * Uses a stable deterministic eventId derived from:
+ * 1. explicit event_id / eventId / idempotency_key / idempotencyKey
+ * 2. or correlation_id / correlationId
+ * 3. or metadata txHash / jobId
+ * 4. or a deterministic hash over (surface, stage, effectiveWallet, effectiveSessionId, tsBucket)
+ *
+ * Guaranteed race-safe via SQLite INSERT OR IGNORE PRIMARY KEY constraint.
  */
 export async function recordWarehouseEvent(
   input: WarehouseEventInput,
-): Promise<{ ok: boolean; skipped?: boolean }> {
-  if (!isAnalyticsWarehouseEnabled(input.wallet ?? undefined)) return { ok: true, skipped: true }
-  const now = input.now ?? Date.now()
-  const eventId = createHash("sha256")
-    .update(`${input.surface}|${input.stage}|${input.wallet ?? ""}|${now}|${Math.random()}`)
-    .digest("hex")
+): Promise<{ ok: boolean; skipped?: boolean; eventId?: string }> {
+  if (!isAnalyticsWarehouseEnabled((input.wallet ?? undefined) as string | undefined)) {
+    return { ok: true, skipped: true }
+  }
+
+  const now = input.ts ?? input.now ?? Date.now()
   ensureAnalyticsEventTable()
+
+  let effectiveSessionId = (input.sessionId ?? input.session_id ?? null)?.trim() || null
+  let effectiveWallet = (input.wallet ?? null)?.trim()?.toUpperCase() || null
+
+  // Session stitching
+  if (effectiveSessionId && effectiveWallet) {
+    stitchSession(effectiveSessionId, effectiveWallet, now)
+  } else if (effectiveSessionId && !effectiveWallet) {
+    try {
+      const row = getDb()
+        .prepare("SELECT wallet FROM session_stitches WHERE session_id = ? LIMIT 1")
+        .get(effectiveSessionId) as { wallet?: string } | undefined
+      if (row?.wallet) {
+        effectiveWallet = row.wallet
+      }
+    } catch {}
+  }
+
+  // Derive stable deterministic eventId
+  const explicitKey =
+    input.event_id ||
+    input.eventId ||
+    input.idempotency_key ||
+    input.idempotencyKey ||
+    input.correlation_id ||
+    input.correlationId ||
+    (input.metadata?.txHash as string | undefined) ||
+    (input.metadata?.tx_hash as string | undefined) ||
+    (input.metadata?.jobId as string | undefined) ||
+    (input.metadata?.idempotencyKey as string | undefined)
+
+  let eventId: string
+  if (explicitKey && typeof explicitKey === "string" && explicitKey.trim()) {
+    eventId = createHash("sha256")
+      .update(`${input.surface}|${input.stage}|${explicitKey.trim()}|${effectiveWallet ?? ""}`)
+      .digest("hex")
+  } else {
+    // Deterministic timestamp bucket (second resolution) prevents duplicate retries
+    const tsBucket = Math.floor(now / 1000)
+    const reasonStr = typeof input.reason === "string" ? input.reason : ""
+    eventId = createHash("sha256")
+      .update(`${input.surface}|${input.stage}|${effectiveWallet ?? ""}|${effectiveSessionId ?? ""}|${tsBucket}|${reasonStr}`)
+      .digest("hex")
+  }
+
+  const sanitizedMetadata = sanitizeEventMetadata(input.metadata)
+
   getDb()
     .prepare(
       `INSERT OR IGNORE INTO analytics_events
@@ -111,12 +238,74 @@ export async function recordWarehouseEvent(
       eventId,
       input.surface,
       input.stage,
-      input.wallet ?? null,
-      input.sessionId ?? null,
-      input.metadata ? JSON.stringify(input.metadata) : null,
+      effectiveWallet,
+      effectiveSessionId,
+      sanitizedMetadata,
       now,
     )
-  return { ok: true }
+
+  incSecurityCounter("warehouse_event_recorded")
+  return { ok: true, eventId }
+}
+
+/**
+ * Migrates events from the legacy faucet 5k-ring sidecar into SQLite analytics_events.
+ * Fully idempotent, preserves ordering and identity, never discards events.
+ */
+export async function migrateLegacyFaucetSidecar(): Promise<{
+  migratedCount: number
+  skippedCount: number
+  totalInSidecar: number
+}> {
+  ensureAnalyticsEventTable()
+  const { readJsonFile } = await import("@/lib/json-store")
+  const { serverDataJsonPath } = await import("@/lib/server-data-paths")
+  type LegacyStore = {
+    events: Array<{
+      stage: string
+      wallet: string | null
+      session_id: string | null
+      ts: number
+      reason: string | null
+    }>
+  }
+  const store = await readJsonFile<LegacyStore>(serverDataJsonPath("faucetFunnelEvents"), { events: [] })
+  const events = Array.isArray(store?.events) ? store.events : []
+
+  let migratedCount = 0
+  let skippedCount = 0
+  const insertStmt = getDb().prepare(`
+    INSERT OR IGNORE INTO analytics_events
+      (event_id, surface, stage, wallet, session_id, metadata, ts)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `)
+
+  // Stable sort by timestamp to preserve original sequence
+  const sorted = [...events].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0))
+
+  for (const e of sorted) {
+    if (!e || !e.stage) continue
+    const eventId = createHash("sha256")
+      .update(`legacy_faucet|${e.stage}|${(e.wallet ?? "").trim().toUpperCase()}|${e.session_id ?? ""}|${e.ts}|${e.reason ?? ""}`)
+      .digest("hex")
+    const meta = e.reason
+      ? JSON.stringify({ reason: e.reason, source: "legacy_faucet_migration" })
+      : JSON.stringify({ source: "legacy_faucet_migration" })
+    const res = insertStmt.run(
+      eventId,
+      "faucet",
+      e.stage,
+      e.wallet ? e.wallet.trim().toUpperCase() : null,
+      e.session_id ? e.session_id.trim() : null,
+      meta,
+      e.ts,
+    )
+    if (res.changes > 0) migratedCount++
+    else skippedCount++
+  }
+
+  incSecurityCounter("warehouse_legacy_migrated")
+  return { migratedCount, skippedCount, totalInSidecar: events.length }
 }
 
 /** Stage counts for one surface over a window (read-only operator view). */
@@ -372,4 +561,314 @@ export function rowsToParquetBuffer(
       error instanceof Error ? error.message : String(error),
     )
   }
+}
+
+// ── phase-253 (#704): signed one-use export grants, closed-label sanitization,
+// paginated streaming with row cap, and audit event log ──
+
+export const MAX_WAREHOUSE_EXPORT_ROWS = 1_000
+export const DEFAULT_WAREHOUSE_PAGE_SIZE = 100
+export const MAX_WAREHOUSE_PAGE_SIZE = 500
+export const DEFAULT_EXPORT_GRANT_TTL_MS = 60_000
+export const MAX_EXPORT_GRANT_TTL_MS = 300_000
+
+const CID_RE = /\b(Qm[1-9A-HJ-NP-Za-km-z]{44}|bafy[a-z2-7]{20,})\b/gi
+const CLOSED_STATUS_LABELS = new Set(["ok", "degraded", "down", "accepted", "rejected", "unknown"])
+
+function hashSubject(raw: string): string {
+  return `subj_${createHash("sha256").update(raw, "utf8").digest("hex").slice(0, 16)}`
+}
+
+export function sanitizeWarehouseTextClosed(text: string): string {
+  if (!text) return text
+  return redactWarehouseText(text).replace(CID_RE, "[REDACTED_CID]")
+}
+
+/**
+ * Sanitizes a warehouse row to closed labels and hashed subjects — ensuring no
+ * raw wallet (`G...`), secret (`S...`), or IPFS CID (`Qm...`/`bafy...`) leaks.
+ */
+export function sanitizeWarehouseRowClosed(row: WarehouseRow): WarehouseRow {
+  const base = redactWarehouseRow(row)
+  const safeTable: WarehouseTable = (WAREHOUSE_TABLES as readonly string[]).includes(base.table)
+    ? base.table
+    : "counter"
+  const safeStatus =
+    base.status === null
+      ? null
+      : CLOSED_STATUS_LABELS.has(base.status.toLowerCase())
+        ? base.status.toLowerCase()
+        : "unknown"
+  const safeSubject =
+    base.wallet_fingerprint === null
+      ? null
+      : CID_RE.test(base.wallet_fingerprint) || FULL_WALLET_RE.test(base.wallet_fingerprint)
+        ? hashSubject(base.wallet_fingerprint)
+        : sanitizeWarehouseTextClosed(base.wallet_fingerprint)
+
+  return {
+    table: safeTable,
+    ts: base.ts,
+    metric: sanitizeWarehouseTextClosed(base.metric),
+    value: base.value,
+    status: safeStatus,
+    wallet_fingerprint: safeSubject,
+  }
+}
+
+export function sanitizeWarehouseRowsClosed(rows: WarehouseRow[]): WarehouseRow[] {
+  return rows.map(sanitizeWarehouseRowClosed)
+}
+
+function getExportGrantSecret(override?: string): string {
+  return (
+    override ??
+    process.env.ANALYTICS_EXPORT_GRANT_SECRET ??
+    process.env.ADMIN_API_KEY ??
+    "phase-warehouse-export-grant-secret"
+  )
+}
+
+function ensureExportGrantTables(): void {
+  getDb().exec(`
+    CREATE TABLE IF NOT EXISTS warehouse_export_grants (
+      grant_id   TEXT PRIMARY KEY,
+      issued_at  INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      max_rows   INTEGER NOT NULL,
+      used_at    INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS warehouse_export_audit (
+      audit_id   TEXT PRIMARY KEY,
+      grant_id   TEXT,
+      format     TEXT NOT NULL,
+      row_count  INTEGER NOT NULL,
+      truncated  INTEGER NOT NULL,
+      status     TEXT NOT NULL,
+      reason     TEXT,
+      ts         INTEGER NOT NULL
+    );
+  `)
+}
+
+export type WarehouseExportGrant = {
+  grantId: string
+  token: string
+  issuedAt: number
+  expiresAt: number
+  maxRows: number
+}
+
+export function issueWarehouseExportGrant(opts: {
+  ttlMs?: number
+  maxRows?: number
+  now?: number
+  secret?: string
+} = {}): WarehouseExportGrant {
+  const now = opts.now ?? Date.now()
+  const ttlMs = Math.max(1_000, Math.min(MAX_EXPORT_GRANT_TTL_MS, opts.ttlMs ?? DEFAULT_EXPORT_GRANT_TTL_MS))
+  const maxRows = Math.max(1, Math.min(MAX_WAREHOUSE_EXPORT_ROWS, opts.maxRows ?? MAX_WAREHOUSE_EXPORT_ROWS))
+  const grantId = randomBytes(16).toString("hex")
+  const expiresAt = now + ttlMs
+
+  ensureExportGrantTables()
+  getDb()
+    .prepare(
+      `INSERT INTO warehouse_export_grants (grant_id, issued_at, expires_at, max_rows, used_at)
+       VALUES (?, ?, ?, ?, NULL)`,
+    )
+    .run(grantId, now, expiresAt, maxRows)
+
+  const payload = `${grantId}.${issuedAtStr(now)}.${expiresAt}.${maxRows}`
+  const sig = createHmac("sha256", getExportGrantSecret(opts.secret)).update(payload, "utf8").digest("hex")
+  return {
+    grantId,
+    token: `${payload}.${sig}`,
+    issuedAt: now,
+    expiresAt,
+    maxRows,
+  }
+}
+
+function issuedAtStr(ts: number): string {
+  return String(ts)
+}
+
+export type ConsumeGrantResult =
+  | { ok: true; grantId: string; maxRows: number }
+  | { ok: false; code: "INVALID_GRANT" | "EXPIRED_GRANT" | "GRANT_ALREADY_USED" }
+
+export function consumeWarehouseExportGrant(
+  token: string,
+  opts: { now?: number; secret?: string } = {},
+): ConsumeGrantResult {
+  const parts = token.trim().split(".")
+  if (parts.length !== 4) return { ok: false, code: "INVALID_GRANT" }
+  const [grantId, issuedStr, expiresStr, maxRowsStr, ...rest] = [parts[0]!, parts[1]!, parts[2]!, ...parts.slice(3)]
+  if (rest.length !== 1) return { ok: false, code: "INVALID_GRANT" }
+  const sig = rest[0]!
+  const payload = `${grantId}.${issuedStr}.${expiresStr}.${maxRowsStr}`
+  const expectedSig = createHmac("sha256", getExportGrantSecret(opts.secret)).update(payload, "utf8").digest("hex")
+
+  const sigBuf = Buffer.from(sig, "utf8")
+  const expectedBuf = Buffer.from(expectedSig, "utf8")
+  if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) {
+    return { ok: false, code: "INVALID_GRANT" }
+  }
+
+  const expiresAt = Number(expiresStr)
+  const maxRows = Number(maxRowsStr)
+  const now = opts.now ?? Date.now()
+  if (!Number.isFinite(expiresAt) || !Number.isFinite(maxRows) || maxRows <= 0) {
+    return { ok: false, code: "INVALID_GRANT" }
+  }
+  if (now >= expiresAt) {
+    return { ok: false, code: "EXPIRED_GRANT" }
+  }
+
+  ensureExportGrantTables()
+  const existing = getDb()
+    .prepare(`SELECT grant_id, used_at FROM warehouse_export_grants WHERE grant_id = ?`)
+    .get(grantId) as { grant_id: string; used_at: number | null } | undefined
+  if (!existing) return { ok: false, code: "INVALID_GRANT" }
+  if (existing.used_at !== null) return { ok: false, code: "GRANT_ALREADY_USED" }
+
+  const res = getDb()
+    .prepare(`UPDATE warehouse_export_grants SET used_at = ? WHERE grant_id = ? AND used_at IS NULL`)
+    .run(now, grantId)
+  if (res.changes === 0) return { ok: false, code: "GRANT_ALREADY_USED" }
+
+  return { ok: true, grantId, maxRows: Math.min(maxRows, MAX_WAREHOUSE_EXPORT_ROWS) }
+}
+
+export function paginateWarehouseRows(
+  rows: WarehouseRow[],
+  opts: { cursor?: number; limit?: number; rowCap?: number } = {},
+): {
+  rows: WarehouseRow[]
+  nextCursor: number | null
+  totalCapped: number
+  truncated: boolean
+} {
+  const rowCap = Math.max(1, Math.min(MAX_WAREHOUSE_EXPORT_ROWS, opts.rowCap ?? MAX_WAREHOUSE_EXPORT_ROWS))
+  const capped = rows.slice(0, rowCap)
+  const truncated = rows.length > rowCap
+  const cursor = Math.max(0, Math.floor(opts.cursor ?? 0))
+  const limit = Math.max(1, Math.min(MAX_WAREHOUSE_PAGE_SIZE, opts.limit ?? DEFAULT_WAREHOUSE_PAGE_SIZE))
+  const page = capped.slice(cursor, cursor + limit)
+  const nextCursor = cursor + page.length < capped.length ? cursor + page.length : null
+  return {
+    rows: page,
+    nextCursor,
+    totalCapped: capped.length,
+    truncated,
+  }
+}
+
+export function streamWarehouseNdjson(
+  rows: WarehouseRow[],
+  opts: { pageSize?: number; rowCap?: number; generatedAt?: number } = {},
+): { manifest: WarehouseManifest; stream: ReadableStream<Uint8Array>; truncated: boolean } {
+  const rowCap = Math.max(1, Math.min(MAX_WAREHOUSE_EXPORT_ROWS, opts.rowCap ?? MAX_WAREHOUSE_EXPORT_ROWS))
+  const sanitized = sanitizeWarehouseRowsClosed(rows.slice(0, rowCap))
+  const truncated = rows.length > rowCap
+  const pageSize = Math.max(1, Math.min(MAX_WAREHOUSE_PAGE_SIZE, opts.pageSize ?? DEFAULT_WAREHOUSE_PAGE_SIZE))
+  const manifest = buildWarehouseManifest(sanitized, { generatedAt: opts.generatedAt, redacted: true })
+  const encoder = new TextEncoder()
+
+  let cursor = 0
+  let sentManifest = false
+
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (!sentManifest) {
+        sentManifest = true
+        controller.enqueue(encoder.encode(JSON.stringify(manifest) + "\n"))
+        if (sanitized.length === 0) {
+          controller.close()
+        }
+        return
+      }
+      if (cursor >= sanitized.length) {
+        controller.close()
+        return
+      }
+      const chunk = sanitized.slice(cursor, cursor + pageSize)
+      cursor += chunk.length
+      controller.enqueue(encoder.encode(chunk.map((r) => JSON.stringify(r)).join("\n") + "\n"))
+      if (cursor >= sanitized.length) {
+        controller.close()
+      }
+    },
+  })
+
+  return { manifest, stream, truncated }
+}
+
+export type WarehouseExportAuditEvent = {
+  audit_id: string
+  grant_id: string | null
+  format: string
+  row_count: number
+  truncated: boolean
+  status: "success" | "rejected"
+  reason: string | null
+  ts: number
+}
+
+export function appendWarehouseExportAuditEvent(input: {
+  grantId?: string | null
+  format: string
+  rowCount: number
+  truncated: boolean
+  status: "success" | "rejected"
+  reason?: string | null
+  ts?: number
+}): WarehouseExportAuditEvent {
+  ensureExportGrantTables()
+  const ts = input.ts ?? Date.now()
+  const audit_id = randomBytes(12).toString("hex")
+  const event: WarehouseExportAuditEvent = {
+    audit_id,
+    grant_id: input.grantId ?? null,
+    format: input.format,
+    row_count: input.rowCount,
+    truncated: input.truncated,
+    status: input.status,
+    reason: input.reason ?? null,
+    ts,
+  }
+  getDb()
+    .prepare(
+      `INSERT INTO warehouse_export_audit (audit_id, grant_id, format, row_count, truncated, status, reason, ts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      event.audit_id,
+      event.grant_id,
+      event.format,
+      event.row_count,
+      event.truncated ? 1 : 0,
+      event.status,
+      event.reason,
+      event.ts,
+    )
+  return event
+}
+
+export function getWarehouseExportAuditEvents(limit = 50): WarehouseExportAuditEvent[] {
+  ensureExportGrantTables()
+  const rows = getDb()
+    .prepare(`SELECT audit_id, grant_id, format, row_count, truncated, status, reason, ts FROM warehouse_export_audit ORDER BY ts DESC LIMIT ?`)
+    .all(limit) as Array<{
+    audit_id: string
+    grant_id: string | null
+    format: string
+    row_count: number
+    truncated: number
+    status: "success" | "rejected"
+    reason: string | null
+    ts: number
+  }>
+  return rows.map((r) => ({ ...r, truncated: Boolean(r.truncated) }))
 }

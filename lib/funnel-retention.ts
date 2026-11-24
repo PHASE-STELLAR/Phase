@@ -21,12 +21,14 @@ import { isFeatureEnabled, phase177RollbackNote } from "@/lib/feature-flags"
 import {
   type WalletAgeBand,
   getWalletAgeBandCached,
+  withHorizonBulkhead,
 } from "@/lib/horizon-bulkhead"
 import {
   type SybilBand,
   classifyWalletForCohorts,
 } from "@/lib/sybil-resistance"
 import { readReferralStore } from "@/lib/referral-quest"
+import { HORIZON_URL } from "@/lib/phase-protocol"
 
 export const RETENTION_DAYS = [1, 3, 7, 14, 30] as const
 export type RetentionDay = (typeof RETENTION_DAYS)[number]
@@ -96,24 +98,80 @@ function formatCohortDate(ts: number): string {
   return d.toISOString().slice(0, 10)
 }
 
-function calculatePercentiles(values: number[]): {
+/**
+ * Calculates standard percentiles over an array of durations (milliseconds).
+ * Handles missing values, non-finite values, and negative durations safely.
+ */
+export function calculatePercentiles(values: number[]): {
   mean: number
   median: number
   p90: number
   min: number
   max: number
 } {
-  if (values.length === 0) {
+  const valid = values.filter((v) => typeof v === "number" && Number.isFinite(v) && v >= 0)
+  if (valid.length === 0) {
     return { mean: 0, median: 0, p90: 0, min: 0, max: 0 }
   }
-  const sorted = [...values].sort((a, b) => a - b)
+  const sorted = [...valid].sort((a, b) => a - b)
   const sum = sorted.reduce((acc, v) => acc + v, 0)
   const mean = Math.round(sum / sorted.length)
-  const median = sorted[Math.floor(sorted.length * 0.5)] ?? 0
-  const p90 = sorted[Math.floor(sorted.length * 0.9)] ?? 0
   const min = sorted[0] ?? 0
   const max = sorted[sorted.length - 1] ?? 0
+
+  // Exact median calculation
+  const n = sorted.length
+  let median = 0
+  if (n % 2 === 1) {
+    median = sorted[Math.floor(n / 2)] ?? 0
+  } else {
+    const mid1 = sorted[n / 2 - 1] ?? 0
+    const mid2 = sorted[n / 2] ?? 0
+    median = Math.round((mid1 + mid2) / 2)
+  }
+
+  // 90th percentile: nearest rank
+  const p90Index = Math.min(n - 1, Math.max(0, Math.ceil(n * 0.9) - 1))
+  const p90 = sorted[p90Index] ?? 0
+
   return { mean, median, p90, min, max }
+}
+
+/**
+ * Helper to fetch wallet creation age from Horizon or fallback gracefully.
+ */
+async function fetchWalletAgeDaysHorizon(wallet: string): Promise<number | null> {
+  const addr = wallet.trim().toUpperCase()
+  if (!/^G[A-Z2-7]{55}$/.test(addr)) return null
+
+  try {
+    const base = HORIZON_URL.replace(/\/+$/, "")
+    const res = await withHorizonBulkhead(async () => {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 4000)
+      try {
+        const resp = await fetch(`${base}/accounts/${addr}`, {
+          signal: controller.signal,
+          headers: { Accept: "application/json" },
+        })
+        if (!resp.ok) return null
+        return (await resp.json()) as { created_at?: string }
+      } finally {
+        clearTimeout(timer)
+      }
+    })
+
+    if (res?.created_at) {
+      const ms = Date.now() - new Date(res.created_at).getTime()
+      if (Number.isFinite(ms) && ms > 0) {
+        return ms / DAY_MS
+      }
+    }
+    return null
+  } catch {
+    // Protected by bulkhead: on failure, return null so caller falls back to firstSeen
+    return null
+  }
 }
 
 /**
@@ -140,13 +198,12 @@ export async function computeFunnelRetention(opts: {
 
   // 1. Read sources concurrently
   const [claimsStore, achievementsStore, referralStore] = await Promise.all([
-    readJsonFile<FaucetClaimsStore>(serverDataJsonPath("faucetClaims"), {}),
-    readJsonFile<AchievementsStore>(serverDataJsonPath("achievements"), {}),
-    readReferralStore(),
+    readJsonFile<FaucetClaimsStore>(serverDataJsonPath("faucetClaims"), {}).catch(() => ({})),
+    readJsonFile<AchievementsStore>(serverDataJsonPath("achievements"), {}).catch(() => ({})),
+    readReferralStore().catch(() => ({ codesByWallet: {}, recordsByCode: {}, referredByWallet: {} })),
   ])
 
-  // 2. Query events from SQLite analytics_events. Ensure the table exists so a
-  // fresh install returns zeros instead of throwing "no such table".
+  // 2. Query events from SQLite analytics_events (source of truth).
   ensureAnalyticsEventTable()
   const db = getDb()
   const rows = db
@@ -156,6 +213,7 @@ export async function computeFunnelRetention(opts: {
         stage,
         wallet,
         session_id,
+        metadata,
         ts,
         COALESCE(wallet, session_id) as effective_subject
       FROM analytics_events
@@ -167,6 +225,7 @@ export async function computeFunnelRetention(opts: {
     stage: string
     wallet: string | null
     session_id: string | null
+    metadata: string | null
     ts: number
     effective_subject: string | null
   }>
@@ -179,6 +238,7 @@ export async function computeFunnelRetention(opts: {
       stages: Map<string, number>
       activityDays: Set<number>
       wallet: string | null
+      questIds: Set<string>
     }
   >()
 
@@ -191,7 +251,8 @@ export async function computeFunnelRetention(opts: {
         firstSeen: row.ts,
         stages: new Map(),
         activityDays: new Set(),
-        wallet: row.wallet,
+        wallet: row.wallet ? row.wallet.toUpperCase() : null,
+        questIds: new Set(),
       })
     }
     const tl = subjectTimelines.get(subject)!
@@ -199,16 +260,28 @@ export async function computeFunnelRetention(opts: {
       tl.stages.set(row.stage, row.ts)
     }
     if (row.wallet && !tl.wallet) {
-      tl.wallet = row.wallet
+      tl.wallet = row.wallet.toUpperCase()
     }
     const dayOffset = Math.floor((row.ts - tl.firstSeen) / DAY_MS)
     if (dayOffset >= 0 && dayOffset <= 60) {
       tl.activityDays.add(dayOffset)
     }
+
+    // Inspect quest completions in metadata or stage
+    if (row.surface === "quest" || row.stage.includes("quest")) {
+      try {
+        if (row.metadata) {
+          const parsed = JSON.parse(row.metadata) as { quest_id?: string; questId?: string }
+          const qId = parsed.quest_id || parsed.questId
+          if (qId) tl.questIds.add(String(qId))
+        }
+      } catch {}
+    }
   }
 
   // 4. Merge claims store data (genesisAt, dailyAt, quests)
-  for (const [wallet, claims] of Object.entries(claimsStore)) {
+  for (const [walletRaw, claims] of Object.entries(claimsStore)) {
+    const wallet = walletRaw.trim().toUpperCase()
     const genesis = claims.genesisAt
     if (!genesis || genesis < minTs) continue
 
@@ -218,19 +291,39 @@ export async function computeFunnelRetention(opts: {
         stages: new Map(),
         activityDays: new Set(),
         wallet,
+        questIds: new Set(),
       })
     }
     const tl = subjectTimelines.get(wallet)!
     tl.stages.set("genesis_claimed", genesis)
+    if (!tl.stages.has("claim_confirmed")) {
+      tl.stages.set("claim_confirmed", genesis)
+    }
 
     if (claims.dailyAt) {
       const dailyOffset = Math.floor((claims.dailyAt - tl.firstSeen) / DAY_MS)
-      if (dailyOffset >= 0) tl.activityDays.add(dailyOffset)
+      if (dailyOffset >= 0 && dailyOffset <= 60) tl.activityDays.add(dailyOffset)
     }
     if (claims.quests) {
-      for (const questTs of Object.values(claims.quests)) {
+      for (const [qId, questTs] of Object.entries(claims.quests)) {
         const questOffset = Math.floor((questTs - tl.firstSeen) / DAY_MS)
-        if (questOffset >= 0) tl.activityDays.add(questOffset)
+        if (questOffset >= 0 && questOffset <= 60) tl.activityDays.add(questOffset)
+        tl.questIds.add(qId)
+      }
+    }
+  }
+
+  // Merge achievements
+  for (const [walletRaw, ach] of Object.entries(achievementsStore)) {
+    const wallet = walletRaw.trim().toUpperCase()
+    const tl = subjectTimelines.get(wallet)
+    if (tl && Array.isArray(ach.unlocked)) {
+      for (const item of ach.unlocked) {
+        if (item.unlocked_at) {
+          const off = Math.floor((item.unlocked_at - tl.firstSeen) / DAY_MS)
+          if (off >= 0 && off <= 60) tl.activityDays.add(off)
+          tl.questIds.add(`ach:${item.id}`)
+        }
       }
     }
   }
@@ -277,43 +370,59 @@ export async function computeFunnelRetention(opts: {
     cohortGroups.get(cohortKey)!.push(subject)
   }
 
-  // Helper for mock account age fetch in bulkhead cache
-  const fetchAgeDays = async (_w: string) => 14
-
   // 7. Calculate cohort retention and enrich with sybil/wallet-age dimensions
   const cohorts: RetentionCohort[] = []
-  let totalCohortUsers = 0
+  let totalEligibleDay7Users = 0
   let totalDay7Retained = 0
+  let totalEligibleDay30Users = 0
   let totalDay30Retained = 0
 
-  let trustedTotal = 0
+  let trustedTotalDay7Eligible = 0
   let trustedDay7 = 0
-  let cautionTotal = 0
+  let cautionTotalDay7Eligible = 0
   let cautionDay7 = 0
-  let suspectTotal = 0
+  let suspectTotalDay7Eligible = 0
   let suspectDay7 = 0
 
   for (const [cohortKey, subjects] of cohortGroups.entries()) {
     const size = subjects.length
-    totalCohortUsers += size
 
+    // Day-N retention calculation with accurate observation window handling:
+    // Avoid counting users who have not yet reached the relevant observation window as churned!
     const dayN: DayNRetention[] = RETENTION_DAYS.map((day) => {
       let activeCount = 0
+      let eligibleCount = 0
       for (const subj of subjects) {
         const tl = subjectTimelines.get(subj)
-        if (tl && tl.activityDays.has(day)) {
-          activeCount++
+        if (!tl) continue
+        const subjectAgeMs = now - tl.firstSeen
+        if (subjectAgeMs >= day * DAY_MS) {
+          eligibleCount++
+          if (tl.activityDays.has(day)) {
+            activeCount++
+          }
         }
       }
       const retentionRate =
-        size > 0 ? Math.round((activeCount / size) * 10_000) / 10_000 : 0
+        eligibleCount > 0 ? Math.round((activeCount / eligibleCount) * 10_000) / 10_000 : 0
       return { day, activeCount, retentionRate }
     })
 
-    const day7 = dayN.find((d) => d.day === 7)?.activeCount ?? 0
-    const day30 = dayN.find((d) => d.day === 30)?.activeCount ?? 0
-    totalDay7Retained += day7
-    totalDay30Retained += day30
+    const day7Item = dayN.find((d) => d.day === 7)
+    const day30Item = dayN.find((d) => d.day === 30)
+
+    for (const subj of subjects) {
+      const tl = subjectTimelines.get(subj)
+      if (!tl) continue
+      if (now - tl.firstSeen >= 7 * DAY_MS) {
+        totalEligibleDay7Users++
+        if (tl.activityDays.has(7)) totalDay7Retained++
+      }
+      if (now - tl.firstSeen >= 30 * DAY_MS) {
+        totalEligibleDay30Users++
+        if (tl.activityDays.has(30)) totalDay30Retained++
+      }
+    }
 
     // Sybil & wallet-age breakdowns
     const sybilBreakdown: Record<SybilBand, number> = {
@@ -332,27 +441,41 @@ export async function computeFunnelRetention(opts: {
       const tl = subjectTimelines.get(subj)
       const wallet = tl?.wallet
       if (wallet) {
-        const ageResult = await getWalletAgeBandCached(wallet, fetchAgeDays)
+        // Fetch age band cached with Horizon bulkhead fallback
+        const ageResult = await getWalletAgeBandCached(wallet, async (w) => {
+          const fromHorizon = await fetchWalletAgeDaysHorizon(w)
+          if (fromHorizon !== null) return fromHorizon
+          // Fall back to firstSeen in timeline
+          if (tl) return Math.max(0, (now - tl.firstSeen) / DAY_MS)
+          return 0
+        })
         walletAgeBreakdown[ageResult.band]++
 
         const sybil = await classifyWalletForCohorts(wallet).catch(() => null)
         const band: SybilBand = sybil?.band ?? "trusted"
         sybilBreakdown[band]++
 
-        if (band === "trusted") {
-          trustedTotal++
-          if (tl && tl.activityDays.has(7)) trustedDay7++
-        } else if (band === "caution") {
-          cautionTotal++
-          if (tl && tl.activityDays.has(7)) cautionDay7++
-        } else {
-          suspectTotal++
-          if (tl && tl.activityDays.has(7)) suspectDay7++
+        const reachedDay7 = tl ? now - tl.firstSeen >= 7 * DAY_MS : false
+        if (reachedDay7) {
+          if (band === "trusted") {
+            trustedTotalDay7Eligible++
+            if (tl && tl.activityDays.has(7)) trustedDay7++
+          } else if (band === "caution") {
+            cautionTotalDay7Eligible++
+            if (tl && tl.activityDays.has(7)) cautionDay7++
+          } else {
+            suspectTotalDay7Eligible++
+            if (tl && tl.activityDays.has(7)) suspectDay7++
+          }
         }
       } else {
         walletAgeBreakdown["<24h"]++
         sybilBreakdown["trusted"]++
-        trustedTotal++
+        const reachedDay7 = tl ? now - tl.firstSeen >= 7 * DAY_MS : false
+        if (reachedDay7) {
+          trustedTotalDay7Eligible++
+          if (tl && tl.activityDays.has(7)) trustedDay7++
+        }
       }
     }
 
@@ -369,12 +492,12 @@ export async function computeFunnelRetention(opts: {
   cohorts.sort((a, b) => a.cohortKey.localeCompare(b.cohortKey))
 
   const overallDay7Retention =
-    totalCohortUsers > 0
-      ? Math.round((totalDay7Retained / totalCohortUsers) * 10_000) / 10_000
+    totalEligibleDay7Users > 0
+      ? Math.round((totalDay7Retained / totalEligibleDay7Users) * 10_000) / 10_000
       : 0
   const overallDay30Retention =
-    totalCohortUsers > 0
-      ? Math.round((totalDay30Retained / totalCohortUsers) * 10_000) / 10_000
+    totalEligibleDay30Users > 0
+      ? Math.round((totalDay30Retained / totalEligibleDay30Users) * 10_000) / 10_000
       : 0
 
   return {
@@ -386,16 +509,16 @@ export async function computeFunnelRetention(opts: {
     overallDay30Retention,
     sybilWeightedRetention: {
       trustedRetentionDay7:
-        trustedTotal > 0
-          ? Math.round((trustedDay7 / trustedTotal) * 10_000) / 10_000
+        trustedTotalDay7Eligible > 0
+          ? Math.round((trustedDay7 / trustedTotalDay7Eligible) * 10_000) / 10_000
           : 0,
       cautionRetentionDay7:
-        cautionTotal > 0
-          ? Math.round((cautionDay7 / cautionTotal) * 10_000) / 10_000
+        cautionTotalDay7Eligible > 0
+          ? Math.round((cautionDay7 / cautionTotalDay7Eligible) * 10_000) / 10_000
           : 0,
       suspectRetentionDay7:
-        suspectTotal > 0
-          ? Math.round((suspectDay7 / suspectTotal) * 10_000) / 10_000
+        suspectTotalDay7Eligible > 0
+          ? Math.round((suspectDay7 / suspectTotalDay7Eligible) * 10_000) / 10_000
           : 0,
     },
   }
