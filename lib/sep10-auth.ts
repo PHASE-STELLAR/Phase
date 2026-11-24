@@ -161,10 +161,25 @@ export async function issueSession(
   }
 
   const token = randomBytes(32).toString("base64url")
+  const hashedSessionId = sha256Base64url(token)
   const expiresAt = now + SEP10_SESSION_TTL_SECONDS
   store.consumed_challenges[challengeKey] = now + SEP10_CHALLENGE_TTL_SECONDS
-  store.sessions[sha256Base64url(token)] = { wallet: account, expires_at: expiresAt }
+  store.sessions[hashedSessionId] = { wallet: account, expires_at: expiresAt }
   await writeStore(store)
+
+  // Session stitching for analytics warehouse across SEP-10 auth
+  try {
+    const { stitchSession, recordWarehouseEvent } = await import("@/lib/analytics-warehouse")
+    stitchSession(hashedSessionId, account, now * 1000)
+    void recordWarehouseEvent({
+      surface: "auth",
+      stage: "sep10_session_issued",
+      wallet: account,
+      sessionId: hashedSessionId,
+      ts: now * 1000,
+    }).catch(() => {})
+  } catch {}
+
   return { token, wallet: account, expires_at: expiresAt }
 }
 

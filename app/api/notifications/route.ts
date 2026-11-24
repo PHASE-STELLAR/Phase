@@ -50,6 +50,11 @@ export async function GET(request: NextRequest) {
         { status: 404 },
       )
     }
+    if (request.nextUrl.searchParams.get("migrate_faucet") === "1") {
+      const { migrateLegacyFaucetSidecar } = await import("@/lib/analytics-warehouse")
+      const result = await migrateLegacyFaucetSidecar()
+      return NextResponse.json({ ok: true, ...result, feature_enabled: true })
+    }
     const surface = request.nextUrl.searchParams.get("surface") ?? "faucet"
     const windowParam = Number(request.nextUrl.searchParams.get("windowMs"))
     const windowMs = Number.isFinite(windowParam) && windowParam > 0 ? windowParam : undefined

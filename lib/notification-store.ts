@@ -199,7 +199,7 @@ export async function saveNotificationPreferences(
 ): Promise<NotificationPreferences> {
   // Read the merged defaults inside the lock so two concurrent preference
   // updates cannot both start from the same base and lose one field.
-  return updateStore<NotificationPreferenceStore, NotificationPreferences>(
+  const res = await updateStore<NotificationPreferenceStore, NotificationPreferences>(
     "notificationPreferences",
     (store) => {
       const current = {
@@ -215,6 +215,17 @@ export async function saveNotificationPreferences(
       return next
     },
   )
+
+  if (isAnalyticsWarehouseEnabled(wallet)) {
+    void recordWarehouseEvent({
+      surface: "notifications",
+      stage: "preferences_updated",
+      wallet,
+      metadata: { enabled: preferences.enabled },
+    }).catch(() => {})
+  }
+
+  return res
 }
 
 export async function shouldStoreNotification(wallet: string, type: NotificationType): Promise<boolean> {

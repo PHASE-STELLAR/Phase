@@ -417,7 +417,9 @@ export async function fetchWithCidCache(
     }
   } catch (e) {
     if (e instanceof CidIntegrityError) {
-      return { ok: false, error: e.message, code: e.code }
+      // Tamper or hash mismatch detected in cache: invalidate corrupted entry and recover via gateway fetch
+      await invalidateCachedCid(cid).catch(() => {})
+      // Proceed to gateway fallback below instead of aborting
     }
   }
 
