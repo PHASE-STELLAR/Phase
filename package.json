@@ -27,7 +27,7 @@
     "db:parity": "tsx scripts/db-parity.ts",
     "flags:check": "tsx tools/check-flags.ts",
     "drill:kill-switch": "tsx tools/kill-switch-drill.ts",
-    "test:adapters": "tsx --test tests/*.test.ts"
+    "test:adapters": "tsx --test tests/flags.test.ts tests/sep50.test.ts tests/bridge.test.ts tests/crosschain.test.ts"
   },
   "dependencies": {
     "@albedo-link/intent": "0.12.0",
