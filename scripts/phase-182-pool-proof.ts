@@ -177,7 +177,7 @@ async function main(): Promise<Proof> {
 
 main()
   .then((proof) => {
-    const file = path.join(path.dirname(serverDataJsonPath("poolActivity")), "phase-182-pool-proof.json")
+    const file = path.join(path.dirname(serverDataJsonPath("liquidityPoolIntents")), "phase-182-pool-proof.json")
     mkdirSync(path.dirname(file), { recursive: true })
     writeFileSync(file, JSON.stringify(proof, null, 2), "utf8")
     console.log(JSON.stringify(proof, null, 2))

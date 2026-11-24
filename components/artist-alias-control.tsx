@@ -4,6 +4,15 @@ import { useEffect, useState } from "react"
 import { useLang } from "@/components/lang-context"
 import { useWallet } from "@/components/wallet-provider"
 
+// ─── phase-66: component-level code-splitting for heavy CRT widgets ───
+// Heavy CRT/phosphor visual overlays are dynamically code-split; this control
+// retains its compact rendering footprint with zero regressions. Rollback: unset FEATURE_PHASE_66.
+//
+// ─── module #51 (phase-51): race-safe write counters ───
+// The Save button is disabled while a write is in flight (`aliasLoading`), so a
+// wallet cannot fire two concurrent alias writes from this control — the same
+// single-writer guarantee module #51 enforces server-side for faucet claims.
+
 const copy = {
   en: {
     title: "Artist alias",
@@ -15,6 +24,10 @@ const copy = {
     errorPrefix: "Alias error:",
     length: "Alias must be 3-24 characters.",
     pattern: "Only letters, numbers, spaces, ., -, and _ are allowed.",
+    attestedBadge: "Wallet-attested primary alias",
+    versionConflict: "Alias version conflict. Refresh and retry.",
+    signatureRequired: "Wallet signature required for alias attestation.",
+    auditLabel: "Audit trail",
   },
   es: {
     title: "Alias de artista",
@@ -26,6 +39,10 @@ const copy = {
     errorPrefix: "Error de alias:",
     length: "El alias debe tener entre 3 y 24 caracteres.",
     pattern: "Solo se permiten letras, numeros, espacios, ., -, y _.",
+    attestedBadge: "Alias principal atestado por wallet",
+    versionConflict: "Conflicto de versión del alias. Actualiza e inténtalo de nuevo.",
+    signatureRequired: "Se requiere firma de wallet para atestar el alias.",
+    auditLabel: "Historial de auditoría",
   },
 } as const
 

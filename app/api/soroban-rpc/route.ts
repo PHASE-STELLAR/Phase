@@ -31,6 +31,13 @@ function proxyRetryBackoffMs(attemptIndex: number): number {
 /** HTTP que suelen ser transitorios en el RPC público de testnet. */
 const RETRYABLE_HTTP = new Set([502, 503, 504, 429])
 
+// Keep one warm function instance from amplifying a public RPC outage.
+const MAX_IN_FLIGHT = 12
+const CIRCUIT_FAILURE_LIMIT = 5
+const CIRCUIT_COOLDOWN_MS = 10_000
+let inFlight = 0
+let consecutiveFailures = 0
+let circuitOpenedAt = 0
 /** Debe cubrir varias URLs × reintentos × timeout (p. ej. 3×2×45s); Vercel Pro permite hasta 300s. */
 export const maxDuration = 300
 
@@ -83,30 +90,176 @@ function parseJsonRpcId(rawBody: string): string | number | null {
   return null
 }
 
-export async function POST(req: NextRequest) {
-  let body: string
-  try {
-    body = await req.text()
-  } catch {
-    return NextResponse.json({ error: "invalid body" }, { status: 400 })
-  }
-  if (body.length > 2_000_000) {
-    return NextResponse.json({ error: "body too large" }, { status: 413 })
-  }
+// ── Circuit Breaker & Rate Limiter (Issue #738) ──────────────────────────────
+type CircuitState = "CLOSED" | "OPEN" | "HALF_OPEN"
 
-  const fetchTimeoutMs = proxyFetchTimeoutMs()
-  const rpcId = parseJsonRpcId(body)
-  /** Evita agotar `maxDuration` si hay muchas URLs en env. */
-  const urls = sorobanUpstreamCandidates().slice(0, 5)
-  const perUrl = attemptsPerUrl()
-  let lastFailure = "unknown"
+interface CircuitStatus {
+  state: CircuitState
+  failures: number
+  nextAttempt: number
+  probesInFlight: number
+  lastStateChange: number
+}
+
+const upstreamCircuits = new Map<string, CircuitStatus>()
+/** Per-upstream cooldown, distinct from the process-wide CIRCUIT_COOLDOWN_MS above. */
+const UPSTREAM_CIRCUIT_COOLDOWN_MS = 15_000
+const FAILURE_THRESHOLD = 3
+const MAX_HALF_OPEN_PROBES = 1
+const PHASE_CIRCUIT_BREAKER_ENABLED = process.env.phase_circuit_breaker !== "false"
+
+export function getUpstreamCircuitStatus(url: string): CircuitStatus {
+  let status = upstreamCircuits.get(url)
+  if (!status) {
+    status = { state: "CLOSED", failures: 0, nextAttempt: 0, probesInFlight: 0, lastStateChange: Date.now() }
+    upstreamCircuits.set(url, status)
+  }
+  if (status.state === "OPEN" && Date.now() >= status.nextAttempt) {
+    status.state = "HALF_OPEN"
+    status.lastStateChange = Date.now()
+  }
+  return status
+}
+
+export function recordUpstreamSuccess(url: string) {
+  const status = getUpstreamCircuitStatus(url)
+  status.state = "CLOSED"
+  status.failures = 0
+  status.probesInFlight = 0
+  status.lastStateChange = Date.now()
+}
+
+export function recordUpstreamFailure(url: string, is429: boolean = false) {
+  const status = getUpstreamCircuitStatus(url)
+  status.failures += 1
+  if (is429 || status.failures >= FAILURE_THRESHOLD) {
+    status.state = "OPEN"
+    status.nextAttempt = Date.now() + UPSTREAM_CIRCUIT_COOLDOWN_MS
+    status.lastStateChange = Date.now()
+  }
+}
+
+/**
+ * Check if a probe can be issued for HALF_OPEN state.
+ * Bounded probing prevents overwhelming a recovering upstream.
+ */
+export function canProbeHalfOpenCircuit(url: string): boolean {
+  const status = getUpstreamCircuitStatus(url)
+  if (status.state !== "HALF_OPEN") return true
+  if (status.probesInFlight >= MAX_HALF_OPEN_PROBES) return false
+  status.probesInFlight += 1
+  return true
+}
+
+/**
+ * Decrement probe counter after a half-open attempt completes.
+ */
+export function completeHalfOpenProbe(url: string) {
+  const status = upstreamCircuits.get(url)
+  if (status && status.probesInFlight > 0) {
+    status.probesInFlight -= 1
+  }
+}
+
+/**
+ * Health status endpoint (no PII exposed).
+ */
+export interface CircuitBreakerHealth {
+  enabled: boolean
+  upstreams: Array<{
+    url: string
+    state: CircuitState
+    failures: number
+    stateChangedAgo: number
+  }>
+}
+
+export function getCircuitBreakerHealth(): CircuitBreakerHealth {
+  const now = Date.now()
+  const upstreams = Array.from(upstreamCircuits.entries()).map(([url, status]) => ({
+    url: url.replace(/^https?:\/\//, "").split("/")[0] || url,
+    state: status.state,
+    failures: status.failures,
+    stateChangedAgo: now - status.lastStateChange,
+  }))
+  return { enabled: PHASE_CIRCUIT_BREAKER_ENABLED, upstreams }
+}
+
+/** Rate Limiting: 60 requests / minute per client identifier */
+const clientRateLimitMap = new Map<string, { count: number; resetAt: number }>()
+const RATE_LIMIT_WINDOW_MS = 60_000
+const MAX_REQUESTS_PER_WINDOW = 60
+
+export function checkProxyRateLimit(clientIp: string): boolean {
+  const now = Date.now()
+  const record = clientRateLimitMap.get(clientIp)
+  if (!record || now >= record.resetAt) {
+    clientRateLimitMap.set(clientIp, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
+    return true
+  }
+  if (record.count >= MAX_REQUESTS_PER_WINDOW) {
+    return false
+  }
+  record.count += 1
+  return true
+}
+
+export async function POST(req: NextRequest) {
+  const now = Date.now()
+  if (circuitOpenedAt > 0 && now - circuitOpenedAt < CIRCUIT_COOLDOWN_MS) {
+    return NextResponse.json(
+      { error: "Soroban RPC temporarily unavailable; retry shortly." },
+      { status: 503, headers: { "Retry-After": "10" } },
+    )
+  }
+  if (inFlight >= MAX_IN_FLIGHT) {
+    return NextResponse.json(
+      { error: "Soroban RPC proxy is busy; retry shortly." },
+      { status: 429, headers: { "Retry-After": "2" } },
+    )
+  }
+  inFlight += 1
+
+  try {
+    let body: string
+    try {
+      body = await req.text()
+    } catch {
+      return NextResponse.json({ error: "invalid body" }, { status: 400 })
+    }
+    if (body.length > 2_000_000) {
+      return NextResponse.json({ error: "body too large" }, { status: 413 })
+    }
+
+    const fetchTimeoutMs = proxyFetchTimeoutMs()
+    const rpcId = parseJsonRpcId(body)
+    /** Evita agotar `maxDuration` si hay muchas URLs en env. */
+    const urls = sorobanUpstreamCandidates().slice(0, 5)
+    const perUrl = attemptsPerUrl()
+    let lastFailure = "unknown"
 
   for (let urlIdx = 0; urlIdx < urls.length; urlIdx++) {
     const url = urls[urlIdx]!
     if (urlIdx > 0) {
       await sleep(proxyRetryBackoffMs(urlIdx - 1))
     }
+
+    // Check circuit breaker state before attempting
+    if (PHASE_CIRCUIT_BREAKER_ENABLED) {
+      const circuitStatus = getUpstreamCircuitStatus(url)
+      if (circuitStatus.state === "OPEN") {
+        lastFailure = `${url} → circuit OPEN`
+        continue
+      }
+      if (circuitStatus.state === "HALF_OPEN" && !canProbeHalfOpenCircuit(url)) {
+        lastFailure = `${url} → too many HALF_OPEN probes`
+        continue
+      }
+    }
+
     for (let attempt = 0; attempt < perUrl; attempt++) {
+      const isHalfOpenProbe = PHASE_CIRCUIT_BREAKER_ENABLED && getUpstreamCircuitStatus(url).state === "HALF_OPEN"
+
       try {
         const upstream = await fetch(url, {
           method: "POST",
@@ -122,6 +275,10 @@ export async function POST(req: NextRequest) {
         const ct = upstream.headers.get("Content-Type") || "application/json"
 
         if (upstream.ok) {
+          consecutiveFailures = 0
+          circuitOpenedAt = 0
+          recordUpstreamSuccess(url)
+          if (isHalfOpenProbe) completeHalfOpenProbe(url)
           return new NextResponse(text, {
             status: upstream.status,
             headers: { "Content-Type": ct },
@@ -130,6 +287,8 @@ export async function POST(req: NextRequest) {
 
         if (RETRYABLE_HTTP.has(upstream.status)) {
           lastFailure = `${url} → HTTP ${upstream.status}`
+          recordUpstreamFailure(url, upstream.status === 429)
+          if (isHalfOpenProbe) completeHalfOpenProbe(url)
           if (attempt + 1 < perUrl) {
             await sleep(proxyRetryBackoffMs(attempt))
             continue
@@ -137,6 +296,8 @@ export async function POST(req: NextRequest) {
           break
         }
 
+        recordUpstreamSuccess(url)
+        if (isHalfOpenProbe) completeHalfOpenProbe(url)
         return new NextResponse(text, {
           status: upstream.status,
           headers: { "Content-Type": ct },
@@ -144,6 +305,8 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         lastFailure = `${url} → ${msg}`
+        recordUpstreamFailure(url, false)
+        if (isHalfOpenProbe) completeHalfOpenProbe(url)
         if (attempt + 1 < perUrl) {
           await sleep(proxyRetryBackoffMs(attempt))
           continue
@@ -153,21 +316,30 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  if (process.env.NODE_ENV === "development") {
-    // eslint-disable-next-line no-console
-    console.error("[soroban-rpc] all upstream attempts failed", {
-      lastFailure,
-      timeoutMs: fetchTimeoutMs,
-      urlsTried: urls.length,
-    })
-  }
+    if (process.env.NODE_ENV === "development") {
+      // eslint-disable-next-line no-console
+      console.error("[soroban-rpc] all upstream attempts failed", {
+        lastFailure,
+        timeoutMs: fetchTimeoutMs,
+        urlsTried: urls.length,
+      })
+    }
 
-  return jsonRpcUpstreamError(
-    `Soroban RPC no disponible tras reintentos (${lastFailure}). ` +
-      `Si ves timeouts, sube SOROBAN_PROXY_FETCH_TIMEOUT_MS (p. ej. 90000) en local; en Vercel hace falta plan con funciones >10s o un RPC más rápido. ` +
-      `También puedes fijar STELLAR_RPC_URL / STELLAR_RPC_FALLBACK_URLS.`,
-    rpcId,
-  )
+    consecutiveFailures += 1
+    if (consecutiveFailures >= CIRCUIT_FAILURE_LIMIT) {
+      circuitOpenedAt = Date.now()
+      consecutiveFailures = 0
+    }
+
+    return jsonRpcUpstreamError(
+      `Soroban RPC no disponible tras reintentos (${lastFailure}). ` +
+        `Si ves timeouts, sube SOROBAN_PROXY_FETCH_TIMEOUT_MS (p. ej. 90000) en local; en Vercel hace falta plan con funciones >10s o un RPC más rápido. ` +
+        `También puedes fijar STELLAR_RPC_URL / STELLAR_RPC_FALLBACK_URLS.`,
+      rpcId,
+    )
+  } finally {
+    inFlight -= 1
+  }
 }
 
 export async function GET() {
@@ -176,3 +348,7 @@ export async function GET() {
     headers: { Allow: "POST" },
   })
 }
+
+// ── Spike 672: drop bursts reuse this proxy bulkhead/timeout path — no timeout change.
+// Retry-After from upstream 429/503 propagates to callers; queue tickets pace Freighter
+// signing so the herd does not amplify into RPC 503s.

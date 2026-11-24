@@ -48,18 +48,15 @@ import {
 import { HORIZON_URL } from "@/lib/phase-protocol"
 import { flagRollbackNote, isFeatureEnabled } from "@/lib/feature-flags"
 import { incSecurityCounter } from "@/lib/security-counters"
+import { getDb } from "@/lib/sqlite-db"
 import { readJsonFile, updateJsonFile } from "@/lib/json-store"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
-import {
-  hasRecentPoolDeposit,
-  insertPoolActivityRow,
-  readPoolActivityRows,
-} from "@/lib/pool-activity-store"
+import { isDecimalAmountParsingEnabled, tryParseDecimalAmount } from "@/lib/decimal-amount"
 
 // ─── flag surface ───────────────────────────────────────────────────────────
 
-export function isPhase182Enabled(_wallet?: string): boolean {
-  return isFeatureEnabled("phase-182")
+export function isPhase182Enabled(wallet?: string): boolean {
+  return isFeatureEnabled("phase-182", wallet ? { wallet } : undefined)
 }
 
 export function phase182RollbackNote(): string {
@@ -235,6 +232,11 @@ export type HorizonPoolRecord = {
 }
 
 export function decimalToStroops(value: unknown): bigint {
+  if (isDecimalAmountParsingEnabled()) {
+    const parsed = tryParseDecimalAmount(typeof value === "number" ? value : String(value ?? ""), { allowZero: true })
+    if (!parsed.ok) throw new PoolError("INVALID_INPUT", `Invalid decimal amount: ${parsed.error.message}`)
+    return parsed.units
+  }
   const text = typeof value === "string" ? value.trim() : String(value ?? "")
   if (!/^\d+(\.\d+)?$/.test(text)) {
     throw new PoolError("INVALID_INPUT", `Invalid decimal amount: ${text || "(empty)"}`)
@@ -1225,9 +1227,29 @@ export async function readPoolIntent(wallet: string, intentId: string, now = Dat
 
 export type PoolWashReason = "self_provision" | "self_swap"
 
-/** Kept for API compatibility: the JSON sidecar needs no schema creation. */
 export function ensurePoolActivityTable(): void {
-  // no-op — see lib/pool-activity-store.ts
+  const db = getDb()
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pool_activity (
+      id            TEXT PRIMARY KEY,
+      pool_id       TEXT NOT NULL,
+      wallet        TEXT NOT NULL,
+      counterparty  TEXT,
+      kind          TEXT NOT NULL CHECK(kind IN ('deposit','withdraw','swap')),
+      amount_a      TEXT NOT NULL DEFAULT '0',
+      amount_b      TEXT NOT NULL DEFAULT '0',
+      value_xlm_stroops TEXT NOT NULL DEFAULT '0',
+      wash_flagged  INTEGER NOT NULL DEFAULT 0,
+      wash_reason   TEXT,
+      created_at    INTEGER NOT NULL
+    )
+  `)
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_pool_activity_pool_created ON pool_activity (pool_id, created_at DESC, wash_flagged)",
+  )
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_pool_activity_wallet_created ON pool_activity (wallet, created_at DESC)",
+  )
 }
 
 export type PoolActivityInput = {
@@ -1270,8 +1292,14 @@ export function screenPoolActivity(input: PoolActivityInput): { washFlagged: boo
 
   if (input.kind === "swap") {
     ensurePoolActivityTable()
-    const seeded = hasRecentPoolDeposit(input.poolId, wallet, now - 60 * 60 * 1000)
-    if (seeded) {
+    const seeded = getDb()
+      .prepare(
+        `SELECT 1 AS hit FROM pool_activity
+          WHERE pool_id = ? AND wallet = ? AND kind = 'deposit' AND created_at >= ?
+          LIMIT 1`,
+      )
+      .get(input.poolId, wallet.toUpperCase(), now - 60 * 60 * 1000) as { hit?: number } | undefined
+    if (seeded?.hit) {
       incSecurityCounter("lp_pool_self_swap_flagged")
       return { washFlagged: true, washReason: "self_swap" }
     }
@@ -1301,19 +1329,25 @@ export function recordPoolActivity(input: PoolActivityInput): {
       .update(`${input.poolId}|${input.wallet}|${input.kind}|${now}|${Math.random()}`)
       .digest("hex")
       .slice(0, 32)
-  insertPoolActivityRow({
-    id,
-    pool_id: input.poolId,
-    wallet: input.wallet.toUpperCase(),
-    counterparty: input.counterparty?.toUpperCase() ?? null,
-    kind: input.kind,
-    amount_a: String(input.amountA ?? "0"),
-    amount_b: String(input.amountB ?? "0"),
-    value_xlm_stroops: String(input.valueXlmStroops ?? "0"),
-    wash_flagged: screening.washFlagged ? 1 : 0,
-    wash_reason: screening.washReason,
-    created_at: now,
-  })
+  getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO pool_activity
+        (id, pool_id, wallet, counterparty, kind, amount_a, amount_b, value_xlm_stroops, wash_flagged, wash_reason, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      input.poolId,
+      input.wallet.toUpperCase(),
+      input.counterparty?.toUpperCase() ?? null,
+      input.kind,
+      String(input.amountA ?? "0"),
+      String(input.amountB ?? "0"),
+      String(input.valueXlmStroops ?? "0"),
+      screening.washFlagged ? 1 : 0,
+      screening.washReason,
+      now,
+    )
   return { id, ...screening }
 }
 
@@ -1325,16 +1359,24 @@ export function getPoolVolumeExcludingWash(
   ensurePoolActivityTable()
   const includeWash = opts.includeWash === true
   const since = opts.since ?? 0
-  const swaps = readPoolActivityRows().filter(
-    (r) => r.pool_id === poolId && r.kind === "swap" && r.created_at >= since,
-  )
-  const counted = swaps.filter((r) => includeWash || !r.wash_flagged)
-  const total = counted.reduce((sum, r) => sum + BigInt(r.value_xlm_stroops || "0"), 0n)
-  const excludedCount = swaps.length - counted.length
+  const row = getDb()
+    .prepare(
+      `SELECT COALESCE(SUM(value_xlm_stroops), 0) AS total, COUNT(*) AS swaps
+         FROM pool_activity
+        WHERE pool_id = ? AND kind = 'swap' AND created_at >= ? AND (wash_flagged = 0 OR ? = 1)`,
+    )
+    .get(poolId, since, includeWash ? 1 : 0) as { total?: string | number; swaps?: number } | undefined
+  const excluded = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS excluded FROM pool_activity
+        WHERE pool_id = ? AND kind = 'swap' AND created_at >= ? AND wash_flagged = 1`,
+    )
+    .get(poolId, since) as { excluded?: number } | undefined
+  const excludedCount = Number(excluded?.excluded ?? 0)
   if (excludedCount > 0) incSecurityCounter("lp_pool_volume_excluded", excludedCount)
   return {
-    valueXlmStroops: total.toString(),
-    swapCount: counted.length,
+    valueXlmStroops: String(row?.total ?? "0"),
+    swapCount: Number(row?.swaps ?? 0),
     excludedCount,
   }
 }

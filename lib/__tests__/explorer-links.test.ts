@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, it } from "node:test"
-import * as assert from "node:assert/strict"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { StrKey } from "@stellar/stellar-sdk"
 import {
   buildExplorerUrl,
   fetchAssetEnrichment,
@@ -10,7 +10,6 @@ import {
   isValidTxHash,
   sanitizeEnrichmentRequest,
 } from "@/lib/explorer-links"
-import { StrKey } from "@stellar/stellar-sdk"
 import { getSecurityCounter, resetSecurityCounters } from "@/lib/security-counters"
 
 const TX_HASH = "a".repeat(64)
@@ -35,9 +34,9 @@ describe("phase-220 explorer links + enrichment", () => {
   })
 
   it("is flag gated", () => {
-    assert.equal(isExplorerEnabled(), true)
+    expect(isExplorerEnabled()).toBe(true)
     process.env.FEATURE_PHASE_220 = "0"
-    assert.equal(isExplorerEnabled(), false)
+    expect(isExplorerEnabled()).toBe(false)
   })
 
   it("builds correct testnet links for every entity", () => {
@@ -48,42 +47,38 @@ describe("phase-220 explorer links + enrichment", () => {
       ["asset", `PHASERLIQ-${ISSUER}`, "asset"],
     ] as const) {
       const link = buildExplorerUrl({ entity, id })
-      assert.equal(link.ok, true)
+      expect(link.ok).toBe(true)
       if (link.ok) {
-        assert.equal(link.url, `https://stellar.expert/explorer/testnet/${path}/${id}`)
-        assert.equal(isSafeExplorerUrl(link.url), true)
+        expect(link.url).toBe(`https://stellar.expert/explorer/testnet/${path}/${id}`)
+        expect(isSafeExplorerUrl(link.url)).toBe(true)
       }
     }
   })
 
   it("rejects invalid ids and unsafe URLs", () => {
-    assert.equal(isValidTxHash("not-a-hash"), false)
-    assert.equal(buildExplorerUrl({ entity: "tx", id: "xyz" }).ok, false)
-    assert.equal(isSafeExplorerUrl("https://evil.example/explorer/testnet/tx/x"), false)
-    assert.equal(isSafeExplorerUrl("http://stellar.expert/explorer/testnet/tx/x"), false)
-    assert.equal(isSafeExplorerUrl("javascript:alert(1)"), false)
+    expect(isValidTxHash("not-a-hash")).toBe(false)
+    expect(buildExplorerUrl({ entity: "tx", id: "xyz" }).ok).toBe(false)
+    expect(isSafeExplorerUrl("https://evil.example/explorer/testnet/tx/x")).toBe(false)
+    expect(isSafeExplorerUrl("http://stellar.expert/explorer/testnet/tx/x")).toBe(false)
+    expect(isSafeExplorerUrl("javascript:alert(1)")).toBe(false)
   })
 
   it("fences mainnet links unless explicitly allowed", () => {
-    assert.equal(isMainnetLinksAllowed(), false)
+    expect(isMainnetLinksAllowed()).toBe(false)
     const fenced = buildExplorerUrl({ entity: "tx", id: TX_HASH, network: "mainnet" })
-    assert.equal(fenced.ok, false)
-    assert.equal(getSecurityCounter("explorer_mainnet_link_blocked"), 1)
+    expect(fenced.ok).toBe(false)
+    expect(getSecurityCounter("explorer_mainnet_link_blocked")).toBe(1)
     process.env.PHASE_EXPLORER_ALLOW_MAINNET = "1"
     const allowed = buildExplorerUrl({ entity: "tx", id: TX_HASH, network: "mainnet" })
-    assert.equal(allowed.ok, true)
-    if (allowed.ok) assert.equal(allowed.url, `https://stellar.expert/explorer/public/tx/${TX_HASH}`)
+    expect(allowed.ok).toBe(true)
+    if (allowed.ok) expect(allowed.url).toBe(`https://stellar.expert/explorer/public/tx/${TX_HASH}`)
   })
 
   it("rejects any request field beyond kind and id (no PII)", () => {
-    const ok = sanitizeEnrichmentRequest({ kind: "tx", id: TX_HASH })
-    assert.equal(ok.ok, true)
-    assert.equal(
-      sanitizeEnrichmentRequest({ kind: "tx", id: TX_HASH, walletAddress: ISSUER }).ok,
-      false,
-    )
-    assert.equal(sanitizeEnrichmentRequest({ kind: "tx", id: TX_HASH, memo: "hi" }).ok, false)
-    assert.equal(sanitizeEnrichmentRequest({ kind: "profile", id: ISSUER }).ok, false)
+    expect(sanitizeEnrichmentRequest({ kind: "tx", id: TX_HASH }).ok).toBe(true)
+    expect(sanitizeEnrichmentRequest({ kind: "tx", id: TX_HASH, walletAddress: ISSUER }).ok).toBe(false)
+    expect(sanitizeEnrichmentRequest({ kind: "tx", id: TX_HASH, memo: "hi" }).ok).toBe(false)
+    expect(sanitizeEnrichmentRequest({ kind: "profile", id: ISSUER }).ok).toBe(false)
   })
 
   it("enriches a tx read-only and strips account/memo from the payload", async () => {
@@ -104,14 +99,14 @@ describe("phase-220 explorer links + enrichment", () => {
       )
     }) as typeof fetch
     const result = await fetchTxEnrichment(TX_HASH, { fetchImpl })
-    assert.equal(result.ok, true)
+    expect(result.ok).toBe(true)
     if (result.ok) {
-      assert.equal(result.data.ledger, 42)
-      assert.equal(result.data.hash, TX_HASH)
-      assert.ok(!JSON.stringify(result.data).includes("secret"))
+      expect(result.data.ledger).toBe(42)
+      expect(result.data.hash).toBe(TX_HASH)
+      expect(JSON.stringify(result.data)).not.toContain("secret")
     }
-    assert.equal(calls.length, 1)
-    assert.ok(calls[0]!.includes(`/transactions/${TX_HASH}`))
+    expect(calls.length).toBe(1)
+    expect(calls[0]).toContain(`/transactions/${TX_HASH}`)
   })
 
   it("degrades gracefully on timeout and when the flag is off", async () => {
@@ -120,26 +115,26 @@ describe("phase-220 explorer links + enrichment", () => {
         init?.signal?.addEventListener("abort", () => reject(new Error("aborted")))
       })) as typeof fetch
     const timedOut = await fetchTxEnrichment(TX_HASH, { fetchImpl: hanging, timeoutMs: 5 })
-    assert.equal(timedOut.ok, false)
-    if (!timedOut.ok) assert.equal(timedOut.reason, "timeout")
+    expect(timedOut.ok).toBe(false)
+    if (!timedOut.ok) expect(timedOut.reason).toBe("timeout")
 
     process.env.FEATURE_PHASE_220 = "0"
     const disabled = await fetchTxEnrichment(TX_HASH)
-    assert.equal(disabled.ok, false)
-    if (!disabled.ok) assert.equal(disabled.reason, "disabled")
+    expect(disabled.ok).toBe(false)
+    if (!disabled.ok) expect(disabled.reason).toBe("disabled")
   })
 
   it("enriches asset metadata without sending wallet data", async () => {
     const fetchImpl = (async (url: string) => {
-      assert.ok(url.includes("asset_code=PHASERLIQ"))
-      assert.ok(url.includes(`asset_issuer=${ISSUER}`))
+      expect(url).toContain("asset_code=PHASERLIQ")
+      expect(url).toContain(`asset_issuer=${ISSUER}`)
       return new Response(
         JSON.stringify({ _embedded: { records: [{ amount: "1000.0", num_accounts: 3 }] } }),
         { status: 200, headers: { "content-type": "application/json" } },
       )
     }) as typeof fetch
     const result = await fetchAssetEnrichment(`PHASERLIQ-${ISSUER}`, { fetchImpl })
-    assert.equal(result.ok, true)
-    if (result.ok) assert.equal(result.data.code, "PHASERLIQ")
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.code).toBe("PHASERLIQ")
   })
 })

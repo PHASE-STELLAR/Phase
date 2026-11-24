@@ -2,11 +2,25 @@ import { NextRequest, NextResponse } from "next/server"
 import { Keypair, TransactionBuilder } from "@stellar/stellar-sdk"
 import { z } from "zod"
 import { classicLiqIssuerForStellarToml } from "@/lib/classic-liq"
+import { isFeatureEnabled } from "@/lib/feature-flags"
+import {
+  consumeCustodianReleaseNonce,
+  emitCustodianReleaseAuditEvent,
+  finalizeCustodianTokenRelease,
+  isTokenCustodianReleased,
+  reserveCustodianTokenRelease,
+  rollbackCustodianTokenRelease,
+  verifyCustodianReleaseAuthorization,
+  type CustodianReleaseClaims,
+} from "@/lib/custodian-release"
 import {
   buildTransferPhaseNftTransaction,
+  fetchTokenCollectionIdForToken,
   fetchTokenOwnerAddress,
+  fetchUserPhaseArtifact,
   getGatewayHealthSnapshot,
   getTransactionResult,
+  isCustodianReleaseAuthorized,
   NETWORK_PASSPHRASE,
   phaseProtocolContractIdForServer,
   sendTransaction,
@@ -16,6 +30,11 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 const PHASE_PROTOCOL_CONTRACT = phaseProtocolContractIdForServer()
+
+// Best-effort in-process lock: prevents concurrent duplicate claims of the same
+// custodial token from racing each other into buildTransferPhaseNftTransaction
+// before the first transfer has landed on-chain.
+const inFlightCustodianReleases = new Set<number>()
 
 // phase-121: gateway health dashboard flag (rollback: unset NEXT_PUBLIC_FEATURE_PHASE_121)
 function isPhase121Enabled(): boolean {
@@ -31,6 +50,8 @@ const CustodianReleaseBodySchema = z.object({
 type Body = {
   tokenId?: number | string
   recipientWallet?: string
+  releaseClaims?: CustodianReleaseClaims
+  releaseSignature?: string
 }
 
 // phase-121: GET health dashboard (operators: which gateway is slow)
@@ -66,6 +87,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
  * phase-121: adds structured validation and gateway health telemetry (flag-gated).
  */
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  if (!isFeatureEnabled("phase-251")) {
+    return NextResponse.json(
+      { ok: false, error: "Custodian release is disabled (phase-251 flag off)." },
+      { status: 404 },
+    )
+  }
+
   let body: Body
   try {
     body = (await request.json()) as Body
@@ -93,6 +121,54 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const recipient = typeof body.recipientWallet === "string" ? body.recipientWallet.trim() : ""
   if (!recipient || !recipient.startsWith("G") || recipient.length !== 56) {
     return NextResponse.json({ ok: false, error: "Invalid recipientWallet." }, { status: 400 })
+  }
+
+  const id = Math.floor(tokenId)
+
+  // Require signed release authorization bound to tokenId, recipient, and nonce
+  const authHeader = request.headers.get("authorization") ?? ""
+  const bearerSig = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : undefined
+  const releaseSignature = typeof body.releaseSignature === "string" && body.releaseSignature.trim().length > 0
+    ? body.releaseSignature.trim()
+    : bearerSig
+
+  const authCheck = verifyCustodianReleaseAuthorization({
+    claims: body.releaseClaims,
+    signatureBase64: releaseSignature,
+    tokenId: id,
+    recipient,
+    contractId: PHASE_PROTOCOL_CONTRACT,
+  })
+  if (!authCheck.ok) {
+    emitCustodianReleaseAuditEvent("forged_authorization")
+    return NextResponse.json(
+      { ok: false, code: authCheck.code, error: authCheck.error },
+      { status: 401 },
+    )
+  }
+
+  // Prevent re-releasing already released tokens
+  if (isTokenCustodianReleased(id)) {
+    emitCustodianReleaseAuditEvent("already_released")
+    return NextResponse.json(
+      { ok: false, code: "ALREADY_RELEASED", error: "This token has already been released from custody." },
+      { status: 409 },
+    )
+  }
+
+  // Consume nonce atomically in SQLite to prevent replay
+  const nonceConsumed = consumeCustodianReleaseNonce(
+    authCheck.claims.nonce,
+    id,
+    recipient,
+    authCheck.claims.exp,
+  )
+  if (!nonceConsumed) {
+    emitCustodianReleaseAuditEvent("nonce_replay")
+    return NextResponse.json(
+      { ok: false, code: "NONCE_REPLAYED", error: "Release authorization nonce has already been used." },
+      { status: 409 },
+    )
   }
 
   const secret = process.env.CLASSIC_LIQ_ISSUER_SECRET?.trim()
@@ -135,6 +211,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   if (owner.toUpperCase() !== issuerG.toUpperCase()) {
+    emitCustodianReleaseAuditEvent("not_custodied")
     return NextResponse.json(
       {
         ok: false,
@@ -151,9 +228,42 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: false, error: "Recipient is already the on-chain owner." }, { status: 400 })
   }
 
+  // Multi-claim guard: custody alone is not authorization. Verify on-chain that
+  // this exact tokenId is the one this recipientWallet actually phased/settled
+  // (`get_user_phase`), so an arbitrary caller cannot release someone else's
+  // custodial token to their own wallet by guessing/enumerating tokenIds.
+  const collectionId = await fetchTokenCollectionIdForToken(id, recipient, PHASE_PROTOCOL_CONTRACT)
+  const recipientArtifact = await fetchUserPhaseArtifact(recipient, collectionId ?? 0)
+  if (!isCustodianReleaseAuthorized(recipientArtifact, id)) {
+    emitCustodianReleaseAuditEvent("artifact_unverified")
+    return NextResponse.json(
+      {
+        ok: false,
+        code: "TOKEN_NOT_ASSIGNED_TO_RECIPIENT",
+        error: "This token was not phased/settled by the requested recipient wallet; refusing to release custody.",
+      },
+      { status: 403 },
+    )
+  }
+
+  if (inFlightCustodianReleases.has(id)) {
+    return NextResponse.json(
+      { ok: false, code: "RELEASE_IN_PROGRESS", error: "A custodian release for this token is already in progress." },
+      { status: 409 },
+    )
+  }
+  if (!reserveCustodianTokenRelease(id, recipient, authCheck.claims.nonce)) {
+    emitCustodianReleaseAuditEvent("already_released")
+    return NextResponse.json(
+      { ok: false, code: "ALREADY_RELEASED", error: "This token has already been released from custody." },
+      { status: 409 },
+    )
+  }
+  inFlightCustodianReleases.add(id)
+
   try {
     const start = Date.now()
-    const xdr = await buildTransferPhaseNftTransaction(issuerG, recipient, Math.floor(tokenId), { contractId: PHASE_PROTOCOL_CONTRACT })
+    const xdr = await buildTransferPhaseNftTransaction(issuerG, recipient, id, { contractId: PHASE_PROTOCOL_CONTRACT })
     const tx = TransactionBuilder.fromXDR(xdr, NETWORK_PASSPHRASE)
     tx.sign(kp)
     const sendResult = await sendTransaction(tx.toXDR())
@@ -161,6 +271,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (hash) {
       await getTransactionResult(hash)
     }
+    finalizeCustodianTokenRelease(id, hash ?? null)
+    emitCustodianReleaseAuditEvent("released")
     const latencyMs = Date.now() - start
     // phase-121: record custodial flow latency for operator visibility (best-effort)
     if (isPhase121Enabled()) {
@@ -170,10 +282,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       } catch { /* ignore */ }
     }
     return NextResponse.json(
-      { ok: true, hash: hash ?? null, contractId: PHASE_PROTOCOL_CONTRACT, tokenId: Math.floor(tokenId) },
+      { ok: true, hash: hash ?? null, contractId: PHASE_PROTOCOL_CONTRACT, tokenId: id },
       { headers: isPhase121Enabled() ? { "X-Phase-Custodian-Latency-Ms": String(latencyMs) } : undefined },
     )
   } catch (e) {
+    rollbackCustodianTokenRelease(id)
+    emitCustodianReleaseAuditEvent("rpc_failure")
     const msg = e instanceof Error ? e.message : String(e)
     if (isPhase121Enabled()) {
       try {
@@ -182,5 +296,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       } catch { /* ignore */ }
     }
     return NextResponse.json({ ok: false, error: msg }, { status: 502 })
+  } finally {
+    inFlightCustodianReleases.delete(id)
   }
 }

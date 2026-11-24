@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils"
  */
 export function AlbedoSunsetBanner() {
   const { lang } = useLang()
-  const copy = pickCopy(lang).integrations.albedo
+  const copy = pickCopy(lang).gatedIntegrations.albedo
   const { openWalletPicker } = useWallet()
   const [mode, setMode] = useState<AlbedoSunsetMode | null>(null)
   const [albedoSelected, setAlbedoSelected] = useState(false)

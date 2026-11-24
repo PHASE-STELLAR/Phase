@@ -1,6 +1,8 @@
 "use client"
 
 import Link from "next/link"
+import { useToastQueue } from "@/hooks/use-toast-queue"
+import { IpfsDisplayImg } from "@/components/ipfs-display-img"
 
 type Attribute = {
   trait_type: string
@@ -16,6 +18,10 @@ type Props = {
   attributes: Attribute[]
   collectionId: number | null
   owner: string | null
+  contentHash?: string
+  duplicateOfTokenId?: number
+  // module #52 (phase-52): quest_expiry lifecycle state for this artifact's quest, when known.
+  questExpiryState?: "active" | "grace" | "expired"
 }
 
 const SCANLINES = {
@@ -56,9 +62,24 @@ export function CrtCollectionPreview({
   attributes,
   collectionId,
   owner,
+  contentHash,
+  duplicateOfTokenId,
+  questExpiryState,
 }: Props) {
   const collectionName = parseCollectionName(name)
   const creatorDisplay = owner ? truncateAddress(owner) : "UNKNOWN"
+  const toasts = useToastQueue()
+
+  if (duplicateOfTokenId) {
+    // Queued + deduped (priority warn) so duplicate notices never clobber
+    // concurrent preview navigation messages.
+    toasts.warn(`DUPLICATE_OF_#${duplicateOfTokenId}`, { title: `PHASE · ${collectionName}` })
+  }
+
+  if (questExpiryState === "grace") {
+    // module #52 (phase-52): grace-window notice, queued/deduped like the duplicate warning.
+    toasts.warn("QUEST_IN_GRACE_PERIOD", { title: `PHASE · ${collectionName}` })
+  }
 
   const displayAttrs = attributes.filter(
     (a) => !["token_id", "collection_id"].includes(a.trait_type),
@@ -116,11 +137,14 @@ export function CrtCollectionPreview({
             style={CARD_GLOW}
           >
             {image ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={image}
+              <IpfsDisplayImg
+                uri={image}
                 alt={name}
                 className="w-full h-full object-cover"
+                priority
+                width={720}
+                height={720}
+                sizes="(max-width: 768px) 90vw, 720px"
               />
             ) : (
               <div className="w-full h-full flex items-center justify-center bg-purple-950/10">
@@ -145,6 +169,15 @@ export function CrtCollectionPreview({
           <MetaRow label="CREATOR" value={creatorDisplay} />
           {collectionId != null && (
             <MetaRow label="COLLECTION_ID" value={String(collectionId)} />
+          )}
+          {contentHash && (
+            <MetaRow label="CONTENT_HASH" value={contentHash.slice(0, 16)} />
+          )}
+          {duplicateOfTokenId && (
+            <MetaRow label="DUPLICATE_OF" value={`#${duplicateOfTokenId}`} />
+          )}
+          {questExpiryState && (
+            <MetaRow label="QUEST_EXPIRY" value={questExpiryState.toUpperCase()} />
           )}
           {displayAttrs.map((attr) => (
             <MetaRow

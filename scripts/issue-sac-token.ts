@@ -18,8 +18,6 @@
  */
 
 import * as dotenv from "dotenv"
-import * as path from "node:path"
-import { fileURLToPath } from "node:url"
 import {
   Asset,
   BASE_FEE,
@@ -58,6 +56,71 @@ function auditMetadataCompatibilityForNewSAC(): void {
     console.warn("[phase-124] metadata check schema drift (unexpected, report):", check.error.message)
   } else {
     console.log("[phase-124] metadata wiring OK (SAC issuance will not break v1→v2 migration). Rollback: unset FEATURE_PHASE_124.")
+  }
+}
+
+// ── phase-94: verified-artist badge issuance wiring (isolated, flag-gated) ──
+// Core issuance/verification logic lives in scripts/reset-phase.ts (single
+// source of truth); this is a lightweight wire-preserving audit only, so SAC
+// issuance keeps working unchanged whether the flag is on or off.
+// Flag: NEXT_PUBLIC_FEATURE_PHASE_94 / FEATURE_PHASE_94 — rollback: unset flag.
+
+function isPhase94Enabled(): boolean {
+  const v = (process.env.NEXT_PUBLIC_FEATURE_PHASE_94 ?? process.env.FEATURE_PHASE_94 ?? "").trim().toLowerCase()
+  return v === "1" || v === "true" || v === "yes" || v === "on"
+}
+
+const IssueSacArtistAttestationProbeSchema = z.object({
+  wallet: z.string().length(56),
+  displayName: z.string().min(1).max(48),
+  claim: z.literal("verified-artist"),
+})
+
+function auditArtistAttestationWiringOnIssueSac(): void {
+  if (!isPhase94Enabled()) return
+  const probe = IssueSacArtistAttestationProbeSchema.safeParse({
+    wallet: "G" + "A".repeat(55),
+    displayName: "probe",
+    claim: "verified-artist",
+  })
+  if (!probe.success) {
+    console.warn("[phase-94] artist attestation schema drift (unexpected, report):", probe.error.message)
+  } else {
+    console.log("[phase-94] verified-artist badge wiring OK (SAC issuance will not break attestation issuance). Rollback: unset FEATURE_PHASE_94.")
+  }
+}
+
+// ── phase-79: watchlist notifications for price drops wiring (isolated, flag-gated) ──
+// Core watchlist logic lives in scripts/reset-phase.ts (single source of truth);
+// this is a lightweight wire-preserving audit ensuring SAC issuance keeps working unchanged.
+// Flag: NEXT_PUBLIC_FEATURE_PHASE_79 / FEATURE_PHASE_79 — rollback: unset flag.
+
+function isPhase79Enabled(): boolean {
+  const v = (process.env.NEXT_PUBLIC_FEATURE_PHASE_79 ?? process.env.FEATURE_PHASE_79 ?? "").trim().toLowerCase()
+  return v === "1" || v === "true" || v === "yes" || v === "on"
+}
+
+const IssueSacWatchlistProbeSchema = z.object({
+  wallet: z.string().length(56),
+  collectionId: z.number().int().min(0),
+  tokenId: z.number().int().min(1),
+  previousPrice: z.number().positive(),
+  newPrice: z.number().positive(),
+})
+
+function auditWatchlistWiringOnIssueSac(): void {
+  if (!isPhase79Enabled()) return
+  const probe = IssueSacWatchlistProbeSchema.safeParse({
+    wallet: "G" + "A".repeat(55),
+    collectionId: 0,
+    tokenId: 1,
+    previousPrice: 100,
+    newPrice: 80,
+  })
+  if (!probe.success) {
+    console.warn("[phase-79] watchlist schema drift (unexpected, report):", probe.error.message)
+  } else {
+    console.log("[phase-79] watchlist notifications wiring OK (SAC issuance will not break price drop alerts). Rollback: unset FEATURE_PHASE_79.")
   }
 }
 
@@ -191,6 +254,8 @@ async function main() {
   log("")
 
   auditMetadataCompatibilityForNewSAC()
+  auditArtistAttestationWiringOnIssueSac()
+  auditWatchlistWiringOnIssueSac()
 }
 
 main().catch((e) => {

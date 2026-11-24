@@ -5,6 +5,9 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { useLang } from "@/components/lang-context"
 import { useWallet } from "@/components/wallet-provider"
 import { getTokenBalance, formatLiq } from "@/lib/phase-protocol"
+import { QrCodeDialog } from "./qr-code-dialog"
+import { QrScannerModal } from "./qr-scanner-modal"
+import type { ParsedQrPayload } from "@/lib/qr-code"
 
 // ── Types mirroring /api/faucet response ─────────────────────────────────────
 
@@ -32,6 +35,7 @@ type FaucetStatus = {
   dailyWindowMs: number
   questOverview?: { completed: number; total: number; progressPct: number }
   rewards?: Partial<Record<RewardId, RewardStatus>>
+  referral?: { code: string | null; totalReferred: number; remainingSlots: number }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -139,6 +143,9 @@ export function FaucetModal() {
   const [balance, setBalance] = useState<string | null>(null)
   const [claimingReward, setClaimingReward] = useState<RewardId | null>(null)
   const [now, setNow] = useState(() => Date.now())
+  const [qrShareOpen, setQrShareOpen] = useState(false)
+  const [qrScanOpen, setQrScanOpen] = useState(false)
+  const [scannedReferralCode, setScannedReferralCode] = useState<string | null>(null)
 
   // Listen for global open event
   useEffect(() => {
@@ -183,10 +190,14 @@ export function FaucetModal() {
     if (!address || claimingReward) return
     setClaimingReward(rewardId)
     try {
+      const payload: Record<string, any> = { walletAddress: address, reward: rewardId }
+      if (rewardId === "genesis" && scannedReferralCode) {
+        payload.referralCode = scannedReferralCode
+      }
       const res = await fetch("/api/faucet", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ walletAddress: address, reward: rewardId }),
+        body: JSON.stringify(payload),
       })
       if (res.ok || res.status === 202) {
         // refresh after claim
@@ -308,6 +319,50 @@ export function FaucetModal() {
               </div>
             </div>
 
+            {/* ── Referral & QR Share ── */}
+            {status?.referral && (
+              <div className="px-6 py-4 bg-violet-950/10">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="font-mono text-[8px] uppercase tracking-[0.22em] text-violet-400">
+                    REFERRAL QUEST (PHASE-132 / QR-166)
+                  </p>
+                  <span className="font-mono text-[8px] text-zinc-500">
+                    {status.referral.totalReferred} REFERRED · {status.referral.remainingSlots} SLOTS
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-mono text-[10px] text-zinc-300 truncate">
+                      Code: <strong className="text-violet-300 font-mono">{status.referral.code || "—"}</strong>
+                    </p>
+                    {scannedReferralCode && (
+                      <p className="font-mono text-[9px] text-emerald-400">
+                        Friend Code Applied: {scannedReferralCode}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    {status.referral.code && (
+                      <button
+                        type="button"
+                        onClick={() => setQrShareOpen(true)}
+                        className="px-2.5 py-1 font-mono text-[9px] uppercase tracking-wider border border-violet-700/40 bg-violet-950/30 text-violet-300 hover:border-violet-500 rounded-none transition-colors"
+                      >
+                        [ SHARE QR ]
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setQrScanOpen(true)}
+                      className="px-2.5 py-1 font-mono text-[9px] uppercase tracking-wider border border-zinc-700/60 bg-zinc-900 text-zinc-300 hover:border-violet-500 rounded-none transition-colors"
+                    >
+                      [ SCAN QR ]
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* ── Quests ── */}
             <div className="px-6 py-4">
               <div className="flex items-center justify-between mb-3">
@@ -379,6 +434,26 @@ export function FaucetModal() {
 
           </div>
         )}
+
+        <QrCodeDialog
+          open={qrShareOpen}
+          onOpenChange={setQrShareOpen}
+          mode="referral"
+          referralCode={status?.referral?.code}
+        />
+
+        <QrScannerModal
+          open={qrScanOpen}
+          onOpenChange={setQrScanOpen}
+          title="◈ SCAN REFERRAL OR CLAIM QR"
+          onScan={(result: ParsedQrPayload) => {
+            if (result.type === "referral_code") {
+              setScannedReferralCode(result.code)
+            } else if (result.type === "raw" && result.text) {
+              setScannedReferralCode(result.text)
+            }
+          }}
+        />
       </DialogContent>
     </Dialog>
   )

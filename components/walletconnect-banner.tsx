@@ -19,7 +19,7 @@ import {
  */
 export function WalletConnectBanner() {
   const { lang } = useLang()
-  const copy = pickCopy(lang).integrations.walletconnect
+  const copy = pickCopy(lang).gatedIntegrations.walletconnect
   const { isWalletConnect, address, connect, refresh } = useWallet()
   const [sessionMeta, setSessionMeta] = useState<WcSessionMetadata | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
@@ -59,9 +59,7 @@ export function WalletConnectBanner() {
           <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" aria-hidden />
           <span className="font-mono font-semibold tracking-wide text-indigo-300">{copy.title}</span>
           <span className="truncate text-zinc-400">
-            {chainMismatch
-              ? copy.chainMismatch
-              : copy.connectedVia.replace("{peer}", peerName)}
+            {chainMismatch ? copy.chainMismatch : copy.connectedVia.replace("{peer}", peerName)}
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-2">

@@ -1,0 +1,46 @@
+{
+  "app": {
+    "name": "PHASE",
+    "tagline": "Decentralized NFT Marketplace on Stellar",
+    "loading": "Loading...",
+    "error": "An error occurred",
+    "retry": "Retry",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "close": "Close",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit"
+  },
+  "wallet": {
+    "connect": "Connect Wallet",
+    "disconnect": "Disconnect",
+    "connecting": "Connecting...",
+    "connected": "Connected",
+    "notConnected": "Not Connected",
+    "selectWallet": "Select Wallet"
+  },
+  "navigation": {
+    "home": "Home",
+    "explore": "Explore",
+    "forge": "Forge",
+    "profile": "Profile",
+    "marketplace": "Marketplace",
+    "signals": "Signals"
+  },
+  "errors": {
+    "networkError": "Network error. Please check your connection.",
+    "unknownError": "An unknown error occurred",
+    "walletRequired": "Please connect your wallet to continue"
+  },
+  "achievements": {
+    "timeline": {
+      "title": "Achievement Timeline",
+      "empty": "No achievements unlocked yet",
+      "loadMore": "Load more",
+      "closedCount": "{{count}} achievement unlocked",
+      "closedCount_plural": "{{count}} achievements unlocked",
+      "disabled": "Timeline view is not enabled"
+    }
+  }
+}

@@ -1,5 +1,4 @@
-import { beforeEach, describe, it } from "node:test"
-import * as assert from "node:assert/strict"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   DEFAULT_WC_RELAY_URL,
   FALLBACK_WC_RELAY_URL,
@@ -27,16 +26,13 @@ import { getSecurityCounter, resetSecurityCounters } from "@/lib/security-counte
 
 function installWindow(): Map<string, string> {
   const store = new Map<string, string>()
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: {
-      localStorage: {
-        getItem: (k: string) => store.get(k) ?? null,
-        setItem: (k: string, v: string) => void store.set(k, v),
-        removeItem: (k: string) => void store.delete(k),
-      },
-      location: { pathname: "/chamber", search: "?id=7", hash: "#proof" },
+  vi.stubGlobal("window", {
+    localStorage: {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
     },
+    location: { pathname: "/chamber", search: "?id=7", hash: "#proof" },
   })
   return store
 }
@@ -51,19 +47,24 @@ describe("phase-167 WalletConnect resilience", () => {
     clearWcSessionMetadata()
   })
 
+  afterEach(() => {
+    if (originalFlag === undefined) delete process.env.FEATURE_PHASE_167
+    else process.env.FEATURE_PHASE_167 = originalFlag
+    vi.unstubAllGlobals()
+  })
+
   it("is flag gated and documents rollback", () => {
-    assert.equal(isWcResilienceEnabled(), true)
-    assert.match(wcResilienceRollbackNote(), /phase-167/)
+    expect(isWcResilienceEnabled()).toBe(true)
+    expect(wcResilienceRollbackNote()).toContain("phase-167")
     delete process.env.FEATURE_PHASE_167
-    assert.equal(isWcResilienceEnabled(), false)
+    expect(isWcResilienceEnabled()).toBe(false)
     process.env.FEATURE_PHASE_167 = "1"
   })
 
   it("resolves relays and chains", () => {
-    assert.equal(getRelay(), DEFAULT_WC_RELAY_URL)
-    assert.deepEqual(resolveRelayUrls({}), [DEFAULT_WC_RELAY_URL, FALLBACK_WC_RELAY_URL])
-    assert.equal(resolveAllowedChains("testnet")[0], STELLAR_CHAIN_TESTNET)
-    assert.equal(resolveAllowedChains("mainnet")[0], STELLAR_CHAIN_PUBNET)
+    expect(resolveRelayUrls({})).toEqual([DEFAULT_WC_RELAY_URL, FALLBACK_WC_RELAY_URL])
+    expect(resolveAllowedChains("testnet")[0]).toBe(STELLAR_CHAIN_TESTNET)
+    expect(resolveAllowedChains("mainnet")[0]).toBe(STELLAR_CHAIN_PUBNET)
   })
 
   it("fails over across relays and records the closed counter", async () => {
@@ -76,20 +77,20 @@ describe("phase-167 WalletConnect resilience", () => {
       },
       { relays: resolveRelayUrls({}) },
     )
-    assert.equal(res.ok, true)
+    expect(res.ok).toBe(true)
     if (res.ok) {
-      assert.equal(res.value, "connected")
-      assert.equal(res.failovers, 1)
-      assert.equal(res.relayUrl, FALLBACK_WC_RELAY_URL)
+      expect(res.value).toBe("connected")
+      expect(res.failovers).toBe(1)
+      expect(res.relayUrl).toBe(FALLBACK_WC_RELAY_URL)
     }
-    assert.equal(attempts.length, 2)
-    assert.equal(getSecurityCounter("relay_failover"), 1)
+    expect(attempts.length).toBe(2)
+    expect(getSecurityCounter("relay_failover")).toBe(1)
   })
 
   it("rejects a wrong-chain session before it is used", () => {
-    assert.equal(validateWcChain(STELLAR_CHAIN_TESTNET, "testnet").valid, true)
-    assert.equal(validateWcChain(STELLAR_CHAIN_PUBNET, "testnet").valid, false)
-    assert.equal(getSecurityCounter("wc_chain_mismatch_blocked"), 1)
+    expect(validateWcChain(STELLAR_CHAIN_TESTNET, "testnet").valid).toBe(true)
+    expect(validateWcChain(STELLAR_CHAIN_PUBNET, "testnet").valid).toBe(false)
+    expect(getSecurityCounter("wc_chain_mismatch_blocked")).toBe(1)
   })
 
   it("restores only valid persisted sessions and counts session_restored", () => {
@@ -102,11 +103,11 @@ describe("phase-167 WalletConnect resilience", () => {
       connectedAt: now,
       lastActiveAt: now,
     }
-    assert.equal(restoreWcSession({ metadata: meta, now }).restored, true)
-    assert.equal(getSecurityCounter("session_restored"), 1)
-    assert.equal(restoreWcSession({ metadata: { ...meta, chain: STELLAR_CHAIN_PUBNET }, now }).restored, false)
-    assert.equal(restoreWcSession({ metadata: { ...meta, expiry: 1 }, now }).restored, false)
-    assert.equal(getSecurityCounter("session_restored"), 1)
+    expect(restoreWcSession({ metadata: meta, now }).restored).toBe(true)
+    expect(getSecurityCounter("session_restored")).toBe(1)
+    expect(restoreWcSession({ metadata: { ...meta, chain: STELLAR_CHAIN_PUBNET }, now }).restored).toBe(false)
+    expect(restoreWcSession({ metadata: { ...meta, expiry: 1 }, now }).restored).toBe(false)
+    expect(getSecurityCounter("session_restored")).toBe(1)
   })
 
   it("persists session metadata and computes expiry in seconds or ms", () => {
@@ -119,32 +120,28 @@ describe("phase-167 WalletConnect resilience", () => {
       lastActiveAt: now,
     }
     saveWcSessionMetadata(meta)
-    assert.equal(getWcSessionMetadata()?.topic, "t")
-    assert.equal(isWcSessionExpired(meta), false)
-    assert.equal(isWcSessionExpired({ ...meta, expiry: now - 1 }), true)
+    expect(getWcSessionMetadata()?.topic).toBe("t")
+    expect(isWcSessionExpired(meta)).toBe(false)
+    expect(isWcSessionExpired({ ...meta, expiry: now - 1 })).toBe(true)
     clearWcSessionMetadata()
-    assert.equal(getWcSessionMetadata(), null)
+    expect(getWcSessionMetadata()).toBeNull()
   })
 
   it("returns deep links to an internal route only", () => {
     recordMobileDeepLinkReturn()
-    assert.equal(consumeDeepLinkReturn(), "/chamber?id=7#proof")
-    assert.equal(consumeDeepLinkReturn(), null)
-    assert.equal(normalizeDeepLinkReturnPath("https://evil.example/steal"), null)
-    assert.equal(normalizeDeepLinkReturnPath("//evil.example"), null)
-    assert.equal(getSecurityCounter("deep_link_return"), 1)
+    expect(consumeDeepLinkReturn()).toBe("/chamber?id=7#proof")
+    expect(consumeDeepLinkReturn()).toBeNull()
+    expect(normalizeDeepLinkReturnPath("https://evil.example/steal")).toBeNull()
+    expect(normalizeDeepLinkReturnPath("//evil.example")).toBeNull()
+    expect(getSecurityCounter("deep_link_return")).toBe(1)
   })
 
   it("builds mobile deep links and bounded backoff", () => {
-    assert.equal(buildMobileWalletDeepLink("LOBSTR Mobile"), "lobstr://wc")
-    assert.equal(buildMobileWalletDeepLink("xBull Wallet"), "xbull://wc")
-    assert.equal(buildMobileWalletDeepLink("Unknown"), null)
-    assert.equal(buildMobileWalletDeepLink("Custom", "https://custom.app/wc"), "https://custom.app/wc")
-    assert.ok(calculateReconnectBackoff(1) >= 1000)
-    assert.ok(calculateReconnectBackoff(20) <= 35000)
+    expect(buildMobileWalletDeepLink("LOBSTR Mobile")).toBe("lobstr://wc")
+    expect(buildMobileWalletDeepLink("xBull Wallet")).toBe("xbull://wc")
+    expect(buildMobileWalletDeepLink("Unknown")).toBeNull()
+    expect(buildMobileWalletDeepLink("Custom", "https://custom.app/wc")).toBe("https://custom.app/wc")
+    expect(calculateReconnectBackoff(1)).toBeGreaterThanOrEqual(1000)
+    expect(calculateReconnectBackoff(20)).toBeLessThanOrEqual(35000)
   })
 })
-
-function getRelay(): string {
-  return resolveRelayUrls({ NEXT_PUBLIC_WALLETCONNECT_RELAY_URL: DEFAULT_WC_RELAY_URL })[0]!
-}

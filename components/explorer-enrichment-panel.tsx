@@ -27,7 +27,7 @@ type State =
  */
 export function ExplorerEnrichmentPanel({ hash, compact = false }: Props) {
   const { lang } = useLang()
-  const copy = pickCopy(lang).integrations.explorer
+  const copy = pickCopy(lang).gatedIntegrations.explorer
   const [enabled, setEnabled] = useState(false)
   const [state, setState] = useState<State>({ phase: "loading" })
   const [href, setHref] = useState<string | null>(null)

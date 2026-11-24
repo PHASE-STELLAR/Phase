@@ -1,7 +1,8 @@
-> **Integration note (this branch):** the sunset program is gated by `phase-221`
-> (`NEXT_PUBLIC_FEATURE_PHASE_221` / `FEATURE_PHASE_221`) here. The upstream spike
-> draft used `phase-170`, a flag already assigned to the log pipeline; that
-> collision is intentionally not carried over.
+> **Integration note (this branch):** this implementation is gated by
+> `phase-221` (`NEXT_PUBLIC_FEATURE_PHASE_221` / `FEATURE_PHASE_221`).
+> The upstream spike draft used `phase-170`, a flag already assigned to the
+> structured log pipeline; that collision is not carried over.
+> The helper is exported as `isAlbedoSunset221Enabled()`.
 
 # Spike 626: Albedo Full Retirement-or-Parity Plan with Flagged Sunset
 

@@ -6,7 +6,11 @@ import { getFollowCounts } from "@/lib/follow-store"
 import { getSignals } from "@/lib/signal-store"
 import { getAchievements } from "@/lib/achievement-store"
 import { SocialChipsPublic } from "./social-chips-public"
-import { FollowButton } from "./follow-button"
+import { FollowButton, FollowSuggestions } from "./follow-button"
+import { preparePhaseStreaming } from "@/lib/phase-streaming"
+import { IpfsDisplayImg } from "@/components/ipfs-display-img"
+
+export const dynamic = "force-dynamic"
 
 type Props = {
   params: Promise<{ wallet: string }>
@@ -73,6 +77,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 export default async function ProfilePage({ params }: Props) {
+  preparePhaseStreaming()
   const { wallet } = await params
 
   if (!wallet || wallet.length < 10) notFound()
@@ -127,6 +132,8 @@ export default async function ProfilePage({ params }: Props) {
           )}
         </section>
 
+        <FollowSuggestions profileWallet={wallet} />
+
         {/* Recent activity */}
         {(recentSignals.length > 0 || nfts.length > 0) && (
           <section className="space-y-3">
@@ -157,10 +164,7 @@ export default async function ProfilePage({ params }: Props) {
                   <span className="font-mono text-[8px] uppercase tracking-widest text-[#0F6E56] shrink-0">
                     MINT
                   </span>
-                  {nft.image && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={nft.image} alt={nft.name} className="h-6 w-6 object-cover" />
-                  )}
+                  {nft.image && <IpfsDisplayImg uri={nft.image} alt={nft.name} className="h-6 w-6 object-cover" width={24} height={24} sizes="24px" />}
                   <p className="font-mono text-[10px] text-zinc-300 truncate">{nft.name}</p>
                 </div>
               ))}
@@ -214,11 +218,13 @@ export default async function ProfilePage({ params }: Props) {
                   title={nft.name}
                 >
                   {nft.image ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={nft.image}
+                    <IpfsDisplayImg
+                      uri={nft.image}
                       alt={nft.name}
                       className="h-full w-full object-cover"
+                      width={640}
+                      height={640}
+                      sizes="(max-width: 768px) 33vw, 25vw"
                     />
                   ) : (
                     <div className="h-full w-full flex items-center justify-center">

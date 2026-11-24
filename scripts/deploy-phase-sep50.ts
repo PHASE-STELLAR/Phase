@@ -13,6 +13,7 @@
  */
 
 import { config } from "dotenv"
+import { createHash } from "crypto"
 import { execFileSync } from "child_process"
 import { readFileSync, writeFileSync, existsSync } from "fs"
 import { resolve, dirname } from "path"
@@ -51,6 +52,10 @@ function main() {
     console.error("Build + optimize first (see script header).")
     process.exit(1)
   }
+
+  // Spike 608 (phase-175): log canonical target and WASM SHA-256 digest before staging/testnet deploy
+  const wasmDigest = createHash("sha256").update(readFileSync(wasm)).digest("hex")
+  console.log(`[deploy-phase-sep50] target=wasm32-unknown-unknown sha256=${wasmDigest}`)
 
   const admin = Keypair.fromSecret(secret).publicKey()
   const env = { ...process.env, STELLAR_ACCOUNT: secret }

@@ -223,7 +223,7 @@ export async function withRelayFailover<T>(
     try {
       const value = await operation(relayUrl)
       return { ok: true, value, relayUrl, failovers }
-    } catch (e) {
+    } catch {
       failovers++
       recordSecurityCounter("relay_failover")
     }

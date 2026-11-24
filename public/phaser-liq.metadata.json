@@ -6,7 +6,7 @@
   "contract": "CCKTFAHWI3MREYMDBFF4VB5ZPIIRVZH6LYYYYW34F6NZU54N2C3MHWBZ",
   "network": "testnet",
   "updatedAt": "2026-04-04T15:49:00.000Z",
-  "description": "PHASELQ testnet liquidity token (Soroban SAC). IPFS fallback: phase-123 enabled gateways with 4s timeout; legacy 8s fallback when flag off. Rollback: unset NEXT_PUBLIC_FEATURE_PHASE_123.",
+  "description": "PHASELQ testnet liquidity token (Soroban SAC). IPFS fallback: phase-123 enabled gateways with 4s timeout; gas preview: phase-78 enabled. Rollback: unset NEXT_PUBLIC_FEATURE_PHASE_78.",
   "attributes": [
     { "trait_type": "network", "value": "stellar-testnet" },
     { "trait_type": "standard", "value": "SEP-41" },

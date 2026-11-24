@@ -196,3 +196,5 @@ export const IpfsPathSchema = z.string().min(4).max(512).regex(/^[A-Za-z0-9._\/-
 export function isIpfsFallbackEnabled(): boolean {
   return isFeatureEnabled("phase-123")
 }
+
+export { ipfsClient, IpfsClient } from "@/lib/ipfs-client"

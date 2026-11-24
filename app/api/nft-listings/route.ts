@@ -4,6 +4,7 @@ import path from "path"
 import { NextRequest, NextResponse } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
+import { incSecurityCounter } from "@/lib/security-counters"
 
 type Listing = {
   id: string
@@ -13,6 +14,12 @@ type Listing = {
   priceStroops: string
   createdAt: string
   active: boolean
+}
+
+type BulkListingItemResult = {
+  tokenId: number
+  success: boolean
+  error?: string
 }
 
 function dataPath() {
@@ -41,12 +48,81 @@ function validG(addr: string) {
 }
 
 /** Listados públicos de venta (testnet / demo). El pago PHASELQ es P2P; la transferencia NFT es on-chain vía `transfer_phase_nft`. */
-export async function GET() {
-  const listings = (await readListings()).filter((l) => l.active)
-  return NextResponse.json({ listings })
+export async function GET(req: NextRequest) {
+  const limit = Math.min(100, Math.max(1, Number(req.nextUrl.searchParams.get("limit") ?? 50) || 50))
+  const cursor = Math.max(0, Number(req.nextUrl.searchParams.get("cursor") ?? 0) || 0)
+  const active = (await readListings()).filter((l) => l.active)
+  const listings = active.slice(cursor, cursor + limit)
+  return NextResponse.json({ listings, nextCursor: cursor + listings.length < active.length ? cursor + listings.length : null })
 }
 
 export async function POST(req: NextRequest) {
+  const contentType = req.headers.get("content-type")?.toLowerCase() ?? ""
+  if (contentType.includes("application/x-ndjson")) {
+    const raw = await req.text()
+    if (raw.length > 20 * 1024 * 1024) {
+      incSecurityCounter("bulk_listing_too_large")
+      return NextResponse.json({ ok: false, error: "NDJSON body too large" }, { status: 413 })
+    }
+    const rows = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    if (rows.length === 0 || rows.length > 100_000) {
+      incSecurityCounter("bulk_listing_invalid_count")
+      return NextResponse.json({ ok: false, error: "NDJSON must contain 1-100000 listings" }, { status: 400 })
+    }
+    let parsed: Array<Partial<{ seller: string; collectionId: number; tokenId: number; priceStroops: string }>>
+    try {
+      parsed = rows.map((line) => JSON.parse(line))
+    } catch {
+      incSecurityCounter("bulk_listing_parse_error")
+      return NextResponse.json({ ok: false, error: "Invalid NDJSON" }, { status: 400 })
+    }
+
+    const results: BulkListingItemResult[] = []
+    for (const item of parsed) {
+      const seller = typeof item.seller === "string" ? item.seller.trim() : ""
+      const collectionId = Number(item.collectionId)
+      const tokenId = Number(item.tokenId)
+      const priceStroops = String(item.priceStroops ?? "").trim() || "0"
+
+      let error: string | undefined
+      if (!validG(seller)) {
+        error = "Invalid seller address"
+      } else if (!Number.isInteger(collectionId) || collectionId < 0) {
+        error = "Invalid collectionId"
+      } else if (!Number.isInteger(tokenId) || tokenId < 1) {
+        error = "Invalid tokenId"
+      } else if (!/^\d+$/.test(priceStroops)) {
+        error = "Invalid priceStroops"
+      }
+
+      results.push({ tokenId, success: !error, error })
+    }
+
+    const failedCount = results.filter((r) => !r.success).length
+    if (failedCount > 0) {
+      incSecurityCounter("bulk_listing_validation_failed")
+      return NextResponse.json({ ok: false, error: "Batch validation failed", results }, { status: 400 })
+    }
+
+    const all = await readListings()
+    const created: Listing[] = []
+    for (const item of parsed) {
+      const seller = (item.seller as string).trim()
+      const collectionId = Number(item.collectionId)
+      const tokenId = Number(item.tokenId)
+      const priceStroops = String(item.priceStroops ?? "").trim() || "0"
+
+      for (let i = all.length - 1; i >= 0; i--) {
+        if (all[i]!.active && all[i]!.seller === seller && all[i]!.tokenId === tokenId && all[i]!.collectionId === collectionId) {
+          all[i]!.active = false
+        }
+      }
+      created.push({ id: randomUUID(), seller, collectionId, tokenId, priceStroops, createdAt: new Date().toISOString(), active: true })
+    }
+    await writeListings([...all, ...created])
+    incSecurityCounter("bulk_listing_accepted")
+    return NextResponse.json({ ok: true, accepted: created.length, results }, { status: 202 })
+  }
   const body = (await req.json().catch(() => null)) as Partial<{
     seller: string
     collectionId: number
@@ -103,3 +179,7 @@ export async function POST(req: NextRequest) {
   await writeListings([...deactivated, listing])
   return NextResponse.json({ ok: true, listing })
 }
+
+// ── Spike 673 (flag-gated): edition ordering lives in `/api/market?sort=edition_asc`.
+// This legacy JSON store stays uneditioned (no migration); indexers join token_id →
+// edition via `/api/metadata/[id]` attributes when phase-editions is on. No behavior change.

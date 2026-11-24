@@ -1,0 +1,195 @@
+name: Deploy preview contract (phase-228)
+
+# Runs on every PR when phase-228 is enabled.  Deploys a fresh phase-protocol
+# contract to testnet, then injects NEXT_PUBLIC_PHASE_PREVIEW_CONTRACT_ID into
+# the Vercel preview environment for this PR so the preview deployment picks up
+# the isolated contract.
+#
+# Rollback: unset NEXT_PUBLIC_FEATURE_PHASE_228 / FEATURE_PHASE_228 or set to
+# "0"/"false" in the Vercel environment and redeploy.  Per-preview contracts
+# on testnet persist until the teardown job below removes them (or until they
+# are manually reset with scripts/reset-phase.ts against the preview network).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: deploy-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview-contract:
+    name: Deploy per-PR testnet contract
+    runs-on: ubuntu-latest
+    if: vars.PHASE_228_ENABLED == '1'
+    environment: preview
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      contract_id: ${{ steps.deploy.outputs.contract_id }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1482605baf623e32c63c0a08c08fd64b7a72dd25 # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@82a92a6e3c910e37d733b60908f8b9847b1d4f20 # v2.7.0
+        with:
+          workspaces: contracts/phase-protocol
+
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli --version 23.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480e578c10c5467531ea5f2 # v4.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Install scripts dependencies
+        working-directory: scripts
+        run: npm ci
+
+      - name: Build and optimize phase-protocol WASM
+        run: |
+          cd contracts/phase-protocol
+          cargo build --target wasm32-unknown-unknown --release
+          stellar contract optimize \
+            --wasm target/wasm32-unknown-unknown/release/phase_protocol.wasm \
+            --wasm-out target/wasm32-unknown-unknown/release/phase_protocol.optimized.wasm
+
+      - name: Deploy preview contract to testnet
+        id: deploy
+        working-directory: scripts
+        run: |
+          OUTPUT=$(npx tsx deploy-preview-contract.ts)
+          echo "$OUTPUT"
+          CONTRACT_ID=$(echo "$OUTPUT" | grep '^CONTRACT_ID=' | cut -d= -f2)
+          echo "contract_id=$CONTRACT_ID" >> "$GITHUB_OUTPUT"
+        env:
+          PREVIEW_ADMIN_SECRET_KEY: ${{ secrets.PREVIEW_ADMIN_SECRET_KEY }}
+          NEXT_PUBLIC_PHASER_TOKEN_ID: ${{ vars.NEXT_PUBLIC_PHASER_TOKEN_ID }}
+          NEXT_PUBLIC_CLASSIC_LIQ_ISSUER: ${{ vars.NEXT_PUBLIC_CLASSIC_LIQ_ISSUER }}
+          STELLAR_RPC_URL: ${{ vars.STELLAR_RPC_URL }}
+          STELLAR_NETWORK_PASSPHRASE: ${{ vars.STELLAR_NETWORK_PASSPHRASE }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GIT_BRANCH: ${{ github.head_ref }}
+
+      - name: Fail if no contract ID was produced
+        if: steps.deploy.outputs.contract_id == ''
+        run: |
+          echo "deploy-preview-contract produced no contract ID — aborting."
+          exit 1
+
+      - name: Inject contract ID into Vercel preview env
+        run: |
+          curl -sf -X POST \
+            "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/env" \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"key\": \"NEXT_PUBLIC_PHASE_PREVIEW_CONTRACT_ID\",
+              \"value\": \"$CONTRACT_ID\",
+              \"type\": \"plain\",
+              \"target\": [\"preview\"],
+              \"gitBranch\": \"$GIT_BRANCH\"
+            }"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          CONTRACT_ID: ${{ steps.deploy.outputs.contract_id }}
+          GIT_BRANCH: ${{ github.head_ref }}
+
+      - name: Seed branch database
+        working-directory: scripts
+        run: npx tsx seed-preview-db.ts
+        env:
+          PREVIEW_ADMIN_SECRET_KEY: ${{ secrets.PREVIEW_ADMIN_SECRET_KEY }}
+          NEXT_PUBLIC_PHASE_PREVIEW_CONTRACT_ID: ${{ steps.deploy.outputs.contract_id }}
+          STELLAR_RPC_URL: ${{ vars.STELLAR_RPC_URL }}
+          STELLAR_NETWORK_PASSPHRASE: ${{ vars.STELLAR_NETWORK_PASSPHRASE }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GIT_BRANCH: ${{ github.head_ref }}
+        continue-on-error: true
+
+      - name: Comment contract ID on PR
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const contractId = '${{ steps.deploy.outputs.contract_id }}';
+            const body = [
+              '### Preview contract deployed (phase-228)',
+              '',
+              `**Contract ID:** \`${contractId}\``,
+              '',
+              'This contract is isolated to this PR. It will be torn down when the PR is closed.',
+              'See [`docs/runbooks/PREVIEW_TEARDOWN.md`](docs/runbooks/PREVIEW_TEARDOWN.md) for details.',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+  teardown-preview-contract:
+    name: Tear down per-PR testnet contract
+    runs-on: ubuntu-latest
+    if: github.event.action == 'closed' && vars.PHASE_228_ENABLED == '1'
+    environment: preview
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480e578c10c5467531ea5f2 # v4.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Install scripts dependencies
+        working-directory: scripts
+        run: npm ci
+
+      - name: Remove preview env override from Vercel
+        run: |
+          # List env vars for this branch and delete NEXT_PUBLIC_PHASE_PREVIEW_CONTRACT_ID
+          ENVS=$(curl -sf \
+            "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/env?gitBranch=$GIT_BRANCH" \
+            -H "Authorization: Bearer $VERCEL_TOKEN")
+          ENV_ID=$(echo "$ENVS" | node -e "
+            const d=require('fs').readFileSync('/dev/stdin','utf8');
+            const env=JSON.parse(d).envs?.find(e=>e.key==='NEXT_PUBLIC_PHASE_PREVIEW_CONTRACT_ID');
+            if(env) process.stdout.write(env.id);
+          ")
+          if [ -n "$ENV_ID" ]; then
+            curl -sf -X DELETE \
+              "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/env/$ENV_ID" \
+              -H "Authorization: Bearer $VERCEL_TOKEN"
+            echo "Removed Vercel env override $ENV_ID"
+          else
+            echo "No env override found for this branch — nothing to remove."
+          fi
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          GIT_BRANCH: ${{ github.head_ref }}
+        continue-on-error: true

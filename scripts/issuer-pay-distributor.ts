@@ -169,6 +169,18 @@ async function main() {
   console.log("Hash:", result.hash)
   console.log(`${base}/transactions/${result.hash}`)
   console.log(`${base}/accounts/${dest}`)
+
+  // Spike 574 (phase-182): part of the distributor balance may be pool seed
+  // capital. It is visible on Horizon but NOT spendable by faucet/refill; the
+  // ledger subtracts `pool_seed_stroops` in availableBalance(). Print the split
+  // so an operator never tops up against a balance that is already committed.
+  const seedStroops = BigInt(process.env.LP_POOL_SEED_STROOPS?.trim() || "0")
+  if (seedStroops > 0n) {
+    console.log("")
+    console.log("⚠️  LP pool seed is configured (LP_POOL_SEED_STROOPS=%s).", seedStroops.toString())
+    console.log("   That portion is not spendable: call setPoolSeedReserve(distributor, seed) so")
+    console.log("   availableBalance() and auto-refill stop treating it as free capital.")
+  }
 }
 
 main().catch((e) => {

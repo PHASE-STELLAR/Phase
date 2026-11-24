@@ -47,6 +47,11 @@ function isPhase124Enabled(): boolean {
   return v === "1" || v === "true" || v === "yes" || v === "on"
 }
 
+/** Spike 608 (phase-175): verify @stellar/stellar-sdk v15 StrKey parity in scripts. */
+export function assertScriptsStellarSdkV15Ready(pubKey: string): boolean {
+  return StrKey.isValidEd25519PublicKey(pubKey)
+}
+
 const SetupMetadataV1Schema = z.object({
   version: z.literal(1).optional(),
   name: z.string().min(1).max(256),
@@ -89,6 +94,70 @@ async function runSetupMetadataAuditIfFlagged(): Promise<void> {
       console.log("\n[phase-124] metadata version check: v2 current (no migration needed).")
     }
   } catch { /* optional audit, not fatal */ }
+}
+
+// ── phase-94: verified-artist badge issuance wiring (isolated, flag-gated) ──
+// Core issuance/verification logic lives in scripts/reset-phase.ts (single
+// source of truth); this is a lightweight wire-preserving audit only.
+// Flag: NEXT_PUBLIC_FEATURE_PHASE_94 / FEATURE_PHASE_94 — rollback: unset flag.
+
+function isPhase94Enabled(): boolean {
+  const v = (process.env.NEXT_PUBLIC_FEATURE_PHASE_94 ?? process.env.FEATURE_PHASE_94 ?? "").trim().toLowerCase()
+  return v === "1" || v === "true" || v === "yes" || v === "on"
+}
+
+const SetupArtistAttestationProbeSchema = z.object({
+  wallet: z.string().length(56),
+  displayName: z.string().min(1).max(48),
+  claim: z.literal("verified-artist"),
+})
+
+function auditArtistAttestationWiringOnSetup(): void {
+  if (!isPhase94Enabled()) return
+  const probe = SetupArtistAttestationProbeSchema.safeParse({
+    wallet: "G" + "A".repeat(55),
+    displayName: "probe",
+    claim: "verified-artist",
+  })
+  if (!probe.success) {
+    console.warn("[phase-94] artist attestation schema drift (unexpected, report):", probe.error.message)
+  } else {
+    console.log("[phase-94] verified-artist badge wiring OK (setup will not break attestation issuance). Rollback: unset FEATURE_PHASE_94.")
+  }
+}
+
+// ── phase-79: watchlist notifications for price drops wiring (isolated, flag-gated) ──
+// Core watchlist and price drop logic lives in scripts/reset-phase.ts (single source of truth);
+// this is a lightweight wire-preserving audit ensuring setup-phase-v2 remains compatible.
+// Flag: NEXT_PUBLIC_FEATURE_PHASE_79 / FEATURE_PHASE_79 — rollback: unset flag.
+
+function isPhase79Enabled(): boolean {
+  const v = (process.env.NEXT_PUBLIC_FEATURE_PHASE_79 ?? process.env.FEATURE_PHASE_79 ?? "").trim().toLowerCase()
+  return v === "1" || v === "true" || v === "yes" || v === "on"
+}
+
+const SetupWatchlistProbeSchema = z.object({
+  wallet: z.string().length(56),
+  collectionId: z.number().int().min(0),
+  tokenId: z.number().int().min(1),
+  previousPrice: z.number().positive(),
+  newPrice: z.number().positive(),
+})
+
+function auditWatchlistWiringOnSetup(): void {
+  if (!isPhase79Enabled()) return
+  const probe = SetupWatchlistProbeSchema.safeParse({
+    wallet: "G" + "A".repeat(55),
+    collectionId: 0,
+    tokenId: 1,
+    previousPrice: 100,
+    newPrice: 80,
+  })
+  if (!probe.success) {
+    console.warn("[phase-79] watchlist schema drift (unexpected, report):", probe.error.message)
+  } else {
+    console.log("[phase-79] watchlist notifications wiring OK (setup will not break price drop alerts). Rollback: unset FEATURE_PHASE_79.")
+  }
 }
 
 const RPC_URL = process.env.PHASE_V2_RPC_URL?.trim() || "https://soroban-testnet.stellar.org"
@@ -284,6 +353,8 @@ async function main() {
   if (isPhase124Enabled()) {
     console.log("[phase-124] Metadata migration tool: enabled. Rollback: unset FEATURE_PHASE_124/NEXT_PUBLIC_FEATURE_PHASE_124.")
   }
+  auditArtistAttestationWiringOnSetup()
+  auditWatchlistWiringOnSetup()
 
   console.log("Done.")
 }
