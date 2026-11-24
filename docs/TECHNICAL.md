@@ -379,6 +379,8 @@ Critical groups:
 - Classic asset configuration (`CLASSIC_LIQ_*`, `NEXT_PUBLIC_CLASSIC_*`)
 - Gemini runtime (`GEMINI_API_KEY`)
 - Writable server data directory (`PHASE_SERVER_DATA_DIR`)
+- Feature flags (`PHASE_FLAG_*`) and ops kill switch (`PHASE_OPS_KILL_SWITCH`) — see [`FLAGS.md`](FLAGS.md)
+- Flagged adapter configuration (`PHASE_SEP50_*`, `PHASE_BRIDGE_*`, `PHASE_NETWORK`) — see [`FLAGGED_ADAPTERS.md`](FLAGGED_ADAPTERS.md)
 
 ### 9.1 Feature flags (phase-82..149)
 
@@ -859,6 +861,8 @@ Flag: `phase-182` (`NEXT_PUBLIC_FEATURE_PHASE_182` / `FEATURE_PHASE_182`). Defau
 
 **Contract.** `phase-protocol` gains `set_pool_leg` / `get_pool_leg` / `clear_pool_leg` (admin-only, non-zero pool id) and a `PoolLegConfig` storage entry. `settle` is intentionally unchanged: a Soroban contract cannot emit classic DEX operations, so the pool leg is a treasury-signed path payment that reads this config off-chain.
 
+---
+
 ## 29. Amounts, env validation, security counters and edge runtime (issues #723–#726)
 
 **Amounts (phase-265).** `lib/decimal-amount.ts` is the one parser for user and stored amounts. `parseDecimalAmount` returns bigint minor units (7 decimals = stroops by default), rejects scientific notation, hex, blanks and values above `MAX_STELLAR_STROOPS` (int64), and by default rejects digits beyond the decimal places; callers that must accept them pick `floor`, `ceil`, `half-up` (half away from zero) or `half-even`. JS numbers are expanded from their shortest round-trip string, so `0.1` is exactly one tenth and `1e-7` is one stroop. Splits use `bpsShare` on stroops, so seller + royalty (or every collab/escrow payee) always sums to the sale. The market still stores numbers; `stroopsToNumber` gives the closest double to the exact amount, so there is no data migration. x402 amounts are compared as integer stroops with `meetsRequiredStroops`, which fails closed on a malformed requirement.
@@ -868,3 +872,41 @@ Flag: `phase-182` (`NEXT_PUBLIC_FEATURE_PHASE_182` / `FEATURE_PHASE_182`). Defau
 **Security counters (phase-267).** `SECURITY_COUNTER_REGISTRY` maps each counter to a surface and its allowed reason codes, all from `SECURITY_REASON_CODES`. `incSecurityCounter(name, by, reason?)` rejects unknown names, unknown reasons, PII-shaped labels (Stellar keys, CIDs, EVM addresses, hashes, digit runs, free text) and non-integer increments when the flag is on: the sample is dropped and `security_counter_label_rejected{reason}` counts it, and the caller is never interrupted. `snapshotSecurityCountersBySurface()` returns totals per surface and per reason. Flag off: counting is unchanged.
 
 **Edge runtime (phase-268).** `middleware.ts` (and any `app/` file with `export const runtime = "edge"`) runs on the edge runtime, which has no filesystem, `Buffer`, `require` or Node builtins. `lib/edge-bundle.ts` bundles each edge entry and each module in `EDGE_SAFE_MODULES` with the `edge-light` conditions and `process.env.NEXT_RUNTIME = "edge"`, records every Node-only import with its import chain, and boots edge entries in `next/dist/compiled/edge-runtime` (with a Web-API stand-in for `next/server`). `npm run edge:check` runs it in CI, and an ESLint override forbids Node imports and globals in the same files. `lib/dependency-cadence-shared.ts` holds the toolchain constants so `lib/phase-protocol.ts` no longer imports `node:crypto`. `lib/edge-store.ts` reads and updates JSON sidecars through `lib/json-store.ts` on Node, with the import behind `process.env.NEXT_RUNTIME` so edge bundles never contain it; on edge with the flag on it degrades to a per-isolate memory copy (`degraded: true`, not durable, `edge_store_degraded`), and with it off it throws `EdgeStoreUnavailableError`. The flag does not move routes between runtimes: Next.js reads `export const runtime` statically at build time.
+
+---
+
+## 30. Canonical flag registry (unique IDs)
+
+- Canonical registry: `lib/flags/registry.ts`; full table: [`FLAGS.md`](FLAGS.md).
+  It coexists with the build-time `NEXT_PUBLIC_FEATURE_PHASE_*` flags described
+  in §9.1; the `PHASE_FLAG_*` vars are the unique-ID registry added by the
+  refactor.
+- IDs are unique per feature. The historically reused `phase-170`…`phase-173`
+  tokens survive only as aliases in `FLAG_ENV_MAP`; the second features own
+  `phase-184`…`phase-187` (`phase-180`…`phase-182` were already taken by the
+  analytics warehouse, anomaly detection and liquidity pools).
+- Evaluation is a frozen snapshot taken at import time — flags are never read
+  from `process.env` per request.
+- `npm run flags:check` rejects duplicate IDs/env vars/aliases; CI enforces it.
+- `npm run drill:kill-switch` runs a non-destructive drill for distributor
+  auto-refill halt and `faucetPending` mid-poll idempotency.
+
+## 31. Flagged adapters
+
+| Adapter | Flag | Boundary | Failure mode |
+| --- | --- | --- | --- |
+| SEP-50 attestation | `phase-217` | Server verification, SEP-10 binding, hashed subjects | 503 + `Retry-After` on outage |
+| EVM bridge | `phase-218` | Client signs Stellar; server custody on EVM | 404 when off; 403 if not testnet |
+| Cross-chain verifier | `phase-219` | Read-only proof verification | `invalid` / `disabled`, never writes |
+
+Details and custody recovery procedure: [`FLAGGED_ADAPTERS.md`](FLAGGED_ADAPTERS.md).
+Root spikes: `SPIKE_645_SEP50_CONFORMANCE.md`, `SPIKE_646_EVM_BRIDGE.md`,
+`SPIKE_647_CROSS_CHAIN_VERIFICATION.md`.
+
+## 32. Flag/adapter verification commands
+
+```bash
+npm run flags:check
+npm run drill:kill-switch
+npm run test:adapters   # node:test adapter/flag checks (npm test runs vitest)
+```

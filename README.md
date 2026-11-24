@@ -205,4 +205,22 @@ Contracts are already deployed on Stellar testnet. You do not need to redeploy t
 
 ---
 
+## Flags and flagged adapters
+
+Flags are statically evaluated from `PHASE_FLAG_*` env vars. Each feature owns
+one unique ID and one rollback alias in `FLAG_ENV_MAP`; see [`docs/FLAGS.md`](docs/FLAGS.md).
+The SEP-50 adapter (`phase-217`), testnet-only EVM bridge (`phase-218`) and
+read-only cross-chain verifier (`phase-219`) are documented in
+[`docs/FLAGGED_ADAPTERS.md`](docs/FLAGGED_ADAPTERS.md), with root spikes
+`SPIKE_645_SEP50_CONFORMANCE.md`, `SPIKE_646_EVM_BRIDGE.md` and
+`SPIKE_647_CROSS_CHAIN_VERIFICATION.md`.
+
+```bash
+npm run flags:check         # reject duplicate flag IDs/env vars/aliases
+npm run drill:kill-switch   # non-destructive kill-switch drill
+npm run test:adapters       # adapter/flag unit tests (npm test runs vitest)
+```
+
+---
+
 *PHASE Protocol — pay to forge, prove on-chain.*

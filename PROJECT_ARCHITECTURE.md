@@ -267,3 +267,49 @@ Compliance is a server pre-credit gate, independent of denial lists, Turnstile, 
 Tax evidence is additive and append-only in SQLite. Amounts are integer stroops stored as text. Offer decisions and their unverified reporting evidence commit in one immediate transaction; acceptance alone is never labeled as an on-chain payment. CSV uses signed, expiring, one-use export authorization, a sequence snapshot and 50-row pages. Missing cost basis and FX are explicit, not inferred as zero. This testnet export is not a filed tax form. No contracts, addresses or WASM are changed.
 
 See [implementation and acceptance evidence](docs/spikes/620-621-630-631-integration.md) for file decisions, remaining deployment prerequisites and validation limits.
+
+## 14) Canonical flag registry (unique IDs)
+
+- `lib/flags/registry.ts` is the canonical unique-ID registry for the renamed
+  flags. Every feature owns exactly one canonical ID and one `PHASE_FLAG_*`
+  env var. It coexists with the build-time `NEXT_PUBLIC_FEATURE_PHASE_*`
+  flags documented in §10.
+- IDs `phase-170`…`phase-173` were historically reused for two features each.
+  The second feature now owns a unique ID (`phase-184`…`phase-187`); their old
+  ambiguous tokens remain **aliases** in `FLAG_ENV_MAP` so rollback never
+  requires renaming call sites. See `docs/FLAGS.md`.
+- `phase-184`…`phase-187` were chosen because §10 and the codebase already use
+  `phase-180` (analytics warehouse), `phase-181` (anomaly detection) and
+  `phase-182` (liquidity pools).
+- Flags are evaluated **statically** from a frozen snapshot taken at module
+  load. Runtime mutation of `process.env` never changes a flag.
+- `tools/check-flags.ts` (`npm run flags:check`) fails CI on duplicate IDs,
+  env vars or aliases. `.github/workflows/flag-integrity.yml` runs it on every
+  PR and push.
+
+## 15) Flagged adapter boundaries
+
+- `lib/adapters/sep50/` — SEP-50 attestation verification, SEP-10 session
+  binding, hashed subjects only, fail-closed 503 + `Retry-After`, testnet mock
+  fence. Behind `phase-217`.
+- `lib/adapters/bridge/` — PHASELQ → EVM bridge. Client-side signing for the
+  Stellar leg, server-side custody for the EVM leg, idempotent relay keyed by
+  source tx hash, configurable finality, orphan recovery, drift/fee fences.
+  Testnet only, behind `phase-218`. See `SPIKE_646_EVM_BRIDGE.md`.
+- `lib/adapters/crosschain/` — read-only light-client-style proof verifier with
+  trust-root, staleness and wrong-network fences. Behind `phase-219`.
+- Every adapter returns a disabled/inert result when its flag is off; no
+  adapter performs writes on the Stellar leg.
+
+## 16) Compliance and integration registry (flagged adapters)
+
+| Feature | Flag ID | Env var | Rollback |
+| --- | --- | --- | --- |
+| SEP-50 attestation adapter | `phase-217` | `PHASE_FLAG_SEP50_ADAPTER` | Unset flag — checks skipped, route 404 |
+| PHASELQ EVM bridge | `phase-218` | `PHASE_FLAG_EVM_BRIDGE` | Unset flag — routes gone, locked funds recoverable |
+| Cross-chain verifier | `phase-219` | `PHASE_FLAG_CROSSCHAIN_VERIFY` | Unset flag — verification skipped |
+
+Operational details and the complete flag table are in `docs/FLAGS.md` and
+`docs/FLAGGED_ADAPTERS.md`. Ops kill switch (`PHASE_OPS_KILL_SWITCH`) is also
+static; `npm run drill:kill-switch` is non-destructive and proves distributor
+auto-refill halt plus `faucetPending` mid-poll idempotency.
