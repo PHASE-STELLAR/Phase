@@ -4,7 +4,13 @@ import Image from "next/image"
 import Link from "next/link"
 import { LangToggle } from "@/components/lang-toggle"
 import { useLang } from "@/components/lang-context"
-import { pickProjectDocs, type DocsLinkItem } from "@/lib/project-docs-content"
+import { pickProjectDocs, type DocsLinkItem, type DocsRecipe, type ProjectDocsPage } from "@/lib/project-docs-content"
+
+// phase-668. Read literally: Next only inlines NEXT_PUBLIC_* into client bundles
+// when accessed by name, so isFeatureEnabled's dynamic lookup is always off here.
+const RECIPES_ENABLED = ["1", "true", "yes", "on"].includes(
+  (process.env.NEXT_PUBLIC_FEATURE_PHASE_668 ?? "").trim().toLowerCase(),
+)
 
 /** Renders text with every occurrence of "wallet" highlighted in cyan. */
 function W({ children }: { children: string }) {
@@ -116,9 +122,46 @@ function DocsTable({ headers, rows }: { headers: string[]; rows: string[][] }) {
   )
 }
 
+function DocsRecipeCard({
+  recipe,
+  labels,
+}: {
+  recipe: DocsRecipe
+  labels: ProjectDocsPage["recipeLabels"]
+}) {
+  const heading = "font-mono text-[9px] font-bold uppercase tracking-[0.28em] text-violet-500/70"
+  return (
+    <article id={`recipe-${recipe.id}`} className="scroll-mt-20 border border-violet-500/25 bg-violet-950/10 p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="font-mono text-[13px] font-semibold text-violet-200">{recipe.title}</h3>
+        <span className="border border-emerald-500/30 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.2em] text-emerald-400/80">
+          {labels.tested}
+        </span>
+      </div>
+      <p className="mt-3 font-sans text-[13px] leading-relaxed text-zinc-300/90">
+        <W>{recipe.summary}</W>
+      </p>
+      <p className={`mt-5 ${heading}`}>{labels.steps}</p>
+      <ol className="mt-2 list-decimal space-y-1 pl-5 font-sans text-[13px] text-zinc-300/90">
+        {recipe.steps.map((step) => (
+          <li key={step}>
+            <W>{step}</W>
+          </li>
+        ))}
+      </ol>
+      <p className={`mt-5 mb-2 ${heading}`}>{labels.failures}</p>
+      <DocsTable headers={[labels.when, labels.outcome]} rows={recipe.failures.map((f) => [f.when, f.outcome])} />
+      <p className={`mt-5 mb-2 ${heading}`}>{labels.code}</p>
+      <pre className="overflow-x-auto border border-violet-500/20 bg-black/60 p-4 font-mono text-[10px] leading-relaxed text-zinc-300/85">
+        {recipe.code}
+      </pre>
+    </article>
+  )
+}
+
 export default function DocsPage() {
   const { lang } = useLang()
-  const d = pickProjectDocs(lang)
+  const d = pickProjectDocs(lang, { recipes: RECIPES_ENABLED })
 
   return (
     <div className="min-h-screen bg-background font-mono text-foreground">
@@ -229,6 +272,9 @@ export default function DocsPage() {
                           </pre>
                         </div>
                       )
+                    }
+                    if (block.type === "recipe") {
+                      return <DocsRecipeCard key={idx} recipe={block.recipe} labels={d.recipeLabels} />
                     }
                     if (block.type === "image") {
                       return (

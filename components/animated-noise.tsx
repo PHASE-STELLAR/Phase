@@ -1,76 +1,62 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 
 interface AnimatedNoiseProps {
   opacity?: number
   className?: string
 }
 
+const GRAIN_SVG =
+  "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")"
+
 export function AnimatedNoise({ opacity = 0.05, className }: AnimatedNoiseProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [isVisible, setIsVisible] = useState(true)
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false)
 
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const mql = window.matchMedia("(prefers-reduced-motion: reduce)")
+    setPrefersReducedMotion(mql.matches)
 
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-
-    let animationId: number
-    let frame = 0
-
-    const resize = () => {
-      canvas.width = canvas.offsetWidth / 2
-      canvas.height = canvas.offsetHeight / 2
-    }
-
-    const generateNoise = () => {
-      const imageData = ctx.createImageData(canvas.width, canvas.height)
-      const data = imageData.data
-
-      for (let i = 0; i < data.length; i += 4) {
-        const value = Math.random() * 255
-        data[i] = value // R
-        data[i + 1] = value // G
-        data[i + 2] = value // B
-        data[i + 3] = 255 // A
-      }
-
-      ctx.putImageData(imageData, 0, 0)
-    }
-
-    const animate = () => {
-      frame++
-      // Update noise every 2 frames for performance while still looking animated
-      if (frame % 2 === 0) {
-        generateNoise()
-      }
-      animationId = requestAnimationFrame(animate)
-    }
-
-    resize()
-    window.addEventListener("resize", resize)
-    animate()
-
-    return () => {
-      window.removeEventListener("resize", resize)
-      cancelAnimationFrame(animationId)
-    }
+    const handler = (e: MediaQueryListEvent) => setPrefersReducedMotion(e.matches)
+    mql.addEventListener("change", handler)
+    return () => mql.removeEventListener("change", handler)
   }, [])
 
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setIsVisible(entry.isIntersecting),
+      { threshold: 0 },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  const shouldAnimate = isVisible && !prefersReducedMotion
+
   return (
-    <canvas
-      ref={canvasRef}
+    <div
+      ref={containerRef}
       className={className}
+      aria-hidden="true"
       style={{
         position: "absolute",
         inset: 0,
         width: "100%",
         height: "100%",
         pointerEvents: "none",
-        opacity,
+        opacity: shouldAnimate ? opacity : 0,
         mixBlendMode: "overlay",
+        backgroundImage: GRAIN_SVG,
+        backgroundRepeat: "repeat",
+        backgroundSize: "256px 256px",
+        animation: shouldAnimate
+          ? "animated-noise-drift 0.35s steps(4) infinite"
+          : "none",
       }}
     />
   )

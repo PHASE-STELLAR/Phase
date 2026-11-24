@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { useLang } from "@/components/lang-context"
 import { WalletAvatar } from "./wallet-avatar"
+import { WalletBadge } from "./wallet-badge"
+import { QrCodeDialog } from "./qr-code-dialog"
 
 // Social icons (inline SVG)
 function DiscordIcon({ className }: { className?: string }) {
@@ -608,6 +610,7 @@ type AchievementsTabCopy = {
   achievementsLocked: string
   achievementsEmpty: string
   achievementsProgress: string
+  achievementsTimeline: string
 }
 
 const ALL_ACHIEVEMENT_IDS = [
@@ -631,17 +634,28 @@ const ACHIEVEMENT_META: Record<string, { name: string; icon: string; desc_en: st
   phaselq_100:      { name: "PHASELQ ×100",      icon: "◈", desc_en: "Earned 100+ PHASELQ",          desc_es: "100+ PHASELQ ganados" },
 }
 
+type TimelineEntry = {
+  id: string
+  name: string
+  unlocked_at: number
+}
+
 function AchievementsTab({ address, t, lang }: { address: string; t: AchievementsTabCopy; lang: string }) {
   const [unlocked, setUnlocked] = useState<AchievementEntry[]>([])
+  const [timeline, setTimeline] = useState<TimelineEntry[] | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     fetch(`/api/achievements?wallet=${encodeURIComponent(address)}`)
-      .then((r) => r.json() as Promise<{ achievements?: AchievementEntry[] }>)
-      .then((data) => { if (!cancelled) setUnlocked(data.achievements ?? []) })
-      .catch(() => { if (!cancelled) setUnlocked([]) })
+      .then((r) => r.json() as Promise<{ achievements?: AchievementEntry[]; timeline?: TimelineEntry[] }>)
+      .then((data) => {
+        if (cancelled) return
+        setUnlocked(data.achievements ?? [])
+        setTimeline(data.timeline ?? null)
+      })
+      .catch(() => { if (!cancelled) { setUnlocked([]); setTimeline(null) } })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [address])
@@ -687,6 +701,35 @@ function AchievementsTab({ address, t, lang }: { address: string; t: Achievement
 
   return (
     <div className="flex flex-col gap-3 pt-1">
+      {/* Timeline (phase-114) */}
+      {timeline && timeline.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <p className="font-mono text-[8px] uppercase tracking-widest text-zinc-600">
+            {t.achievementsTimeline}
+          </p>
+          <div className="flex flex-col gap-0 border-l pl-2.5" style={{ borderColor: "rgba(124,58,237,0.3)" }}>
+            {timeline.map((event) => {
+              const meta = ACHIEVEMENT_META[event.id]
+              const date = new Date(event.unlocked_at)
+              return (
+                <div key={`${event.id}-${event.unlocked_at}`} className="relative py-1.5">
+                  <span
+                    className="absolute -left-[13px] top-2 h-1.5 w-1.5 rounded-full"
+                    style={{ background: "#7c3aed" }}
+                  />
+                  <p className="font-mono text-[9px] font-medium" style={{ color: "#c4b5fd" }}>
+                    {meta?.icon ?? "◈"} {event.name}
+                  </p>
+                  <p className="font-mono text-[8px]" style={{ color: "#71717a" }}>
+                    {date.toLocaleDateString(lang === "es" ? "es-ES" : "en-US")}
+                  </p>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Unlocked */}
       {unlockedList.length > 0 && (
         <div className="flex flex-col gap-1.5">
@@ -737,6 +780,7 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
   const [copied, setCopied] = useState(false)
   const [avatarSelectorOpen, setAvatarSelectorOpen] = useState(false)
   const [savingAvatar, setSavingAvatar] = useState(false)
+  const [qrDialogOpen, setQrDialogOpen] = useState(false)
   const selectorRef = useRef<HTMLDivElement>(null)
 
   const t =
@@ -802,6 +846,7 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
           achievementsLocked: "// BLOQUEADOS",
           achievementsEmpty: "[ SIN_LOGROS ]",
           achievementsProgress: "Progreso",
+          achievementsTimeline: "// CRONOLOGÍA",
           placeholder: {
             displayName: "alias o nombre",
             twitter: "@handle",
@@ -870,6 +915,7 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
           achievementsLocked: "// LOCKED",
           achievementsEmpty: "[ NO_ACHIEVEMENTS ]",
           achievementsProgress: "Progress",
+          achievementsTimeline: "// TIMELINE",
           placeholder: {
             displayName: "alias or name",
             twitter: "@handle",
@@ -1035,9 +1081,12 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
 
           {/* Identity */}
           <div className="min-w-0 flex-1 pt-0.5">
-            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-violet-400 mb-0.5">
-              {t.profile}
-            </p>
+            <div className="flex items-center gap-2 mb-0.5">
+              <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-violet-400">
+                {t.profile}
+              </p>
+              <WalletBadge />
+            </div>
             {profile.display_name && (
               <p className="font-mono text-[11px] text-zinc-200 font-medium truncate mb-0.5">
                 {profile.display_name}
@@ -1053,6 +1102,14 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
                 className="shrink-0 font-mono text-[8px] uppercase tracking-widest text-zinc-700 hover:text-violet-400 transition-colors"
               >
                 {copied ? t.copied : t.copyAddress}
+              </button>
+              <button
+                type="button"
+                onClick={() => setQrDialogOpen(true)}
+                title="Show QR Code"
+                className="shrink-0 font-mono text-[8px] uppercase tracking-widest text-zinc-700 hover:text-violet-400 transition-colors"
+              >
+                [QR]
               </button>
             </div>
           </div>
@@ -1287,6 +1344,12 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
           </button>
         </div>
 
+        <QrCodeDialog
+          open={qrDialogOpen}
+          onOpenChange={setQrDialogOpen}
+          mode="receive"
+          address={address}
+        />
       </SheetContent>
     </Sheet>
   )

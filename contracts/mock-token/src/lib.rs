@@ -3,17 +3,19 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol,
 };
 
-/// Errores del token mock
+/// Token errors (SEP-41 compliant)
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum TokenError {
-    /// Ya inicializado
     AlreadyInitialized = 1,
-    /// No inicializado
     NotInitialized = 2,
-    /// Mint excede el límite permitido
-    MintLimitExceeded = 3,
+    InsufficientBalance = 3,
+    InsufficientAllowance = 4,
+    Unauthorized = 5,
+    ExpiredAllowance = 6,
+    InvalidAmount = 7,
+    MintDisabled = 8,
 }
 
 /// Estructura para metadatos del token
@@ -24,21 +26,23 @@ pub struct TokenMetadata {
     pub symbol: String,
 }
 
-/// Almacenamiento de datos del token
+/// Allowance entry with expiry
+#[contracttype]
+pub struct AllowanceEntry {
+    pub amount: i128,
+    pub expiry_ledger: u32,
+}
+
+/// Token storage keys
 #[contracttype]
 pub enum DataKey {
-    /// Administrador del token
     Admin,
-    /// Si el token está inicializado
     Initialized,
-    /// Supply total
     TotalSupply,
-    /// Metadatos del token
     Metadata,
-    /// Balances de usuarios: (Address) -> i128
     Balance(Address),
-    /// Allowances: (owner, spender) -> i128
     Allowance(Address, Address),
+    MainnetKillSwitch,
 }
 
 #[contract]
@@ -157,52 +161,52 @@ impl MockToken {
         Ok(())
     }
 
-    /// Función pública para que cualquiera pueda mintear tokens (para testing)
-    /// ¡Solo usar en Testnet! Esta función no tiene restricciones de admin
-    ///
-    /// # Arguments
-    /// * `env` - Entorno de ejecución
-    /// * `to` - Dirección que recibirá los tokens
-    /// * `amount` - Cantidad a acuñar
+    /// Public mint (testnet only, gated on mainnet)
     pub fn mint_public(env: Env, to: Address, amount: i128) -> Result<(), TokenError> {
-        // Verificar que esté inicializado
         if !Self::is_initialized(env.clone()) {
             return Err(TokenError::NotInitialized);
         }
 
-        // El destinatario debe autorizar (para evitar mint a terceros sin consentimiento)
-        to.require_auth();
-
-        // Verificar que amount sea positivo
-        if amount <= 0 {
-            return Err(TokenError::MintLimitExceeded);
+        // Mainnet kill-switch check
+        let kill_switch: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MainnetKillSwitch)
+            .unwrap_or(false);
+        if kill_switch {
+            return Err(TokenError::MintDisabled);
         }
 
-        // Actualizar balance
+        if amount <= 0 {
+            return Err(TokenError::InvalidAmount);
+        }
+
+        to.require_auth();
+
         let current_balance = Self::balance(env.clone(), to.clone());
         let new_balance = current_balance
             .checked_add(amount)
-            .expect("Balance overflow");
+            .ok_or(TokenError::InsufficientBalance)?;
 
         env.storage()
             .persistent()
             .set(&DataKey::Balance(to.clone()), &new_balance);
 
-        // Actualizar total supply
         let current_supply: i128 = env
             .storage()
             .persistent()
             .get(&DataKey::TotalSupply)
             .unwrap_or(0);
-        let new_supply = current_supply.checked_add(amount).expect("Supply overflow");
+        let new_supply = current_supply
+            .checked_add(amount)
+            .ok_or(TokenError::InsufficientBalance)?;
 
         env.storage()
             .persistent()
             .set(&DataKey::TotalSupply, &new_supply);
 
-        // Emitir evento de mint
         env.events().publish(
-            (Symbol::new(&env, "mint_public"), to.clone()),
+            (Symbol::new(&env, "mint"), to.clone()),
             amount,
         );
 
@@ -230,30 +234,29 @@ impl MockToken {
         env.storage().persistent().get(&DataKey::Admin)
     }
 
-    /// Transfiere tokens de una dirección a otra
-    /// El `from` debe autorizar la transacción
-    ///
-    /// # Arguments
-    /// * `env` - Entorno de ejecución
-    /// * `from` - Dirección origen
-    /// * `to` - Dirección destino
-    /// * `amount` - Cantidad a transferir
-    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
-        // El remitente debe autorizar
-        from.require_auth();
-
-        // Verificar balance suficiente
-        let from_balance = Self::balance(env.clone(), from.clone());
-        if from_balance < amount {
-            panic!("insufficient balance");
+    /// Transfer tokens (SEP-41 compliant)
+    pub fn transfer(
+        env: Env,
+        from: Address,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), TokenError> {
+        if amount <= 0 {
+            return Err(TokenError::InvalidAmount);
         }
 
-        // Actualizar balances
+        from.require_auth();
+
+        let from_balance = Self::balance(env.clone(), from.clone());
+        if from_balance < amount {
+            return Err(TokenError::InsufficientBalance);
+        }
+
         let new_from_balance = from_balance - amount;
         let to_balance = Self::balance(env.clone(), to.clone());
         let new_to_balance = to_balance
             .checked_add(amount)
-            .expect("balance overflow");
+            .ok_or(TokenError::InsufficientBalance)?;
 
         env.storage()
             .persistent()
@@ -262,77 +265,106 @@ impl MockToken {
             .persistent()
             .set(&DataKey::Balance(to.clone()), &new_to_balance);
 
-        // Emitir evento de transfer
         env.events().publish(
             (Symbol::new(&env, "transfer"), from),
             (to, amount),
         );
+
+        Ok(())
     }
 
-    /// Aprueba a un gastador para usar tokens del owner
-    ///
-    /// # Arguments
-    /// * `env` - Entorno de ejecución
-    /// * `owner` - Propietario de los tokens
-    /// * `spender` - Dirección autorizada a gastar
-    /// * `amount` - Cantidad aprobada
-    pub fn approve(env: Env, owner: Address, spender: Address, amount: i128) {
+    /// Approve spender with optional expiry (SEP-41 compliant)
+    pub fn approve(
+        env: Env,
+        owner: Address,
+        spender: Address,
+        amount: i128,
+        expiry_ledger: u32,
+    ) -> Result<(), TokenError> {
+        if amount < 0 {
+            return Err(TokenError::InvalidAmount);
+        }
+
         owner.require_auth();
+
+        let entry = AllowanceEntry {
+            amount,
+            expiry_ledger,
+        };
 
         env.storage()
             .persistent()
-            .set(&DataKey::Allowance(owner.clone(), spender.clone()), &amount);
+            .set(&DataKey::Allowance(owner.clone(), spender.clone()), &entry);
 
-        // Emitir evento de approve
         env.events().publish(
             (Symbol::new(&env, "approve"), owner),
             (spender, amount),
         );
+
+        Ok(())
     }
 
-    /// Obtiene el allowance aprobado
+    /// Get allowance (returns 0 if expired)
     pub fn allowance(env: Env, owner: Address, spender: Address) -> i128 {
-        env.storage()
+        if let Some(entry) = env
+            .storage()
             .persistent()
-            .get(&DataKey::Allowance(owner, spender))
-            .unwrap_or(0)
+            .get::<_, AllowanceEntry>(&DataKey::Allowance(owner, spender))
+        {
+            let current_ledger = env.ledger().sequence();
+            if current_ledger > entry.expiry_ledger {
+                return 0;
+            }
+            entry.amount
+        } else {
+            0
+        }
     }
 
-    /// Transfiere desde una dirección con allowance
-    ///
-    /// # Arguments
-    /// * `env` - Entorno de ejecución
-    /// * `spender` - Quien ejecuta la transferencia
-    /// * `from` - Propietario de los tokens
-    /// * `to` - Destino
-    /// * `amount` - Cantidad
-    pub fn transfer_from(env: Env, spender: Address, from: Address, to: Address, amount: i128) {
-        // Verificar allowance
-        let current_allowance = Self::allowance(env.clone(), from.clone(), spender.clone());
-        if current_allowance < amount {
-            panic!("insufficient allowance");
+    /// Transfer tokens using allowance (SEP-41 compliant)
+    pub fn transfer_from(
+        env: Env,
+        spender: Address,
+        from: Address,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), TokenError> {
+        if amount <= 0 {
+            return Err(TokenError::InvalidAmount);
         }
 
-        // El spender debe autorizar
+        let current_allowance = Self::allowance(env.clone(), from.clone(), spender.clone());
+        if current_allowance < amount {
+            return Err(TokenError::InsufficientAllowance);
+        }
+
         spender.require_auth();
 
-        // Reducir allowance
         let new_allowance = current_allowance - amount;
-        env.storage()
+        if let Some(entry) = env
+            .storage()
             .persistent()
-            .set(&DataKey::Allowance(from.clone(), spender.clone()), &new_allowance);
+            .get::<_, AllowanceEntry>(&DataKey::Allowance(from.clone(), spender.clone()))
+        {
+            let updated = AllowanceEntry {
+                amount: new_allowance,
+                expiry_ledger: entry.expiry_ledger,
+            };
+            env.storage()
+                .persistent()
+                .set(&DataKey::Allowance(from.clone(), spender), &updated);
+        }
 
-        // Ejecutar transferencia
         let from_balance = Self::balance(env.clone(), from.clone());
         if from_balance < amount {
-            panic!("insufficient balance");
+            return Err(TokenError::InsufficientBalance);
         }
 
         let new_from_balance = from_balance - amount;
         let to_balance = Self::balance(env.clone(), to.clone());
         let new_to_balance = to_balance
             .checked_add(amount)
-            .expect("balance overflow");
+            .ok_or(TokenError::InsufficientBalance)?;
 
         env.storage()
             .persistent()
@@ -341,14 +373,128 @@ impl MockToken {
             .persistent()
             .set(&DataKey::Balance(to.clone()), &new_to_balance);
 
-        // Emitir evento
         env.events().publish(
             (Symbol::new(&env, "transfer"), from),
             (to, amount),
         );
+
+        Ok(())
     }
 
-    /// Obtiene los metadatos del token
+    /// Burn tokens (SEP-41 compliant)
+    pub fn burn(env: Env, from: Address, amount: i128) -> Result<(), TokenError> {
+        if amount <= 0 {
+            return Err(TokenError::InvalidAmount);
+        }
+
+        from.require_auth();
+
+        let balance = Self::balance(env.clone(), from.clone());
+        if balance < amount {
+            return Err(TokenError::InsufficientBalance);
+        }
+
+        let new_balance = balance - amount;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Balance(from.clone()), &new_balance);
+
+        let current_supply: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TotalSupply)
+            .unwrap_or(0);
+        let new_supply = current_supply - amount;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::TotalSupply, &new_supply);
+
+        env.events().publish(
+            (Symbol::new(&env, "burn"), from),
+            amount,
+        );
+
+        Ok(())
+    }
+
+    /// Clawback tokens (admin only, SEP-41 compliant)
+    pub fn clawback(env: Env, from: Address, amount: i128) -> Result<(), TokenError> {
+        if amount <= 0 {
+            return Err(TokenError::InvalidAmount);
+        }
+
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(TokenError::Unauthorized)?;
+
+        admin.require_auth();
+
+        let balance = Self::balance(env.clone(), from.clone());
+        if balance < amount {
+            return Err(TokenError::InsufficientBalance);
+        }
+
+        let new_balance = balance - amount;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Balance(from.clone()), &new_balance);
+
+        env.events().publish(
+            (Symbol::new(&env, "clawback"), from),
+            amount,
+        );
+
+        Ok(())
+    }
+
+    /// Set admin (admin only)
+    pub fn set_admin(env: Env, new_admin: Address) -> Result<(), TokenError> {
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(TokenError::Unauthorized)?;
+
+        admin.require_auth();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Admin, &new_admin);
+
+        env.events().publish(
+            (Symbol::new(&env, "set_admin"), admin),
+            new_admin,
+        );
+
+        Ok(())
+    }
+
+    /// Enable mainnet kill-switch (admin only)
+    pub fn enable_mainnet_kill_switch(env: Env) -> Result<(), TokenError> {
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(TokenError::Unauthorized)?;
+
+        admin.require_auth();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::MainnetKillSwitch, &true);
+
+        env.events().publish(
+            (Symbol::new(&env, "mainnet_kill_switch_enabled"), admin),
+            (),
+        );
+
+        Ok(())
+    }
+
+    /// Get token metadata
     pub fn get_metadata(env: Env) -> Option<TokenMetadata> {
         env.storage().persistent().get(&DataKey::Metadata)
     }
@@ -379,6 +525,11 @@ impl MockToken {
             .map(|m: TokenMetadata| m.symbol)
             .unwrap_or_else(|| String::from_str(&env, "MOCK"))
     }
+
+    /// Spike 608: Exposes the pinned Soroban SDK / ABI version (`22000` for soroban-sdk 22.0.0).
+    pub fn soroban_abi_version(_env: Env) -> u32 {
+        22_000
+    }
 }
 
 #[cfg(test)]
@@ -389,13 +540,14 @@ mod test {
     #[test]
     fn test_initialize() {
         let env = Env::default();
+        env.mock_all_auths();
         let admin = Address::generate(&env);
-        let token = MockToken;
+        let client = MockTokenClient::new(&env, &env.register(MockToken, ()));
 
         let name = String::from_str(&env, "Mock Token");
         let symbol = String::from_str(&env, "MOCK");
 
-        token.initialize(env.clone(), admin, 7, name, symbol).unwrap();
-        assert!(MockToken::is_initialized(env));
+        client.initialize(&admin, &7, &name, &symbol);
+        assert!(client.is_initialized());
     }
 }

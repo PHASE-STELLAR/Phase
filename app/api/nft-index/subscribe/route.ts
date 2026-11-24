@@ -62,6 +62,40 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     )
   }
 
+  // Issue #228: an NFT-index webhook receives every transfer event for the
+  // indexed contract, so a subscription pointed at an attacker host is a
+  // standing exfiltration channel. Validate the URL and prove the challenge
+  // echo before we register anything with Mercury.
+  const urlCheck = validateWebhookUrl(webhookUrl)
+  if (!urlCheck.ok) {
+    console.warn(
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level: "warn",
+        event: "nft_index_subscribe_spoof",
+        reason: urlCheck.reason,
+      }),
+    )
+    return NextResponse.json({ error: urlCheck.error }, { status: 400 })
+  }
+
+  const challenge = crypto.randomUUID()
+  const challengeOk = await verifyWebhookChallenge(webhookUrl, challenge)
+  if (!challengeOk) {
+    console.warn(
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level: "warn",
+        event: "webhook_challenge_failed",
+        webhookUrl,
+      }),
+    )
+    return NextResponse.json(
+      { error: "Webhook Challenge Failed" },
+      { status: 400 },
+    )
+  }
+
   const res = await fetch(`${mercuryRestBase()}/webhooks/new`, {
     method: "POST",
     headers: {
@@ -87,9 +121,89 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     ok: true,
     contractId,
     webhookUrl,
+    verified: true,
     mercury: json,
     note: "Guardá el 'secret' que devuelve Mercury — solo se muestra una vez.",
   })
+}
+
+/**
+ * Issue #228: webhook URL validation.
+ *
+ * A subscription fans out full NFT transfer payloads, so only https endpoints
+ * on public hosts are accepted. Anything that could reach loopback, link-local
+ * or a private network is refused, which also blocks the classic
+ * "subscribe to 169.254.169.254 and read the response" SSRF variant.
+ */
+export function validateWebhookUrl(
+  raw: string,
+): { ok: true; url: URL } | { ok: false; error: string; reason: string } {
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return { ok: false, error: "webhookUrl must be a valid absolute URL", reason: "malformed" }
+  }
+  if (url.protocol !== "https:") {
+    return { ok: false, error: "webhookUrl must use https", reason: "insecure_protocol" }
+  }
+  if (url.username || url.password) {
+    return { ok: false, error: "webhookUrl must not embed credentials", reason: "credentials" }
+  }
+  const host = url.hostname.toLowerCase()
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal") || host.endsWith(".local")) {
+    return { ok: false, error: "webhookUrl host is not routable", reason: "loopback" }
+  }
+  if (/^\d+$/.test(host) || /^\[/.test(host) || host.includes(":")) {
+    return { ok: false, error: "webhookUrl must use a public hostname", reason: "ip_literal" }
+  }
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])]
+    if (a === 127 || a === 0) {
+      return { ok: false, error: "webhookUrl host is not routable", reason: "loopback" }
+    }
+    const isPrivate =
+      a === 10 ||
+      (a === 100 && b >= 64 && b <= 127) || // CGNAT
+      (a === 169 && b === 254) || // link-local, incl. cloud metadata
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    if (isPrivate) {
+      return { ok: false, error: "webhookUrl must use a public hostname", reason: "private_network" }
+    }
+  }
+  return { ok: true, url }
+}
+
+const CHALLENGE_TIMEOUT_MS = 5_000
+
+/**
+ * Issue #228: prove we can actually reach the endpoint before registering it
+ * (the Stripe webhook-verification shape). The challenge must come back
+ * verbatim in the response body within 5s.
+ */
+export async function verifyWebhookChallenge(
+  webhookUrl: string,
+  challenge: string,
+  timeoutMs = CHALLENGE_TIMEOUT_MS,
+): Promise<boolean> {
+  try {
+    const target = new URL(webhookUrl)
+    target.searchParams.set("challenge", challenge)
+    const res = await fetch(target.toString(), {
+      method: "GET",
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { "X-Phase-Challenge": challenge },
+    })
+    if (!res.ok) return false
+    const text = (await res.text()).trim()
+    return text.includes(challenge)
+  } catch {
+    return false
+  }
 }
 
 /**

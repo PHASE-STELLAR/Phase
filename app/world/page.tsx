@@ -83,6 +83,10 @@ const copy = {
     lastNarrative: "LAST NARRATIVE",
     none: "—",
     artifactsLabel: "ARTIFACTS",
+    timelineTitle: "◈ [ STORY_TIMELINE ]",
+    timelineLoading: "[ LOADING_TIMELINE ]",
+    timelineEmpty: "[ NO_LORE_NODES ]",
+    timelineNode: "LORE_NODE",
   },
   es: {
     title: "◈ WORLD_STUDIO",
@@ -155,6 +159,10 @@ const copy = {
     lastNarrative: "ÚLTIMA NARRATIVA",
     none: "—",
     artifactsLabel: "ARTEFACTOS",
+    timelineTitle: "◈ [ LÍNEA_TEMPORAL ]",
+    timelineLoading: "[ CARGANDO_LÍNEA ]",
+    timelineEmpty: "[ SIN_NODOS_DE_LORE ]",
+    timelineNode: "NODO_DE_LORE",
   },
 } as const
 
@@ -179,6 +187,12 @@ type Tab = "explore" | "create" | "manage"
 type WorldsApiResponse = {
   items: WorldsListItem[]
   globalStats: WorldsGlobalStats
+}
+
+type StoryTimelineNode = {
+  token_id: number
+  narrative: string
+  created_at: number
 }
 
 // ── Main page component ────────────────────────────────────────────────────────
@@ -457,6 +471,60 @@ function WorldCard({ world, t }: { world: WorldsListItem; t: CopyT }) {
         </div>
       </Link>
     </li>
+  )
+}
+
+export function StoryTimeline({
+  nodes = [],
+  loading = false,
+  limit = 50,
+  t,
+}: {
+  nodes?: StoryTimelineNode[]
+  loading?: boolean
+  limit?: number
+  t: CopyT
+}) {
+  if (loading) {
+    return (
+      <div className="py-6 text-center text-[9px] uppercase tracking-widest text-violet-500/40">
+        {t.timelineLoading}
+      </div>
+    )
+  }
+
+  if (nodes.length === 0) {
+    return (
+      <div className="py-6 text-center text-[9px] uppercase tracking-widest text-violet-500/40">
+        {t.timelineEmpty}
+      </div>
+    )
+  }
+
+  const sorted = [...nodes].sort((a, b) => Number(a.created_at) - Number(b.created_at))
+  const visible = limit > 0 ? sorted.slice(-limit) : sorted
+
+  return (
+    <div className="mt-4 space-y-3 border-t border-violet-500/20 pt-3">
+      <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-violet-500/60">
+        {t.timelineTitle}
+      </p>
+      <ol className="relative ml-1 flex flex-col gap-4 border-l border-violet-500/30 pl-4">
+        {visible.map((node) => (
+          <li key={node.token_id} className="relative">
+            <span className="absolute -left-[21px] top-1.5 h-2 w-2 rotate-45 border border-violet-400 bg-violet-950" />
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="border border-violet-500/30 bg-violet-950/40 px-1.5 py-0.5 text-[8px] uppercase tracking-widest text-violet-400">
+                {t.timelineNode} #{node.token_id}
+              </span>
+            </div>
+            <p className="mt-1.5 text-[12px] italic leading-relaxed text-violet-200/75">
+              {node.narrative}
+            </p>
+          </li>
+        ))}
+      </ol>
+    </div>
   )
 }
 

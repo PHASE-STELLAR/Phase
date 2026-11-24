@@ -1,49 +1,60 @@
-# SPIKE_646 — PHASELQ → EVM bridge
+# Spike 646 — EVM Bridge Design with Lock/Mint + Attestations
 
-**Status:** implemented behind `phase-218` (`PHASE_FLAG_EVM_BRIDGE`)
-**Risk:** Critical · **Mainnet:** explicitly out of scope
+## Objective
+Design (spike only) an EVM ↔ Stellar bridge for PHASE NFTs with lock/mint mechanics and cryptographic attestations.
 
-## Findings
+## Background
+PHASE currently lives on Stellar Soroban. This spike explores cross-chain interoperability with EVM chains (Ethereum, Polygon, etc.) while maintaining Stellar as the source of truth.
 
-- Bridging crosses three boundaries at once: **signing** (user wallet vs
-  server), **custody** (server-held EVM keys), and **finality** (Stellar vs EVM).
-- Any shortcut in these boundaries risks **double-mint**.
-- There is no existing message-finality or replay protection in the app.
+## Architecture
+### Lock/Mint Model
+- **Lock (Stellar → EVM)**: User locks NFT on Stellar, bridge mints a wrapped token on EVM
+- **Mint (EVM → Stellar)**: Wrapped token burnt on EVM, bridge releases original NFT on Stellar
+- Stellar contract holds escrow for locked NFTs
+- EVM contract (new) mints wrapped ERC-721 on release
 
-## Delivered design
+### Attestations
+- Bridge validators sign lock/mint events
+- Multi-signature threshold (e.g., 3-of-5) for release
+- Attestations stored on-chain (Stellar events, EVM state)
+- Merkle proofs for header inclusion in cross-chain verify
 
-- One route only: `stellar-to-evm`, testnet-fenced by a static network snapshot
-  (`assertTestnetFenced`).
-- **Client-side signing:** `prepareLock` returns a `lockRequest` plus
-  `signingBoundary: "client"`. No Stellar secret reaches the server; the
-  prepared object contains no signature or secret field.
-- **Server-side custody:** `BridgeCustody.mint/recover` is the *only* server
-  authority, keyed by an opaque custody key ID from configuration. Operations
-  are documented in `docs/FLAGGED_ADAPTERS.md`.
-- **Idempotent relay:** every record is keyed by Stellar source tx hash.
-  `claimMint` is an atomic claim on that key; a replay returns the original
-  mint tx hash instead of minting again.
-- **Finality:** `finalityDepth` is configurable via
-  `PHASE_BRIDGE_FINALITY_DEPTH`; `advanceFinality` moves a lock to
-  `confirming` only at that depth.
-- **Orphan recovery:** `detectOrphan` → `recoverOrphan` re-checks finality,
-  invokes the documented custody recovery procedure and re-queues the message.
-- **Drift/fee fencing:** `maxDriftBps` and `maxFee` are enforced before a lock
-  is prepared.
+## Stellar Contract Changes
+1. New `lock_for_bridge(token_id, evm_chain) -> escrow_id`
+2. New `release_locked(token_id, attestations) -> ()`
+3. Event: `BridgeLocked { token_id, evm_chain, escrow_id }`
+4. Event: `BridgeReleased { token_id, escrow_id }`
 
-## Acceptance evidence
+## EVM Contract (Research Phase)
+- Wrapping contract for ERC-721 representation
+- Attestation verification logic
+- Burn/release trigger
 
-| Requirement | Test (`tests/bridge.test.ts`) |
-| --- | --- |
-| No double-mint under replay | replay + concurrent replay tests |
-| Orphaned messages recoverable | orphan recovery test |
-| Finality depth configurable | finality depth test |
-| Testnet-only fenced | pubnet fence test |
-| Flag off = no routes | `bridgeRoutes(false)` is empty + route 404 |
-| Partial fill / replay | partial fill test |
-| Drift/fee fences | client-signing boundary test |
+## Security Considerations
+- Validator key rotation mechanism
+- Replay attack prevention (chain ID, nonce)
+- Escrow timeout (auto-release after N blocks)
+- Bridge pause/unpause admin controls
 
-## Rollback
+## Success Criteria
+- [ ] Architecture document approved
+- [ ] Validator set finalized
+- [ ] Stellar contract interface sketched
+- [ ] EVM contract pattern identified
+- [ ] No code changes (spike = design only)
 
-Unset `PHASE_FLAG_EVM_BRIDGE`. Routes disappear; any already-locked funds remain
+## Implementation note (flag `phase-218`)
+
+The design-only spike above remains the authoritative design record. A
+testnet-only adapter was added behind `PHASE_FLAG_EVM_BRIDGE` in
+`lib/adapters/bridge/`:
+
+- `stellar-to-evm` route only; pubnet fenced by a static snapshot;
+- Stellar leg signed client-side, server custody limited to the EVM leg;
+- idempotent relay keyed by Stellar source tx hash with an atomic mint claim;
+- configurable finality depth, drift/fee fences, partial fills and orphan
+  recovery (`docs/FLAGGED_ADAPTERS.md`);
+- no double-mint under replay (`tests/bridge.test.ts`).
+
+Rollback: unset the flag — routes disappear and locked funds remain
 recoverable through the documented custody recovery procedure.

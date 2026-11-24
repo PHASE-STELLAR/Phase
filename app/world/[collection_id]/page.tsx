@@ -86,6 +86,38 @@ type WorldNFT = {
   narrativeTimestamp: number | null
 }
 
+function StoryTimelineVisualizer({
+  narratives,
+}: {
+  narratives: Array<WorldNFT & { narrative: string }>
+}) {
+  const sorted = [...narratives].sort(
+    (a, b) => (a.narrativeTimestamp ?? 0) - (b.narrativeTimestamp ?? 0),
+  )
+
+  return (
+    <ol className="relative space-y-6 border-l border-violet-400/30 pl-6">
+      {sorted.map((nft) => (
+        <li key={nft.tokenId} className="relative">
+          <span className="absolute -left-[31px] top-1 h-2.5 w-2.5 rounded-full border border-violet-400/60 bg-violet-950" />
+          <span className="mb-1 block text-[9px] uppercase tracking-widest text-violet-500/70">
+            TOKEN_#{nft.tokenId} ·{" "}
+            {nft.narrativeTimestamp
+              ? `${new Date(nft.narrativeTimestamp)
+                  .toISOString()
+                  .replace("T", " ")
+                  .slice(0, 19)} UTC`
+              : "UNKNOWN_TIME"}
+          </span>
+          <p className="text-[12px] italic leading-relaxed text-violet-200/80">
+            {nft.narrative}
+          </p>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
 export default async function WorldGalleryPage({ params }: Props) {
   const { collection_id } = await params
   const collectionId = parseInt(collection_id, 10)
@@ -216,6 +248,8 @@ export default async function WorldGalleryPage({ params }: Props) {
                         <img
                           src={nft.image}
                           alt={nft.name}
+                          loading="lazy"
+                          decoding="async"
                           className="aspect-square w-full object-cover opacity-80 transition-opacity group-hover:opacity-95"
                         />
                       ) : (
@@ -258,39 +292,18 @@ export default async function WorldGalleryPage({ params }: Props) {
           {/* ── Section 3: Narrator feed ── */}
           <div className="px-6 py-6 md:px-8">
             <h2 className="mb-5 text-[11px] font-bold uppercase tracking-[0.28em] text-violet-400">
-              ◈ [ NARRATOR_FEED ]
+              ◈ [ NARRATIVE_TIMELINE ]
             </h2>
             {nfts.filter((n) => n.narrative !== null).length === 0 ? (
               <p className="py-10 text-center text-[10px] uppercase tracking-widest text-violet-500/50">
                 [ AWAITING_FIRST_MINT ]
               </p>
             ) : (
-              <ol className="flex flex-col divide-y divide-violet-400/10">
-                {nfts
-                  .filter((n): n is WorldNFT & { narrative: string } => n.narrative !== null)
-                  .sort((a, b) => (b.narrativeTimestamp ?? 0) - (a.narrativeTimestamp ?? 0))
-                  .map((nft) => (
-                    <li key={nft.tokenId} className="flex flex-col gap-2 py-4 first:pt-0 last:pb-0">
-                      <div className="flex flex-wrap items-center gap-3">
-                        {nft.narrativeTimestamp && (
-                          <span className="text-[9px] uppercase tracking-widest text-violet-500/60">
-                            {new Date(nft.narrativeTimestamp)
-                              .toISOString()
-                              .replace("T", " ")
-                              .slice(0, 19)}{" "}
-                            UTC
-                          </span>
-                        )}
-                        <span className="border border-violet-500/30 bg-violet-950/40 px-1.5 py-0.5 text-[8px] uppercase tracking-widest text-violet-400">
-                          TOKEN_#{nft.tokenId}
-                        </span>
-                      </div>
-                      <p className="text-[12px] italic leading-relaxed text-violet-200/80">
-                        {nft.narrative}
-                      </p>
-                    </li>
-                  ))}
-              </ol>
+              <StoryTimelineVisualizer
+                narratives={nfts.filter(
+                  (n): n is WorldNFT & { narrative: string } => n.narrative !== null,
+                )}
+              />
             )}
           </div>
 

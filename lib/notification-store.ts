@@ -1,13 +1,18 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import path from "node:path"
 import { randomUUID } from "node:crypto"
+import { createHash } from "node:crypto"
+import { z } from "zod"
+import { isFeatureEnabled, flagRollbackNote } from "@/lib/feature-flags"
+import { readJsonFile, updateStore, updateStoreWithReader } from "@/lib/json-store"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
+import { isAnalyticsWarehouseEnabled, recordWarehouseEvent } from "@/lib/analytics-warehouse"
+import { isFunnelRetentionEnabled, computeFunnelRetention, type FunnelRetentionReport } from "@/lib/funnel-retention"
 
 export type NotificationType =
   | "mint_in_collection"
   | "narrator_generated"
   | "new_follower"
   | "signal_reply"
+  | "mention"
   | "signal_upvote"
   | "quest_completed"
   | "world_mint"
@@ -15,6 +20,17 @@ export type NotificationType =
   | "offer_accepted"
   | "offer_rejected"
   | "achievement_unlocked"
+  | "content_takedown"
+  | "royalty_payout"
+  | "signal_reaction"
+  // phase-142/146/147
+  | "exhibition_published"
+  | "moderation_hold"
+  | "moderation_appeal_resolved"
+  | "quest_arc_generated"
+  | "quest_arc_completed"
+  // phase-143 winback reactivation hook
+  | "winback_reactivation"
 
 export type Notification = {
   id: string
@@ -26,21 +42,173 @@ export type Notification = {
 }
 
 type NotificationStore = Record<string, Notification[]>
+type GatewayAuthRotationStore = Record<string, GatewayAuthRotation>
 
 const MAX_PER_WALLET = 50
+// phase-98: profile-level notification preferences.
+// Rollback: unset NEXT_PUBLIC_FEATURE_PHASE_98 / FEATURE_PHASE_98; existing notifications remain readable.
+export type NotificationPreferences = {
+  enabled: boolean
+  types: Partial<Record<NotificationType, boolean>>
+  updated_at: number
+}
 
-async function readStore(): Promise<NotificationStore> {
-  try {
-    return JSON.parse(await readFile(serverDataJsonPath("notifications"), "utf8")) as NotificationStore
-  } catch {
-    return {}
+type NotificationPreferenceStore = Record<string, NotificationPreferences>
+
+export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+  enabled: true,
+  types: {},
+  updated_at: 0,
+}
+
+export function isNotificationPreferencesEnabled(): boolean {
+  const value = (process.env.NEXT_PUBLIC_FEATURE_PHASE_98 ?? process.env.FEATURE_PHASE_98 ?? "").trim().toLowerCase()
+  return value === "1" || value === "true" || value === "yes" || value === "on"
+}
+
+export function isPhase128Enabled(): boolean {
+  return isFeatureEnabled("phase-128")
+}
+
+export function phase128RollbackNote(): string {
+  return flagRollbackNote("phase-128")
+}
+
+export const GatewayAuthRotationSchema = z.object({
+  gateway: z.string().trim().min(2).max(64).regex(/^[a-z0-9._-]+$/i),
+  private_tier: z.enum(["starter", "pro", "enterprise"]),
+  next_token: z.string().trim().min(16).max(4096),
+  rotated_by: z.string().trim().min(1).max(128),
+  overlap_ms: z.number().int().min(0).max(86_400_000).default(900_000),
+})
+
+export type GatewayAuthRotationInput = z.infer<typeof GatewayAuthRotationSchema>
+
+export type GatewayAuthRotation = {
+  gateway: string
+  private_tier: GatewayAuthRotationInput["private_tier"]
+  active_token_hash: string
+  previous_token_hash: string | null
+  previous_expires_at: number | null
+  rotated_by: string
+  rotated_at: number
+}
+
+export class GatewayAuthRotationError extends Error {
+  code: "FLAG_DISABLED" | "VALIDATION_FAILED"
+  details?: unknown
+
+  constructor(code: GatewayAuthRotationError["code"], message: string, details?: unknown) {
+    super(message)
+    this.name = "GatewayAuthRotationError"
+    this.code = code
+    this.details = details
   }
 }
 
-async function writeStore(data: NotificationStore): Promise<void> {
-  const filePath = serverDataJsonPath("notifications")
-  await mkdir(path.dirname(filePath), { recursive: true })
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8")
+function hashGatewayToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex")
+}
+
+function gatewayRotationKey(gateway: string, privateTier: string): string {
+  return `${gateway.toLowerCase()}:${privateTier}`
+}
+
+async function readGatewayAuthRotationStore(): Promise<GatewayAuthRotationStore> {
+  return readJsonFile<GatewayAuthRotationStore>(
+    serverDataJsonPath("ipfsGatewayAuthRotations"),
+    {},
+  )
+}
+
+
+export async function rotateIpfsGatewayAuth(input: unknown, opts: { force?: boolean; now?: number } = {}): Promise<GatewayAuthRotation> {
+  if (!opts.force && !isPhase128Enabled()) {
+    throw new GatewayAuthRotationError("FLAG_DISABLED", "phase-128 flag disabled", {
+      rollback: phase128RollbackNote(),
+    })
+  }
+
+  const parsed = GatewayAuthRotationSchema.safeParse(input)
+  if (!parsed.success) {
+    throw new GatewayAuthRotationError("VALIDATION_FAILED", "valid gateway rotation payload required", parsed.error.flatten())
+  }
+
+  const now = opts.now ?? Date.now()
+  const data = parsed.data
+  const key = gatewayRotationKey(data.gateway, data.private_tier)
+  return updateStore<GatewayAuthRotationStore, GatewayAuthRotation>(
+    "ipfsGatewayAuthRotations",
+    (store) => {
+      const current = store[key]
+      const activeTokenHash = hashGatewayToken(data.next_token)
+
+      const rotation: GatewayAuthRotation = {
+        gateway: data.gateway,
+        private_tier: data.private_tier,
+        active_token_hash: activeTokenHash,
+        previous_token_hash: current?.active_token_hash && current.active_token_hash !== activeTokenHash
+          ? current.active_token_hash
+          : current?.previous_token_hash ?? null,
+        previous_expires_at: current?.active_token_hash && current.active_token_hash !== activeTokenHash
+          ? now + data.overlap_ms
+          : current?.previous_expires_at ?? null,
+        rotated_by: data.rotated_by,
+        rotated_at: now,
+      }
+
+      store[key] = rotation
+      return rotation
+    },
+  )
+}
+
+async function readPreferenceStore(): Promise<NotificationPreferenceStore> {
+  return readJsonFile<NotificationPreferenceStore>(
+    serverDataJsonPath("notificationPreferences"),
+    {},
+  )
+}
+
+
+export async function getNotificationPreferences(wallet: string): Promise<NotificationPreferences> {
+  const store = await readPreferenceStore()
+  return { ...DEFAULT_NOTIFICATION_PREFERENCES, ...(store[wallet] ?? {}) }
+}
+
+export async function saveNotificationPreferences(
+  wallet: string,
+  preferences: Partial<Omit<NotificationPreferences, "updated_at">>,
+): Promise<NotificationPreferences> {
+  // Read the merged defaults inside the lock so two concurrent preference
+  // updates cannot both start from the same base and lose one field.
+  return updateStore<NotificationPreferenceStore, NotificationPreferences>(
+    "notificationPreferences",
+    (store) => {
+      const current = {
+        ...DEFAULT_NOTIFICATION_PREFERENCES,
+        ...(store[wallet] ?? {}),
+      }
+      const next: NotificationPreferences = {
+        enabled: preferences.enabled ?? current.enabled,
+        types: { ...current.types, ...(preferences.types ?? {}) },
+        updated_at: Date.now(),
+      }
+      store[wallet] = next
+      return next
+    },
+  )
+}
+
+export async function shouldStoreNotification(wallet: string, type: NotificationType): Promise<boolean> {
+  if (!isNotificationPreferencesEnabled()) return true
+  const preferences = await getNotificationPreferences(wallet)
+  if (!preferences.enabled) return false
+  return preferences.types[type] ?? true
+}
+
+async function readStore(): Promise<NotificationStore> {
+  return readJsonFile<NotificationStore>(serverDataJsonPath("notifications"), {})
 }
 
 export async function createNotification(
@@ -48,8 +216,8 @@ export async function createNotification(
   type: NotificationType,
   data: Record<string, unknown>,
 ): Promise<void> {
-  const store = await readStore()
-  const list = store[wallet] ?? []
+  if (!(await shouldStoreNotification(wallet, type))) return
+
   const notif: Notification = {
     id: randomUUID(),
     wallet,
@@ -58,10 +226,65 @@ export async function createNotification(
     created_at: Date.now(),
     data,
   }
-  // Prepend newest first; cap at MAX_PER_WALLET
-  const updated = [notif, ...list].slice(0, MAX_PER_WALLET)
-  store[wallet] = updated
-  await writeStore(store)
+  await updateStore<NotificationStore>("notifications", (store) => {
+    const list = store[wallet] ?? []
+    // Prepend newest first; cap at MAX_PER_WALLET
+    store[wallet] = [notif, ...list].slice(0, MAX_PER_WALLET)
+  })
+
+  if (isAnalyticsWarehouseEnabled(wallet)) {
+    void recordWarehouseEvent({
+      surface: "notifications",
+      stage: "notification_created",
+      wallet,
+      metadata: { notificationId: notif.id, type },
+    }).catch(() => {})
+  }
+}
+
+export async function createNotificationBatch(
+  wallets: string[],
+  type: NotificationType,
+  data: Record<string, unknown>,
+): Promise<{ succeeded: number; failed: number }> {
+  if (!wallets.length) return { succeeded: 0, failed: 0 }
+
+  const now = Date.now()
+  const notificationId = randomUUID()
+
+  // Preference checks read a different store, so resolve them before taking the
+  // notifications lock instead of holding it across the awaits.
+  const eligible: string[] = []
+  let failed = 0
+  for (const wallet of wallets) {
+    try {
+      if (await shouldStoreNotification(wallet, type)) eligible.push(wallet)
+      else failed++
+    } catch {
+      failed++
+    }
+  }
+
+  if (eligible.length === 0) return { succeeded: 0, failed }
+
+  return updateStore<NotificationStore, { succeeded: number; failed: number }>(
+    "notifications",
+    (store) => {
+      for (const wallet of eligible) {
+        const notif: Notification = {
+          id: notificationId,
+          wallet,
+          type,
+          read: false,
+          created_at: now,
+          data,
+        }
+        const list = store[wallet] ?? []
+        store[wallet] = [notif, ...list].slice(0, MAX_PER_WALLET)
+      }
+      return { succeeded: eligible.length, failed }
+    },
+  )
 }
 
 export async function getNotifications(wallet: string, limit = 30): Promise<Notification[]> {
@@ -70,22 +293,276 @@ export async function getNotifications(wallet: string, limit = 30): Promise<Noti
 }
 
 export async function markRead(wallet: string, notificationId: string): Promise<void> {
-  const store = await readStore()
-  const list = store[wallet]
-  if (!list) return
-  store[wallet] = list.map((n) => (n.id === notificationId ? { ...n, read: true } : n))
-  await writeStore(store)
+  const { assertNoLegalHold } = await import("@/lib/legal-hold");
+  await assertNoLegalHold("wallet", wallet, "mark_read");
+  await updateStore<NotificationStore>("notifications", (store) => {
+    const list = store[wallet]
+    if (!list) return
+    store[wallet] = list.map((n) => (n.id === notificationId ? { ...n, read: true } : n))
+  })
+  if (isAnalyticsWarehouseEnabled(wallet)) {
+    void recordWarehouseEvent({
+      surface: "notifications",
+      stage: "notification_read",
+      wallet,
+      metadata: { notificationId },
+    }).catch(() => {})
+  }
 }
 
 export async function markAllRead(wallet: string): Promise<void> {
-  const store = await readStore()
-  const list = store[wallet]
-  if (!list) return
-  store[wallet] = list.map((n) => ({ ...n, read: true }))
-  await writeStore(store)
+  const { assertNoLegalHold } = await import("@/lib/legal-hold");
+  await assertNoLegalHold("wallet", wallet, "mark_all_read");
+  await updateStore<NotificationStore>("notifications", (store) => {
+    const list = store[wallet]
+    if (!list) return
+    store[wallet] = list.map((n) => ({ ...n, read: true }))
+  })
+  if (isAnalyticsWarehouseEnabled(wallet)) {
+    void recordWarehouseEvent({
+      surface: "notifications",
+      stage: "all_read",
+      wallet,
+    }).catch(() => {})
+  }
 }
 
 export async function getUnreadCount(wallet: string): Promise<number> {
   const store = await readStore()
   return (store[wallet] ?? []).filter((n) => !n.read).length
+}
+
+// ── module #53 (phase-53): faucet analytics — claim funnel metrics ─────────
+//
+// Operators had no visibility into where users abandoned the reward flow: the
+// only signal was a completed claim in the ledger, so drop-off between "opened
+// the faucet" and "claim confirmed" was invisible. This isolated, flag-gated
+// module records lightweight funnel events and aggregates them into per-stage
+// counts, step-to-step conversion, and overall drop-off — the data behind a
+// claim-funnel dashboard. Event bodies carry no secrets; wallet is optional and
+// only used for unique-visitor counts.
+//
+// Feature flag: phase-53 (NEXT_PUBLIC_FEATURE_PHASE_53 / FEATURE_PHASE_53)
+// Rollback: unset the flag → recordFaucetFunnelEvent throws FLAG_DISABLED and
+//           nothing is written. The events sidecar can be deleted safely.
+
+export const FAUCET_FUNNEL_STAGES = [
+  "viewed",
+  "wallet_connected",
+  "claim_started",
+  "claim_signed",
+  "claim_confirmed",
+  "claim_failed",
+] as const
+
+export type FaucetFunnelStage = (typeof FAUCET_FUNNEL_STAGES)[number]
+
+/** Ordered happy-path stages (claim_failed is a terminal branch, not a step). */
+const FUNNEL_PATH: FaucetFunnelStage[] = [
+  "viewed",
+  "wallet_connected",
+  "claim_started",
+  "claim_signed",
+  "claim_confirmed",
+]
+
+const MAX_FUNNEL_EVENTS = 5_000
+
+export function isFaucetAnalyticsEnabled(): boolean {
+  const value = (process.env.NEXT_PUBLIC_FEATURE_PHASE_53 ?? process.env.FEATURE_PHASE_53 ?? "").trim().toLowerCase()
+  return value === "1" || value === "true" || value === "yes" || value === "on"
+}
+
+export function flag53RollbackNote(): string {
+  return "Rollback phase-53: unset NEXT_PUBLIC_FEATURE_PHASE_53 / FEATURE_PHASE_53 or set to 0/false and restart. Funnel recording stops; the faucet-funnel-events.json sidecar can be deleted."
+}
+
+export const FaucetFunnelEventSchema = z.object({
+  stage: z.enum(FAUCET_FUNNEL_STAGES),
+  wallet: z.string().trim().min(1).max(56).optional(),
+  session_id: z.string().trim().min(1).max(64).optional(),
+  ts: z.number().int().min(0).max(4_102_444_800_000).optional(),
+  reason: z.string().trim().max(200).optional(),
+})
+
+export type FaucetFunnelEventInput = z.infer<typeof FaucetFunnelEventSchema>
+
+export type FaucetFunnelEvent = {
+  stage: FaucetFunnelStage
+  wallet: string | null
+  session_id: string | null
+  ts: number
+  reason: string | null
+}
+
+type FaucetFunnelStore = { events: FaucetFunnelEvent[] }
+
+export class FaucetFunnelError extends Error {
+  code: "FLAG_DISABLED" | "VALIDATION_FAILED"
+  details?: unknown
+  constructor(code: FaucetFunnelError["code"], message: string, details?: unknown) {
+    super(message)
+    this.name = "FaucetFunnelError"
+    this.code = code
+    this.details = details
+  }
+}
+
+async function readFunnelStore(): Promise<FaucetFunnelStore> {
+  return readJsonFile<FaucetFunnelStore>(serverDataJsonPath("faucetFunnelEvents"), {
+    events: [],
+  })
+}
+
+
+export async function recordFaucetFunnelEvent(
+  input: unknown,
+  opts: { force?: boolean; now?: number } = {},
+): Promise<FaucetFunnelEvent> {
+  if (!opts.force && !isFaucetAnalyticsEnabled()) {
+    throw new FaucetFunnelError("FLAG_DISABLED", "phase-53 flag disabled (set NEXT_PUBLIC_FEATURE_PHASE_53=1)", {
+      rollback: flag53RollbackNote(),
+    })
+  }
+  const parsed = FaucetFunnelEventSchema.safeParse(input)
+  if (!parsed.success) {
+    throw new FaucetFunnelError("VALIDATION_FAILED", "valid funnel event required", parsed.error.flatten())
+  }
+  const event: FaucetFunnelEvent = {
+    stage: parsed.data.stage,
+    wallet: parsed.data.wallet ?? null,
+    session_id: parsed.data.session_id ?? null,
+    ts: parsed.data.ts ?? opts.now ?? Date.now(),
+    reason: parsed.data.reason ?? null,
+  }
+  if (isAnalyticsWarehouseEnabled(event.wallet ?? undefined)) {
+    void recordWarehouseEvent({
+      surface: "faucet",
+      stage: event.stage,
+      wallet: event.wallet,
+      session_id: event.session_id,
+      ts: event.ts,
+      reason: event.reason,
+    }).catch(() => {})
+  }
+  return updateStoreWithReader<FaucetFunnelStore, FaucetFunnelEvent>(
+    "faucetFunnelEvents",
+    (raw) => {
+      const parsed = raw as FaucetFunnelStore | undefined
+      return parsed && Array.isArray(parsed.events) ? parsed : { events: [] }
+    },
+    (store) => {
+      store.events = [...store.events, event].slice(-MAX_FUNNEL_EVENTS)
+      return event
+    },
+  )
+}
+
+export type ClaimFunnelStageMetric = {
+  stage: FaucetFunnelStage
+  events: number
+  uniqueSubjects: number
+  conversionFromPrev: number | null
+  dropOffFromPrev: number | null
+}
+
+export type ClaimFunnelReport = {
+  windowMs: number | null
+  totalEvents: number
+  stages: ClaimFunnelStageMetric[]
+  failed: { events: number; uniqueSubjects: number }
+  overallConversion: number
+}
+
+function subjectKey(e: FaucetFunnelEvent): string | null {
+  return e.wallet ?? e.session_id ?? null
+}
+
+/** Pure aggregation: turn a flat event list into per-stage funnel metrics. */
+export function computeClaimFunnel(events: readonly FaucetFunnelEvent[], opts: { windowMs?: number; now?: number } = {}): ClaimFunnelReport {
+  const now = opts.now ?? Date.now()
+  const scoped = opts.windowMs ? events.filter((e) => e.ts >= now - opts.windowMs!) : events
+
+  const byStage = new Map<FaucetFunnelStage, FaucetFunnelEvent[]>()
+  for (const stage of FAUCET_FUNNEL_STAGES) byStage.set(stage, [])
+  for (const e of scoped) byStage.get(e.stage)?.push(e)
+
+  const uniqueOf = (list: FaucetFunnelEvent[]) => new Set(list.map(subjectKey).filter((k): k is string => k !== null)).size
+
+  const stages: ClaimFunnelStageMetric[] = FUNNEL_PATH.map((stage, i) => {
+    const list = byStage.get(stage) ?? []
+    const unique = uniqueOf(list)
+    let conversionFromPrev: number | null = null
+    let dropOffFromPrev: number | null = null
+    if (i > 0) {
+      const prev = uniqueOf(byStage.get(FUNNEL_PATH[i - 1]!) ?? [])
+      conversionFromPrev = prev > 0 ? Math.round((unique / prev) * 10_000) / 10_000 : 0
+      dropOffFromPrev = prev > 0 ? Math.round((1 - unique / prev) * 10_000) / 10_000 : 0
+    }
+    return { stage, events: list.length, uniqueSubjects: unique, conversionFromPrev, dropOffFromPrev }
+  })
+
+  const failedList = byStage.get("claim_failed") ?? []
+  const top = stages[0]?.uniqueSubjects ?? 0
+  const bottom = stages[stages.length - 1]?.uniqueSubjects ?? 0
+
+  return {
+    windowMs: opts.windowMs ?? null,
+    totalEvents: scoped.length,
+    stages,
+    failed: { events: failedList.length, uniqueSubjects: uniqueOf(failedList) },
+    overallConversion: top > 0 ? Math.round((bottom / top) * 10_000) / 10_000 : 0,
+  }
+}
+
+export async function getFaucetFunnelAnalytics(opts: { windowMs?: number; now?: number } = {}): Promise<ClaimFunnelReport> {
+  const store = await readFunnelStore()
+  return computeClaimFunnel(store.events, opts)
+}
+
+/**
+ * phase-177 / Spike 611: Funnel analytics v2 with Day-N retention cohorts,
+ * wallet-age bands, and sybil-weighted cohort analytics.
+ */
+export async function getRetentionCohortsAnalytics(opts: { windowMs?: number; now?: number } = {}): Promise<FunnelRetentionReport> {
+  return computeFunnelRetention(opts)
+}
+
+export function auditFaucetAnalyticsWiring(): { ok: boolean; note: string } {
+  if (!isFaucetAnalyticsEnabled()) {
+    return { ok: true, note: "[phase-53] faucet claim-funnel analytics disabled; nothing to audit." }
+  }
+  const probe: FaucetFunnelEvent[] = [
+    { stage: "viewed", wallet: null, session_id: "s1", ts: 1, reason: null },
+    { stage: "wallet_connected", wallet: "GW1", session_id: "s1", ts: 2, reason: null },
+    { stage: "claim_started", wallet: "GW1", session_id: "s1", ts: 3, reason: null },
+  ]
+  try {
+    const report = computeClaimFunnel(probe)
+    if (report.stages.length !== FUNNEL_PATH.length) {
+      return { ok: false, note: "[phase-53] funnel report shape drift (report)." }
+    }
+    return { ok: true, note: `[phase-53] faucet claim-funnel analytics wiring OK. ${flag53RollbackNote()}` }
+  } catch (e) {
+    return { ok: false, note: `[phase-53] funnel analytics schema drift (unexpected, report): ${e instanceof Error ? e.message : String(e)}` }
+  }
+}
+
+// ── Spikes 672/675 (flag-gated): scheduled-start + price-tick notification types ──
+// Fan-out stays instant + capped at 50/wallet; drops enqueue a start dispatch and dutch
+// sends tick updates only to watchers. Types only — no dispatch change when flags off.
+export type SpikeNotificationKind = "drop_started" | "drop_queue_position" | "dutch_tick";
+export function spikeNotificationType(kind: SpikeNotificationKind): string {
+  return kind;
+}
+
+/**
+ * phase-167 / Spike 634: Export notifications and preferences for GDPR Article 20 data portability.
+ */
+export async function exportNotificationsForWallet(
+  wallet: string,
+): Promise<{ items: Notification[]; preferences: NotificationPreferences }> {
+  const items = await getNotifications(wallet);
+  const preferences = await getNotificationPreferences(wallet);
+  return { items, preferences };
 }

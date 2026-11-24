@@ -218,7 +218,7 @@ read-only cross-chain verifier (`phase-219`) are documented in
 ```bash
 npm run flags:check         # reject duplicate flag IDs/env vars/aliases
 npm run drill:kill-switch   # non-destructive kill-switch drill
-npm run test                # adapter unit tests
+npm run test:adapters       # adapter/flag unit tests (npm test runs vitest)
 ```
 
 ---

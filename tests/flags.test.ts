@@ -14,8 +14,8 @@ import {
 
 test("canonical IDs and rollback aliases resolve to one feature", () => {
   assert.equal(resolveFlagId("phase-170"), "phase-170");
-  assert.equal(resolveFlagId("phase-170:albedo-sunset"), "phase-180");
-  assert.equal(resolveFlagId("phase-173:wallet-history"), "phase-183");
+  assert.equal(resolveFlagId("phase-170:albedo-sunset"), "phase-184");
+  assert.equal(resolveFlagId("phase-173:wallet-history"), "phase-187");
   assert.equal(resolveFlagId("phase-sep50-adapter"), "phase-217");
   assert.equal(resolveFlagId("does-not-exist"), null);
   assert.equal(flagEnvVar("phase-170:albedo-sunset"), "PHASE_FLAG_ALBEDO_SUNSET");

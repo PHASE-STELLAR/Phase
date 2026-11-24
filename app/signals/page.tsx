@@ -31,12 +31,16 @@ const copy = {
     replies: "replies",
     upvotes: "upvotes",
     walletBadge: "✓ WALLET",
+    verifiedBadge: "✓ VERIFIED",
     onChain: "✓ ON-CHAIN",
     unverified: "UNVERIFIED",
     collector: "✓ COLLECTOR",
     share: "↗ share",
     expandMore: "[ more ]",
     expandLess: "[ less ]",
+    pollClosed: "POLL CLOSED",
+    scheduled: "SCHEDULED_QUEUE",
+    cancel: "[ CANCEL ]",
   },
   es: {
     title: "◈ TABLERO_DE_SEÑALES",
@@ -56,12 +60,16 @@ const copy = {
     replies: "respuestas",
     upvotes: "votos",
     walletBadge: "✓ WALLET",
+    verifiedBadge: "✓ VERIFICADO",
     onChain: "✓ ON-CHAIN",
     unverified: "NO_VERIFICADO",
     collector: "✓ COLECCIONISTA",
     share: "↗ compartir",
     expandMore: "[ más ]",
     expandLess: "[ menos ]",
+    pollClosed: "ENCUESTA CERRADA",
+    scheduled: "COLA_PROGRAMADA",
+    cancel: "[ CANCELAR ]",
   },
 }
 
@@ -138,12 +146,16 @@ function PostCard({
   lang,
   t,
   onUpvote,
+  onPollVote,
+  viewerWallet,
 }: {
   signal: Signal
   channels: ChannelStat[]
   lang: string
   t: typeof copy.en
   onUpvote: (id: string) => void
+  onPollVote: (signalId: string, optionId: string) => void
+  viewerWallet: string | null
 }) {
   const [expanded, setExpanded] = useState(false)
   const router = useRouter()
@@ -151,6 +163,8 @@ function PostCard({
   const isLong = signal.body.length > 180
   const authorProfile = useAuthorProfile(signal.author_wallet)
   const nftVerified = useNftVerified(signal.author_wallet, signal.nft_token_id)
+  const totalPollVotes = signal.poll?.options.reduce((total, option) => total + option.voters.length, 0) ?? 0
+  const pollClosed = Boolean(signal.poll?.closes_at && signal.poll.closes_at <= Date.now())
 
   return (
     <div
@@ -182,9 +196,13 @@ function PostCard({
           </Link>
           <span
             className="font-mono text-[9px] px-1.5 py-0.5"
-            style={{ background: "#EEEDFE", color: "#534AB7" }}
+            style={
+              signal.signature_verified
+                ? { background: "#E1F5EE", color: "#0F6E56" }
+                : { background: "#EEEDFE", color: "#534AB7" }
+            }
           >
-            {t.walletBadge}
+            {signal.signature_verified ? t.verifiedBadge : t.walletBadge}
           </span>
           {authorProfile.isCollector && (
             <span
@@ -273,6 +291,35 @@ function PostCard({
           )}
         </div>
 
+        {signal.type === "poll" && signal.poll && (
+          <fieldset className="flex flex-col gap-1.5" onClick={(event) => event.stopPropagation()}>
+            <legend className="sr-only">{signal.title}</legend>
+            {signal.poll.options.map((option) => {
+              const selected = Boolean(viewerWallet && option.voters.includes(viewerWallet))
+              const percent = totalPollVotes === 0 ? 0 : Math.round((option.voters.length / totalPollVotes) * 100)
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  disabled={!viewerWallet || pollClosed}
+                  aria-pressed={selected}
+                  onClick={() => onPollVote(signal.id, option.id)}
+                  className={`relative overflow-hidden border px-3 py-2 text-left font-mono text-[10px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#7F77DD] disabled:cursor-not-allowed ${selected ? "border-[#7F77DD] text-violet-200" : "border-[var(--color-border-tertiary)] text-muted-foreground hover:border-[#7F77DD]/60"}`}
+                >
+                  <span className="absolute inset-y-0 left-0 bg-[#534AB7]/10" style={{ width: `${percent}%` }} aria-hidden="true" />
+                  <span className="relative flex justify-between gap-3">
+                    <span>{option.text}</span>
+                    <span>{percent}%</span>
+                  </span>
+                </button>
+              )
+            })}
+            <span className="font-mono text-[8px] text-muted-foreground/60">
+              {totalPollVotes} votes{pollClosed ? ` · ${t.pollClosed}` : ""}
+            </span>
+          </fieldset>
+        )}
+
         {/* Footer */}
         <div className="flex items-center gap-4 pt-1">
           <button
@@ -311,6 +358,10 @@ export default function SignalsPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [composeOpen, setComposeOpen] = useState(false)
+  const [scheduledSignals, setScheduledSignals] = useState<Signal[]>([])
+  const schedulingEnabled = ["1", "true", "yes", "on"].includes(
+    (process.env.NEXT_PUBLIC_FEATURE_PHASE_89 ?? "").trim().toLowerCase(),
+  )
 
   const PAGE = 20
 
@@ -348,6 +399,22 @@ export default function SignalsPage() {
     void fetchSignals(activeChannel, sort)
   }, [activeChannel, sort, fetchSignals])
 
+  useEffect(() => {
+    if (!schedulingEnabled || !address) {
+      setScheduledSignals([])
+      return
+    }
+    const controller = new AbortController()
+    fetch(`/api/signals/scheduled?wallet=${encodeURIComponent(address)}`, {
+      signal: controller.signal,
+      headers: { "x-wallet-signature": address },
+    })
+      .then((response) => response.ok ? response.json() as Promise<{ signals?: Signal[] }> : { signals: [] })
+      .then((data) => setScheduledSignals(data.signals ?? []))
+      .catch(() => {})
+    return () => controller.abort()
+  }, [address, schedulingEnabled])
+
   function handleChannelChange(id: string) {
     setActiveChannel(id)
     setSort("hot")
@@ -373,6 +440,33 @@ export default function SignalsPage() {
         if (data.signal) {
           setSignals((prev) => prev.map((s) => (s.id === id ? data.signal! : s)))
         }
+      })
+      .catch(() => {})
+  }
+
+  function handlePollVote(signalId: string, optionId: string) {
+    if (!address) return
+    void fetch(`/api/signals/${signalId}/vote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ option_id: optionId, wallet: address, signature: address }),
+    })
+      .then((response) => response.json())
+      .then((data: { signal?: Signal }) => {
+        if (data.signal) setSignals((current) => current.map((signal) => signal.id === signalId ? data.signal! : signal))
+      })
+      .catch(() => {})
+  }
+
+  function handleCancelScheduled(id: string) {
+    if (!address) return
+    void fetch("/api/signals/scheduled", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, wallet: address, signature: address }),
+    })
+      .then((response) => {
+        if (response.ok) setScheduledSignals((current) => current.filter((signal) => signal.id !== id))
       })
       .catch(() => {})
   }
@@ -478,6 +572,31 @@ export default function SignalsPage() {
               </button>
             </div>
 
+            {scheduledSignals.length > 0 && (
+              <section aria-labelledby="scheduled-queue-title" className="border-y border-[var(--color-border-tertiary)]">
+                <h2 id="scheduled-queue-title" className="px-3 py-2 font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground/70">
+                  {t.scheduled} ({scheduledSignals.length})
+                </h2>
+                <div className="divide-y divide-[var(--color-border-tertiary)]">
+                  {scheduledSignals.map((signal) => (
+                    <div key={signal.id} className="flex items-center gap-3 px-3 py-2">
+                      <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-foreground/80">{signal.title}</span>
+                      <time className="shrink-0 font-mono text-[8px] text-muted-foreground" dateTime={new Date(signal.scheduled_for ?? 0).toISOString()}>
+                        {new Date(signal.scheduled_for ?? 0).toLocaleString()}
+                      </time>
+                      <button
+                        type="button"
+                        onClick={() => handleCancelScheduled(signal.id)}
+                        className="shrink-0 font-mono text-[8px] text-muted-foreground transition-colors hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#7F77DD]"
+                      >
+                        {t.cancel}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
             {/* Feed */}
             {loading && signals.length === 0 ? (
               <div className="py-8 text-center font-mono text-[11px] text-muted-foreground">
@@ -497,6 +616,8 @@ export default function SignalsPage() {
                     lang={lang}
                     t={t}
                     onUpvote={handleUpvote}
+                    onPollVote={handlePollVote}
+                    viewerWallet={address}
                   />
                 ))}
                 {signals.length < total && (
@@ -520,8 +641,12 @@ export default function SignalsPage() {
         onOpenChange={setComposeOpen}
         channels={channels}
         onCreated={(signal) => {
-          setSignals((prev) => [signal, ...prev])
-          setTotal((n) => n + 1)
+          if (signal.status !== "scheduled") {
+            setSignals((prev) => [signal, ...prev])
+            setTotal((n) => n + 1)
+          } else {
+            setScheduledSignals((current) => [...current, signal].sort((a, b) => (a.scheduled_for ?? 0) - (b.scheduled_for ?? 0)))
+          }
         }}
       />
     </div>

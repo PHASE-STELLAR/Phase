@@ -1,0 +1,36 @@
+{
+  "app": {
+    "name": "PHASE",
+    "tagline": "Mercado NFT Descentralizado en Stellar",
+    "loading": "Cargando...",
+    "error": "Ocurrió un error",
+    "retry": "Reintentar",
+    "cancel": "Cancelar",
+    "confirm": "Confirmar",
+    "close": "Cerrar",
+    "save": "Guardar",
+    "delete": "Eliminar",
+    "edit": "Editar"
+  },
+  "wallet": {
+    "connect": "Conectar Billetera",
+    "disconnect": "Desconectar",
+    "connecting": "Conectando...",
+    "connected": "Conectado",
+    "notConnected": "No Conectado",
+    "selectWallet": "Seleccionar Billetera"
+  },
+  "navigation": {
+    "home": "Inicio",
+    "explore": "Explorar",
+    "forge": "Forja",
+    "profile": "Perfil",
+    "marketplace": "Mercado",
+    "signals": "Señales"
+  },
+  "errors": {
+    "networkError": "Error de red. Por favor verifica tu conexión.",
+    "unknownError": "Ocurrió un error desconocido",
+    "walletRequired": "Por favor conecta tu billetera para continuar"
+  }
+}

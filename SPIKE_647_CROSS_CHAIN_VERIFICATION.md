@@ -1,39 +1,86 @@
-# SPIKE_647 — Cross-chain state verification
+# Spike 647 — Cross-Chain Message Verification with Stellar Proof Relay
 
-**Status:** implemented behind `phase-219` (`PHASE_FLAG_CROSSCHAIN_VERIFY`)
-**Risk:** High · **Authority:** read-only
+## Objective
+Implement generic cross-chain message verification where Stellar is the source-of-truth relay for external proof systems.
 
-## Findings
+## Background
+Enable external systems (rollups, sidechains, other L1s) to verify messages/proofs against Stellar's ledger state, establishing Stellar as a canonical witness layer.
 
-- PHASE trusted single-chain reads with no proof verification.
-- No trust-root configuration, header staleness check or wrong-network fence
-  existed.
+## Architecture
 
-## Delivered design
+### Message Flow
+```
+External System                 Stellar                    PHASE App
+    │                              │                          │
+    ├─ Submit proof/attestation ──▶│                          │
+    │                          Store in ledger entry           │
+    │                              │ (Soroban contract)        │
+    │                              │                          │
+    │                          Emit verification event        │
+    │                              │ emit({ msg_id, proof_hash, status })
+    │                              │                          │
+    └──────────────────────────────┼──────────────────────────▶│
+                                   │    Query proof status     │
+                                   │◀──────────────────────────┤
+                                   │    return verified | pending
+```
 
-- `lib/adapters/crosschain/` provides a light-client-style `verifyProof` over a
-  `StateProof` (chain header + sibling path + claimed root).
-- `VerifierConfig` carries `TrustRoot` (chain, network, root hash, validity
-  window) and `maxHeaderAgeMs`.
-- Header hash and Merkle root are recomputed; tampered values are rejected.
-- Wrong network, wrong chain, stale and future headers are rejected before any
-  proof work is performed.
-- The verifier accepts no write handle and returns only an observation
-  (`key`, `value`, `height`). `VerificationCounters` uses private backing
-  fields; no reset path exists.
-- Flag off returns `{ status: "disabled" }` without touching counters.
+### Stellar Verification Contract
+1. `submit_proof(msg_id: Bytes32, proof: Bytes, source_chain: String) -> Result<()>`
+2. `verify_proof(msg_id: Bytes32) -> ProofStatus` (enum: Pending, Verified, Failed)
+3. `get_proof(msg_id: Bytes32) -> Proof { data, source_chain, timestamp }`
+4. Event: `ProofSubmitted { msg_id, source_chain, timestamp }`
+5. Event: `ProofVerified { msg_id, result: bool }`
 
-## Acceptance evidence
+### Verification Logic
+- Multi-sig validator approval (3-of-5 threshold)
+- Merkle proof validation against external headers
+- Timestamp and nonce replay protection
+- Configurable per-chain verification rules
 
-| Requirement | Test (`tests/crosschain.test.ts`) |
-| --- | --- |
-| Valid proof accepted, tampered rejected | valid proof / tampered value tests |
-| Wrong-network and stale header rejected | wrong network / stale tests |
-| No write authority | read-only output key assertion |
-| Closed counters | monotonic counter test |
-| Flag off = verifier disabled | flag-off test |
+### Integration Points
+- **PHASE App**: Query `/api/verify-proof?msg_id=...` to check status
+- **External Systems**: Call Soroban contract directly or via relay adapter
+- **Validators**: Monitor events and sign off on proofs
 
-## Rollback
+## Data Structure
+```rust
+#[contracttype]
+pub struct Proof {
+    pub id: Bytes32,
+    pub source_chain: String,
+    pub data: Bytes,
+    pub signatures: Vec<Bytes>,
+    pub verified_at: u64,
+    pub status: ProofStatus,
+}
 
-Unset `PHASE_FLAG_CROSSCHAIN_VERIFY`. Verification is skipped and no counters
-are touched.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ProofStatus {
+    Pending = 0,
+    Verified = 1,
+    Failed = 2,
+}
+```
+
+## Success Criteria
+- [ ] Verification contract interface defined
+- [ ] Multi-sig validator logic designed
+- [ ] Replay protection spec finalized
+- [ ] API integration points documented
+- [ ] Test strategy outlined
+
+## Implementation note (flag `phase-219`)
+
+A read-only proof verifier was added behind `PHASE_FLAG_CROSSCHAIN_VERIFY` in
+`lib/adapters/crosschain/`:
+
+- light-client-style header + sibling-path verification against a configured
+  trust root;
+- wrong-network, wrong-chain, stale/future header and tampered-proof fences;
+- no write authority and private, monotonic counters;
+- flag off returns `disabled` without touching counters.
+
+Evidence: `tests/crosschain.test.ts`. Operations: `docs/FLAGGED_ADAPTERS.md`.
+Rollback: unset the flag — verification is skipped.

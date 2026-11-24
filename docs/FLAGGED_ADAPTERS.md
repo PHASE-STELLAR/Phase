@@ -71,5 +71,5 @@ second mint. The atomic `claimMint` guard prevents concurrent double-mints.
 ```bash
 npm run flags:check
 npm run drill:kill-switch
-npm run test
+npm run test:adapters
 ```

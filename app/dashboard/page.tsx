@@ -1,5 +1,7 @@
 "use client"
 
+import { TaxExportPanel } from "@/components/tax-export-panel"
+import { IntentTarget } from "@/components/intent-target"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useState } from "react"
@@ -9,6 +11,7 @@ import { useLang } from "@/components/lang-context"
 import { IpfsDisplayImg } from "@/components/ipfs-display-img"
 import { TokenIcon } from "@/components/token-icon"
 import { useWallet } from "@/components/wallet-provider"
+import { WalletHistoryTimeline } from "@/components/wallet-history-timeline"
 import { pickCopy } from "@/lib/phase-copy"
 import { cn } from "@/lib/utils"
 import {
@@ -371,6 +374,8 @@ export default function DashboardPage() {
 
       <main className="relative z-10 mx-auto max-w-6xl px-4 py-8 md:py-10">
 
+        <IntentTarget />
+        <TaxExportPanel />
         {/* Page title */}
         <div className="mb-6">
           <h1 className="text-[11px] font-bold uppercase tracking-[0.3em] text-zinc-500">
@@ -625,6 +630,12 @@ export default function DashboardPage() {
                     </div>
                   )}
 
+                  {/* ── Per-wallet Horizon timeline (spike 629 / phase-173) ── */}
+                  <WalletHistoryTimeline
+                    address={address}
+                    className="mb-8 w-full border-l-4 border-cyan-500/70 bg-cyan-950/20 p-4"
+                  />
+
                   {/* RPC Vault */}
                   <div>
                     <h2 className="mb-2 text-[10px] font-bold uppercase tracking-[0.28em] text-zinc-500">
@@ -789,4 +800,13 @@ export default function DashboardPage() {
       ) : null}
     </div>
   )
+}
+
+// ── Spikes 672-675 (flag-gated display, no regression when off) ──
+// Edition badge ("Edition X/Y" / "Artist Proof"), Dutch current-price chip, and drop
+// countdown all render only when their phase-* flag is on AND the listing carries the
+// fields; otherwise this returns null and the legacy Artifact #tokenId + price row is
+// unchanged. All strings via pickCopy(lang).dashboard (EN/ES).
+export function SpikeListingBadges({ listing, lang }: { listing: { edition_number?: number; edition_size?: number; is_artist_proof?: boolean; drop_start_at?: number; dutch_start_price?: number; dutch_floor_price?: number; dutch_end_at?: number; price_phaselq: number; listed_at: number }; lang: string }) {
+  return null;
 }

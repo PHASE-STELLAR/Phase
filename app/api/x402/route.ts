@@ -6,6 +6,7 @@ import {
   stroopsToLiqDisplay,
   tokenContractIdForServer,
 } from "@/lib/phase-protocol"
+import { resolveForgeRequiredAmountStroops } from "@/lib/experiments"
 
 export const dynamic = 'force-dynamic'
 
@@ -13,6 +14,10 @@ const PHASE_PROTOCOL_CONTRACT = phaseProtocolContractIdForServer()
 const PHASE_LIQ_TOKEN_CONTRACT = tokenContractIdForServer()
 
 const X402_NETWORK = "stellar:testnet"
+
+function localShimEnabled(): boolean {
+  return process.env.X402_LOCAL_SHIM_ENABLED?.trim().toLowerCase() === "true"
+}
 
 type LocalX402Token = {
   invoice?: string
@@ -24,8 +29,8 @@ type LocalX402Token = {
   contract_id?: string
 }
 
-function parseRequiredAmount(): number {
-  const parsed = Number.parseInt(REQUIRED_AMOUNT, 10)
+function parseRequiredAmount(amountStroops: string = REQUIRED_AMOUNT): number {
+  const parsed = Number.parseInt(amountStroops, 10)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
 }
 
@@ -45,20 +50,26 @@ function decodeX402Token(raw: string): LocalX402Token | null {
   }
 }
 
-function isSatisfiedPayment(payload: LocalX402Token | null): boolean {
+function isSatisfiedPayment(payload: LocalX402Token | null, requiredStroops: string = REQUIRED_AMOUNT): boolean {
   if (!payload) return false
   const amount = Number(payload.amount)
-  return Boolean(payload.invoice) && Number.isFinite(amount) && amount >= parseRequiredAmount()
+  return Boolean(payload.invoice) && Number.isFinite(amount) && amount >= parseRequiredAmount(requiredStroops)
 }
 
 export async function GET(request: NextRequest) {
+  if (!localShimEnabled()) {
+    return NextResponse.json({ error: "x402 local shim disabled" }, { status: 503 })
+  }
   const authHeader = request.headers.get("authorization")
   const facilitator = facilitatorUrl(request)
+  // Spike 612: variant-aware floor when a payer address is supplied; control otherwise.
+  const payerAddress = request.nextUrl.searchParams.get("payer")?.trim() || undefined
+  const requiredStroops = (await resolveForgeRequiredAmountStroops(payerAddress)).amountStroops
 
   if (authHeader && authHeader.startsWith("x402 ")) {
     const token = authHeader.replace("x402 ", "").trim()
     const payload = decodeX402Token(token)
-    if (isSatisfiedPayment(payload)) {
+    if (isSatisfiedPayment(payload, requiredStroops)) {
       return NextResponse.json({
         status: "success",
         data: {
@@ -78,8 +89,8 @@ export async function GET(request: NextRequest) {
     token: PHASE_LIQ_TOKEN_CONTRACT,
     contract_id: PHASE_PROTOCOL_CONTRACT,
     token_contract: PHASE_LIQ_TOKEN_CONTRACT,
-    amount: parseRequiredAmount(),
-    priceDisplay: `${stroopsToLiqDisplay(REQUIRED_AMOUNT)} ${PHASER_LIQ_SYMBOL}`,
+    amount: parseRequiredAmount(requiredStroops),
+    priceDisplay: `${stroopsToLiqDisplay(requiredStroops)} ${PHASER_LIQ_SYMBOL}`,
     facilitator,
     invoice: `inv_${Date.now()}`,
     resource: request.nextUrl.pathname,
@@ -97,7 +108,7 @@ export async function GET(request: NextRequest) {
       status: 402,
       headers: {
         "WWW-Authenticate": `x402 token="${challengeBase64}", amount="${challenge.amount}", facilitator="${facilitator}", network="${X402_NETWORK}"`,
-        "X-Required-Amount": REQUIRED_AMOUNT,
+        "X-Required-Amount": requiredStroops,
         "X-Token-Address": PHASE_LIQ_TOKEN_CONTRACT,
         "X-Facilitator": facilitator,
         "X-X402-Network": X402_NETWORK,
@@ -107,6 +118,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  if (!localShimEnabled()) {
+    return NextResponse.json({ error: "x402 local shim disabled" }, { status: 503 })
+  }
   try {
     const facilitator = facilitatorUrl(request)
     const body = await request.json()
@@ -123,7 +137,8 @@ export async function POST(request: NextRequest) {
     }
 
     const payload = decodeX402Token(payment_token)
-    if (!payload || !isSatisfiedPayment(payload)) {
+    const requiredStroops = (await resolveForgeRequiredAmountStroops(user_address)).amountStroops
+    if (!payload || !isSatisfiedPayment(payload, requiredStroops)) {
       return NextResponse.json({ error: "Invalid or insufficient x402 payment token" }, { status: 401 })
     }
 
@@ -143,3 +158,6 @@ export async function POST(request: NextRequest) {
     )
   }
 }
+
+// ── Spike 674 note: 402 challenge amounts stay REQUIRED_AMOUNT-based; per-payee fan-out is
+// a settle-time concern (see settle/route.ts + recordCollabSplits). No challenge change.

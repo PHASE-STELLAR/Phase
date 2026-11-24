@@ -56,11 +56,11 @@ export async function POST(request: NextRequest): Promise<NextResponse<ClaimBoun
   const upstreamUrl = new URL("/api/faucet", request.url)
   const upstream = await fetch(upstreamUrl, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(request.headers.get("authorization") ? { Authorization: request.headers.get("authorization")! } : {}) },
     body: JSON.stringify(payload),
     cache: "no-store",
   })
 
   const upstreamJson = (await upstream.json().catch(() => ({ error: `HTTP ${upstream.status}` }))) as ClaimBountyResponse
-  return NextResponse.json(upstreamJson, { status: upstream.status })
+  return NextResponse.json(upstreamJson, { status: upstream.status, headers: { "Cache-Control": "private, no-store", ...(upstream.headers.get("retry-after") ? { "Retry-After": upstream.headers.get("retry-after")! } : {}) } })
 }

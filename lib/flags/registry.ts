@@ -29,7 +29,7 @@ export const FLAG_DEFINITIONS: readonly FlagDefinition[] = [
     aliases: ["phase-170:log-pipeline", "phase-log-pipeline"],
   },
   {
-    id: "phase-180",
+    id: "phase-184",
     envVar: "PHASE_FLAG_ALBEDO_SUNSET",
     feature: "Albedo sunset / deprecation notice",
     rollback: "Unset PHASE_FLAG_ALBEDO_SUNSET; Albedo adapter stays active.",
@@ -43,7 +43,7 @@ export const FLAG_DEFINITIONS: readonly FlagDefinition[] = [
     aliases: ["phase-171:backup-dr", "phase-backup-dr"],
   },
   {
-    id: "phase-181",
+    id: "phase-185",
     envVar: "PHASE_FLAG_FREIGHTER_MOBILE",
     feature: "Freighter deep-link / mobile wallet flow",
     rollback: "Unset PHASE_FLAG_FREIGHTER_MOBILE; desktop flow only.",
@@ -57,7 +57,7 @@ export const FLAG_DEFINITIONS: readonly FlagDefinition[] = [
     aliases: ["phase-172:db-parity", "phase-db-parity"],
   },
   {
-    id: "phase-182",
+    id: "phase-186",
     envVar: "PHASE_FLAG_BIOMETRIC_UNLOCK",
     feature: "Biometric trust-gate unlock",
     rollback: "Unset PHASE_FLAG_BIOMETRIC_UNLOCK; gate error #13 remains closed.",
@@ -71,7 +71,7 @@ export const FLAG_DEFINITIONS: readonly FlagDefinition[] = [
     aliases: ["phase-173:preview-isolation", "phase-preview-isolation"],
   },
   {
-    id: "phase-183",
+    id: "phase-187",
     envVar: "PHASE_FLAG_WALLET_HISTORY",
     feature: "Wallet history indexing",
     rollback: "Unset PHASE_FLAG_WALLET_HISTORY; history indexer is disabled.",

@@ -1,44 +1,53 @@
-# SPIKE_645 — SEP-50 conformance gaps
+# Spike 645 — Soroban SEP-50 Full Conformance Checklist + CI Suite
 
-**Status:** implemented behind `phase-217` (`PHASE_FLAG_SEP50_ADAPTER`)
-**Risk:** High · **Ecosystem:** Stellar / regulated assets
+## Objective
+Ensure the PHASE Soroban contract fully complies with SEP-50 (Stellar Enhancement Proposal 50) NFT standard, with automated conformance tests in CI.
 
-## Findings
+## Current State
+- Contract implements basic owner_of, token_uri, token_metadata
+- No formal SEP-50 conformance audit
+- No automated compliance verification in CI
 
-- The app's SEP-50 surface is **NFT metadata only** (`owner_of`, `token_uri`,
-  `token_metadata`, approvals). There is no adapter for SEP-50 *attestations*
-  used by regulated-asset issuers.
-- Compliance checks in `PROJECT_ARCHITECTURE.md` §13 were adapter-shaped but
-  never wired to an attestation provider.
-- No SEP-10 session binding existed, so an attestation could not be tied to an
-  authenticated Stellar account.
-- Provider outage had no defined response; a failure could be mistaken for a
-  negative compliance result.
+## Required Compliance
+SEP-50 specifies:
+1. `owner_of(token_id: u32) -> Address`
+2. `token_uri(token_id: u32) -> String`
+3. `token_metadata(token_id: u32) -> Map<String, String>`
+4. Metadata MUST include: "name", "description", "image", "mime_type", "properties"
+5. Event emission: creation, transfer, burn (if applicable)
+6. No metadata mutation (immutable URIs after creation)
 
-## Delivered design
+## Implementation Plan
+1. **Audit existing contract** (contracts/phase-protocol/src/lib.rs)
+   - Verify all 3 main read functions
+   - Check metadata structure completeness
+   
+2. **Add conformance tests**
+   - Create tests/conformance-sep50.rs
+   - Test each SEP-50 requirement
+   - Validate metadata JSON structure
+   
+3. **CI integration**
+   - Add GitHub Actions workflow for conformance suite
+   - Block merge if conformance fails
 
-- `lib/adapters/sep50/` defines `Sep50Provider`, `Sep10Session`,
-  `Sep50Attestation` and a fail-closed `runSep50Check`.
-- Discovery → SEP-10 session binding → attestation fetch → signature/expiry/
-  issuer/subject verification.
-- Subject is stored only as `sha256(account|issuer)` (`subjectHash`); raw
-  account, token and claim data are never returned or persisted.
-- Outage yields `{ status: "unavailable", retryAfter }`; the API maps this to
-  **503 + `Retry-After`**.
-- `SEP50MockProvider` is fenced by a static env snapshot and cannot be enabled
-  outside testnet.
+## Success Criteria
+- [ ] All SEP-50 requirements documented
+- [ ] Contract passes conformance test suite
+- [ ] CI workflow enforces conformance
+- [ ] Metadata compliance documented in PROJECT_ARCHITECTURE.md
 
-## Acceptance evidence
+## Attestation conformance (flag `phase-217`)
 
-| Requirement | Test |
-| --- | --- |
-| Valid attestation accepted | `tests/sep50.test.ts` → valid attestation |
-| Tampered/expired rejected | tampered signature/subject, expired attestation |
-| Outage → 503 + Retry-After | provider outage test + `app/api/compliance/sep50/route.ts` |
-| No PII persisted | outcome key assertion in valid-attestation test |
-| Flag off = disabled | flag-off test (no provider call) |
+This spike owns the Soroban NFT-interface checklist above. The separate
+regulated-asset / SEP-10-attestation scope is implemented behind
+`PHASE_FLAG_SEP50_ADAPTER` in `lib/adapters/sep50/`:
 
-## Rollback
+- discovery → SEP-10 session binding → attestation verification;
+- hashed subjects only (`sha256(account|issuer)`), no PII persisted;
+- tampered/expired attestations rejected;
+- provider outage fails closed with `503` + `Retry-After`;
+- testnet mock provider fenced by a static network snapshot.
 
-Unset `PHASE_FLAG_SEP50_ADAPTER`. The adapter is skipped and the route returns
-404; no adapter row is written.
+Operational details: `docs/FLAGGED_ADAPTERS.md`. Evidence:
+`tests/sep50.test.ts`. Rollback: unset the flag — checks are skipped.

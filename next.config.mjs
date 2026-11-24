@@ -1,18 +1,50 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Spike 608 (phase-175): bonded with next 16.2.2 + react 19.2.0 + @stellar/stellar-sdk ^15.0.1
   transpilePackages: ["@creit.tech/stellar-wallets-kit"],
   // Rust build trees are committed in this repo; exclude from serverless traces (250 MB limit on Vercel).
   outputFileTracingExcludes: {
     "*": ["./contracts/**/*", "./scripts/**/*"],
   },
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   images: {
-    unoptimized: true,
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "gateway.pinata.cloud",
+        pathname: "/ipfs/**",
+      },
+      {
+        protocol: "https",
+        hostname: "ipfs.io",
+        pathname: "/ipfs/**",
+      },
+      {
+        protocol: "https",
+        hostname: "dweb.link",
+        pathname: "/ipfs/**",
+      },
+      {
+        protocol: "https",
+        hostname: "*.nanobananaapi.ai",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "nanobananaapi.ai",
+        pathname: "/**",
+      },
+    ],
   },
   async headers() {
     return [
+      {
+        source: "/.well-known/:association(assetlinks.json|apple-app-site-association)",
+        headers: [
+          { key: "Content-Type", value: "application/json" },
+          { key: "Access-Control-Allow-Origin", value: "*" },
+          { key: "Cache-Control", value: "public, max-age=300" },
+        ],
+      },
       // Security headers — applied to every route
       {
         source: "/(.*)",
@@ -22,7 +54,24 @@ const nextConfig = {
           { key: "Strict-Transport-Security",    value: "max-age=63072000; includeSubDomains; preload" },
           { key: "Cross-Origin-Opener-Policy",   value: "same-origin-allow-popups" },
           { key: "Referrer-Policy",              value: "strict-origin-when-cross-origin" },
-          { key: "Permissions-Policy",           value: "camera=(), microphone=(), geolocation=()" },
+          { key: "Permissions-Policy",           value: "camera=(self), microphone=(), geolocation=()" },
+          {
+            key: "Content-Security-Policy",
+            value: [
+              "default-src 'self'",
+              "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://vercel.live https://va.vercel-scripts.com",
+              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+              "img-src 'self' data: blob: https: http:",
+              "font-src 'self' data: https://fonts.gstatic.com",
+              "connect-src 'self' https: wss: http://localhost:* ws://localhost:*",
+              "frame-src 'self' https://verify.walletconnect.com https://verify.walletconnect.org https://albedo.link",
+              "worker-src 'self' blob:",
+              "child-src 'self' blob:",
+              "form-action 'self'",
+              "base-uri 'self'",
+              "manifest-src 'self'",
+            ].join("; "),
+          },
         ],
       },
       {
@@ -33,12 +82,48 @@ const nextConfig = {
           { key: "Access-Control-Allow-Headers", value: "Content-Type" },
         ],
       },
+      // Static assets: long-lived cache with immutable hash
+      {
+        source: "/_next/static/(.*)",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+        ],
+      },
+      // Image optimization: edge cache with revalidation
+      {
+        source: "/_next/image(.*)",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+        ],
+      },
+      // Font files: long cache with CDN edge strategy
+      {
+        source: "/fonts/(.*)",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
+      // HTML pages: short-lived, stale-while-revalidate for edge freshness
+      {
+        source: "/:path*",
+        has: [{ type: "header", key: "accept", value: "(?=.*html)" }],
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=3600, stale-while-revalidate=86400" },
+        ],
+      },
       {
         source: "/phaser-liq-token.png",
         headers: [
           { key: "Access-Control-Allow-Origin",  value: "*" },
           { key: "Cross-Origin-Resource-Policy", value: "cross-origin" },
-          { key: "Cache-Control",                value: "public, max-age=86400, immutable" },
+          { key: "Cache-Control",                value: "public, max-age=86400, must-revalidate" },
+        ],
+      },
+      {
+        source: "/assets/(.*)",
+        headers: [
+          { key: "Cache-Control",                value: "public, max-age=86400, must-revalidate" },
         ],
       },
     ]

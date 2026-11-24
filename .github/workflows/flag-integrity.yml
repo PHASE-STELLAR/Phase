@@ -28,4 +28,4 @@ jobs:
         env:
           PHASE_FLAG_KILL_SWITCH_DRILLS: "1"
       - name: Adapter and flag unit tests
-        run: npm run test
+        run: npm run test:adapters

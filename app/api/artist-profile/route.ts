@@ -1,104 +1,95 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import path from "node:path"
 import { NextRequest, NextResponse } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
-import { serverDataJsonPath } from "@/lib/server-data-paths"
+import {
+  getProfileHandle,
+  resolveProfileHandle,
+  saveProfileHandle,
+  isPhase66Enabled,
+  getCrtBundleSavingsSummary,
+  isFaucetRateLimitRedisEnabled,
+  auditFaucetRateLimitWiring,
+} from "@/lib/profile-store"
 
-type ArtistProfile = {
-  alias: string
-  updatedAt: number
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
+
+type ArtistProfileBody = {
+  walletAddress?: unknown
+  alias?: unknown
+  handle?: unknown
 }
 
-type ArtistProfiles = Record<string, ArtistProfile>
-
-const ALIAS_MIN = 3
-const ALIAS_MAX = 24
-const ALIAS_PATTERN = /^[A-Za-z0-9 _.-]+$/
-
-function profilesFilePath() {
-  return serverDataJsonPath("artistProfiles")
-}
-
-async function readProfiles(): Promise<ArtistProfiles> {
-  try {
-    const raw = await readFile(profilesFilePath(), "utf8")
-    const parsed = JSON.parse(raw) as ArtistProfiles
-    return parsed && typeof parsed === "object" ? parsed : {}
-  } catch {
-    return {}
-  }
-}
-
-async function writeProfiles(profiles: ArtistProfiles) {
-  const file = profilesFilePath()
-  await mkdir(path.dirname(file), { recursive: true })
-  await writeFile(file, JSON.stringify(profiles, null, 2), "utf8")
-}
-
-function normalizeAlias(input: string) {
-  return input.trim().replace(/\s+/g, " ")
-}
-
-function validateAlias(alias: string): string | null {
-  if (alias.length < ALIAS_MIN || alias.length > ALIAS_MAX) {
-    return `Alias must be ${ALIAS_MIN}-${ALIAS_MAX} characters.`
-  }
-  if (!ALIAS_PATTERN.test(alias)) {
-    return "Alias may only contain letters, numbers, spaces, ., -, and _."
-  }
-  return null
+function handleResponseStatus(code: string) {
+  if (code === "HANDLE_TAKEN") return 409
+  if (code === "NOT_FOUND") return 404
+  return 400
 }
 
 export async function GET(req: NextRequest) {
   const wallet = req.nextUrl.searchParams.get("walletAddress")?.trim() ?? ""
-  if (!wallet || !StrKey.isValidEd25519PublicKey(wallet)) {
-    return NextResponse.json({ error: "walletAddress inválida." }, { status: 400 })
+  const handle = req.nextUrl.searchParams.get("handle")?.trim() ?? ""
+
+  if (handle) {
+    const resolved = await resolveProfileHandle(handle)
+    if (!resolved.ok) {
+      return NextResponse.json(
+        { error: resolved.error, code: resolved.code, feature_enabled: resolved.featureEnabled },
+        { status: handleResponseStatus(resolved.code) },
+      )
+    }
+
+    return NextResponse.json({
+      walletAddress: resolved.walletAddress,
+      alias: resolved.handle,
+      handle: resolved.handle,
+      updatedAt: resolved.updatedAt,
+      feature_enabled: resolved.featureEnabled,
+    })
   }
-  const profiles = await readProfiles()
-  const profile = profiles[wallet] ?? null
+
+  if (!wallet || !StrKey.isValidEd25519PublicKey(wallet)) {
+    return NextResponse.json({ error: "walletAddress invalida." }, { status: 400 })
+  }
+
+  const profile = await getProfileHandle(wallet)
   return NextResponse.json({
     walletAddress: wallet,
-    alias: profile?.alias ?? null,
+    alias: profile?.handle ?? null,
+    handle: profile?.handle ?? null,
     updatedAt: profile?.updatedAt ?? null,
+    ...(isPhase66Enabled() ? { crt_code_split: getCrtBundleSavingsSummary() } : {}),
+    ...(isFaucetRateLimitRedisEnabled() ? { faucet_rate_limit: auditFaucetRateLimitWiring() } : {}),
   })
 }
 
 export async function POST(req: NextRequest) {
-  let body: { walletAddress?: string; alias?: string }
+  let body: ArtistProfileBody
   try {
-    body = (await req.json()) as { walletAddress?: string; alias?: string }
+    body = (await req.json()) as ArtistProfileBody
   } catch {
-    return NextResponse.json({ error: "JSON inválido." }, { status: 400 })
+    return NextResponse.json({ error: "JSON invalido." }, { status: 400 })
   }
 
-  const wallet = body.walletAddress?.trim() ?? ""
+  const wallet = typeof body.walletAddress === "string" ? body.walletAddress.trim() : ""
   if (!wallet || !StrKey.isValidEd25519PublicKey(wallet)) {
-    return NextResponse.json({ error: "walletAddress inválida." }, { status: 400 })
-  }
-  const aliasRaw = typeof body.alias === "string" ? normalizeAlias(body.alias) : ""
-  const invalid = validateAlias(aliasRaw)
-  if (invalid) {
-    return NextResponse.json({ error: invalid }, { status: 400 })
+    return NextResponse.json({ error: "walletAddress invalida." }, { status: 400 })
   }
 
-  try {
-    const profiles = await readProfiles()
-    profiles[wallet] = { alias: aliasRaw, updatedAt: Date.now() }
-    await writeProfiles(profiles)
-    return NextResponse.json({
-      ok: true,
-      walletAddress: wallet,
-      alias: aliasRaw,
-      updatedAt: profiles[wallet].updatedAt,
-    })
-  } catch (err) {
-    console.error("[artist-profile] POST write failed:", err)
+  const handle = typeof body.handle === "string" ? body.handle : typeof body.alias === "string" ? body.alias : ""
+  const saved = await saveProfileHandle(wallet, handle)
+  if (!saved.ok) {
     return NextResponse.json(
-      {
-        error:
-          "No se pudo guardar el alias en el servidor. Si usas un volumen persistente, define PHASE_SERVER_DATA_DIR.",
-      },
-      { status: 503 },
+      { error: saved.error, code: saved.code, feature_enabled: saved.featureEnabled },
+      { status: handleResponseStatus(saved.code) },
     )
   }
+
+  return NextResponse.json({
+    ok: true,
+    walletAddress: wallet,
+    alias: saved.handle,
+    handle: saved.handle,
+    updatedAt: saved.updatedAt,
+    feature_enabled: saved.featureEnabled,
+  })
 }
