@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 /**
  * GET /api/jobs/[txHash]
  *
@@ -73,7 +74,7 @@ export async function GET(
     )
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error("[jobs/txHash] Error reading job store:", msg)
+    serverLog.error("[jobs/txHash] Error reading job store:", msg)
     return NextResponse.json(
       { found: false, error: "Internal error reading job status" },
       { status: 500, headers: { "Cache-Control": "no-store" } },

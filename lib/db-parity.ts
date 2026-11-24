@@ -240,6 +240,12 @@ export function compareTable(table: string, left: TableData, right: TableData): 
 
 export type ParityReport = { ok: boolean; tables: TableParity[]; missingTables: string[] }
 
+/** A source whose tables/reads may be asynchronous (a `pg` ParitySource is). */
+export type AsyncParitySource = {
+  tables(): string[] | Promise<string[]>
+  read(table: string): TableData | Promise<TableData>
+}
+
 export function compareSources(left: ParitySource, right: ParitySource): ParityReport {
   const rightTables = new Set(right.tables())
   const tables: TableParity[] = []
@@ -251,6 +257,29 @@ export function compareSources(left: ParitySource, right: ParitySource): ParityR
     }
     tables.push(compareTable(table, left.read(table), right.read(table)))
   }
+  return finalizeParityReport(tables, missingTables)
+}
+
+/** Same typed comparison, awaiting either side so a real Postgres can participate. */
+export async function compareSourcesAsync(
+  left: AsyncParitySource,
+  right: AsyncParitySource,
+): Promise<ParityReport> {
+  const rightTables = new Set(await right.tables())
+  const tables: TableParity[] = []
+  const missingTables: string[] = []
+  for (const table of await left.tables()) {
+    if (!rightTables.has(table)) {
+      missingTables.push(table)
+      continue
+    }
+    const [leftData, rightData] = await Promise.all([left.read(table), right.read(table)])
+    tables.push(compareTable(table, leftData, rightData))
+  }
+  return finalizeParityReport(tables, missingTables)
+}
+
+function finalizeParityReport(tables: TableParity[], missingTables: string[]): ParityReport {
   const ok = missingTables.length === 0 && tables.every((t) => t.match)
   incSecurityCounter("db_parity_checked")
   if (!ok) incSecurityCounter("db_parity_mismatch")
@@ -326,7 +355,13 @@ export class DualWriter {
       ])
       incSecurityCounter("db_dual_write_ok")
     } catch (error) {
-      this.recordDrift(op.table, error instanceof Error && error.message === "timeout" ? "timeout" : "error")
+      const kind: DriftEntry["reason"] =
+        error instanceof Error && (error as Error & { shed?: boolean }).shed
+          ? "shed"
+          : error instanceof Error && error.message === "timeout"
+            ? "timeout"
+            : "error"
+      this.recordDrift(op.table, kind)
     } finally {
       if (timer) clearTimeout(timer)
       this.inflight -= 1

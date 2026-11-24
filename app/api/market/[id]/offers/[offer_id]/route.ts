@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { isPhase233Enabled, persistWashDecision } from "@/lib/wash-screening"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 import { verifySignalSignature } from "@/lib/viewer-signature"
@@ -93,7 +94,7 @@ export async function POST(
       try {
         markSuggestionSold(id)
       } catch (error) {
-        console.warn("[phase-143] time-to-sale not stamped:", error)
+        serverLog.warn("[phase-143] time-to-sale not stamped:", error)
       }
     }
 

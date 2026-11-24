@@ -16,6 +16,7 @@ import {
   publicPhaseSiteBaseUrl,
 } from "@/lib/phase-nft-metadata-build"
 import { preparePhaseStreaming } from "@/lib/phase-streaming"
+import { createOwnerReadBatcher, isOwnerReadBatchingEnabled } from "@/lib/owner-read-batcher"
 import { IpfsDisplayImg } from "@/components/ipfs-display-img"
 
 export const dynamic = "force-dynamic"
@@ -149,16 +150,34 @@ export default async function WorldGalleryPage({ params }: Props) {
   if (total > 0) {
     const ids = Array.from({ length: total }, (_, i) => i + 1)
 
-    // 1. Scan owners
-    const owned = await mapConcurrent(ids, 12, async (id) => {
-      try {
-        const owner = await fetchTokenOwnerAddress(contractId, id)
-        return owner ? id : null
-      } catch {
-        return null
-      }
-    })
-    const ownedIds = owned.filter((x): x is number => x !== null)
+    // 1. Scan owners (phase-210 collapses this to chunked batches with
+    // sidecar/index answers first; flag off keeps the original per-token scan).
+    let ownedIds: number[]
+    if (isOwnerReadBatchingEnabled()) {
+      const batcher = createOwnerReadBatcher({
+        loadOne: (id) => fetchTokenOwnerAddress(contractId, id),
+        loadOwnerBatch: (batch) =>
+          mapConcurrent([...batch], 12, async (id) => {
+            try {
+              return await fetchTokenOwnerAddress(contractId, id)
+            } catch {
+              return null
+            }
+          }),
+      })
+      const owners = await batcher.loadMany(ids)
+      ownedIds = owners.flatMap((owner, i) => (typeof owner === "string" && owner ? [ids[i]] : []))
+    } else {
+      const owned = await mapConcurrent(ids, 12, async (id) => {
+        try {
+          const owner = await fetchTokenOwnerAddress(contractId, id)
+          return owner ? id : null
+        } catch {
+          return null
+        }
+      })
+      ownedIds = owned.filter((x): x is number => x !== null)
+    }
 
     // 2. Build metadata + filter by collectionId + fetch narratives (single pass)
     const results = await mapConcurrent(ownedIds, 8, async (id) => {

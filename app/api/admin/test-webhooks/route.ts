@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { NextRequest, NextResponse } from "next/server"
 import { testWebhooks } from "@/lib/webhook-alerts"
 
@@ -13,7 +14,7 @@ function validateAdminAuth(req: NextRequest): boolean {
   const adminToken = process.env.ADMIN_API_TOKEN?.trim()
   
   if (!adminToken) {
-    console.warn("[admin/test-webhooks] ADMIN_API_TOKEN not configured")
+    serverLog.warn("[admin/test-webhooks] ADMIN_API_TOKEN not configured")
     return false
   }
   

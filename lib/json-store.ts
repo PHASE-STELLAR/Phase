@@ -278,6 +278,35 @@ export function readStore<T extends object>(
   return readJsonFile<T>(serverDataJsonPath(key), fallback());
 }
 
+/**
+ * Sidecar `mget`: one read of one sidecar, many record keys returned as a map.
+ * This is the batch primitive the owner loader uses so N owner reads collapse
+ * to a single file read instead of N `readStore` calls.
+ */
+export async function mgetStoreRecords<V>(
+  key: ServerDataFile,
+  ids: readonly string[],
+  fallback: () => Record<string, V> = () => ({}),
+): Promise<Record<string, V>> {
+  const store = await readStore<Record<string, V>>(key, fallback)
+  const out: Record<string, V> = {}
+  for (const id of ids) {
+    if (Object.prototype.hasOwnProperty.call(store, id)) out[id] = store[id]
+  }
+  return out
+}
+
+/** Multi-sidecar mget: one call reads several registered files concurrently. */
+export async function mgetStores<T extends object>(
+  keys: readonly ServerDataFile[],
+  fallback: () => T,
+): Promise<Map<ServerDataFile, T>> {
+  const pairs = await Promise.all(
+    keys.map(async (key) => [key, await readStore<T>(key, fallback)] as const),
+  )
+  return new Map(pairs)
+}
+
 // ── Spikes 672-675: flag-gated sidecar index helpers (no behavior change when flags off) ──
 // Each index is a plain JSON map persisted via the atomic helpers above. Callers gate on
 // phase-editions / phase-collab-splits / phase-timed-drops / phase-dutch-auction; when off

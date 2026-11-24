@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { NextRequest, NextResponse } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
 import { fetchOwnedPhaseTokenIdsForWallet, phaseProtocolContractIdForServer } from "@/lib/phase-protocol"
@@ -66,17 +67,17 @@ export async function GET(req: NextRequest) {
       const raw = await upstreamResponse.text()
       if (!upstreamResponse.ok) {
         // Upstream falló → caemos al RPC fallback en lugar de devolver error directamente
-        console.warn("[get_owner_tokens] upstream failed, falling back to RPC", upstreamResponse.status)
+        serverLog.warn("[get_owner_tokens] upstream failed, falling back to RPC", upstreamResponse.status)
       } else {
         try {
           return NextResponse.json(JSON.parse(raw), { status: 200 })
         } catch {
           // JSON inválido → fallback al RPC
-          console.warn("[get_owner_tokens] upstream returned non-JSON, falling back to RPC")
+          serverLog.warn("[get_owner_tokens] upstream returned non-JSON, falling back to RPC")
         }
       }
     } catch (e) {
-      console.warn("[get_owner_tokens] upstream unreachable, falling back to RPC", e instanceof Error ? e.message : String(e))
+      serverLog.warn("[get_owner_tokens] upstream unreachable, falling back to RPC", e instanceof Error ? e.message : String(e))
     }
   }
 

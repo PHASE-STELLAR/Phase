@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { GoogleGenerativeAI, HarmBlockThreshold, HarmCategory } from "@google/generative-ai"
 import { NextRequest, NextResponse } from "next/server"
 import {
@@ -179,7 +180,7 @@ export async function POST(request: NextRequest) {
     } catch (e) {
       lastError = e
       const msg = e instanceof Error ? e.message : String(e)
-      console.error(`[narrator] Model ${modelId} failed (attempt ${i + 1}/${modelCandidates.length})`, {
+      serverLog.error(`[narrator] Model ${modelId} failed (attempt ${i + 1}/${modelCandidates.length})`, {
         tokenId,
         collectionId,
         msg

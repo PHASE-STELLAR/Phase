@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { NextResponse, type NextRequest } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
 import { z } from "zod"
@@ -129,7 +130,7 @@ export async function GET(
     const msg = e instanceof Error ? e.message : String(e)
     // Structured error handling: don't leak internal, but log with flag context
     if (isPhase123Enabled()) {
-      console.warn(`[phase-123] metadata build failed token=${tokenId} contract=${contractId.slice(0, 8)}…: ${msg}`)
+      serverLog.warn(`[phase-123] metadata build failed token=${tokenId} contract=${contractId.slice(0, 8)}…: ${msg}`)
     }
     return NextResponse.json(
       { error: "metadata build failed", detail: msg.slice(0, 200) },

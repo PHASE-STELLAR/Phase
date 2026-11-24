@@ -67,6 +67,7 @@ const FILES = {
   bountyClaimLedger: "bounty-claim-ledger.json",
   pushEventDedupe: "push-event-dedupe.json",
   fractionalListings: "fractional-listings.json",
+  ownerIndex: "owner-index.json",
 } as const
 
 

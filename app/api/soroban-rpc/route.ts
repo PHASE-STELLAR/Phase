@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { NextRequest, NextResponse } from "next/server"
 import { backoffDelayMs, isPhase214Enabled, parseRetryAfter } from "@/lib/phase-transport-error"
 
@@ -332,7 +333,7 @@ export async function POST(req: NextRequest) {
 
     if (process.env.NODE_ENV === "development") {
       // eslint-disable-next-line no-console
-      console.error("[soroban-rpc] all upstream attempts failed", {
+      serverLog.error("[soroban-rpc] all upstream attempts failed", {
         lastFailure,
         timeoutMs: fetchTimeoutMs,
         urlsTried: urls.length,

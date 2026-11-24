@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { NextRequest, NextResponse } from "next/server"
 import { getJob, listJobs } from "@/lib/forge/job-store"
 
@@ -11,7 +12,7 @@ function isAuthorized(request: NextRequest): boolean {
   
   // If no API key is configured, block all access
   if (!apiKey) {
-    console.warn("[forge-agent/status] FORGE_AGENT_API_KEY not configured - denying access")
+    serverLog.warn("[forge-agent/status] FORGE_AGENT_API_KEY not configured - denying access")
     return false
   }
   

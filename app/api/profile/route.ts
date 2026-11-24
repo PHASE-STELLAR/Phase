@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { NextRequest, NextResponse } from "next/server"
 import {
   computeProfileCompleteness,
@@ -181,7 +182,7 @@ export async function POST(request: NextRequest) {
       ? body.avatar_image_url.trim()
       : undefined
 
-  console.log("[profile POST] saving:", { wallet, display_name, twitter, discord, telegram, avatar_token_id })
+  serverLog.log("[profile POST] saving:", { wallet, display_name, twitter, discord, telegram, avatar_token_id })
   let profile
   try {
     profile = await saveProfile(
@@ -200,9 +201,9 @@ export async function POST(request: NextRequest) {
         { status: 409 },
       )
     }
-    console.error("[profile POST] saveProfile error:", err)
+    serverLog.error("[profile POST] saveProfile error:", err)
     return NextResponse.json({ error: "save_failed", detail: String(err) }, { status: 500 })
   }
-  console.log("[profile POST] saved ok:", profile)
+  serverLog.log("[profile POST] saved ok:", profile)
   return NextResponse.json({ ok: true, profile })
 }

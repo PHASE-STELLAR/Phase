@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { NextRequest, NextResponse } from "next/server"
 import { phaseProtocolContractIdForServer } from "@/lib/phase-protocol"
 
@@ -68,7 +69,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // echo before we register anything with Mercury.
   const urlCheck = validateWebhookUrl(webhookUrl)
   if (!urlCheck.ok) {
-    console.warn(
+    serverLog.warn(
       JSON.stringify({
         timestamp: new Date().toISOString(),
         level: "warn",
@@ -82,7 +83,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const challenge = crypto.randomUUID()
   const challengeOk = await verifyWebhookChallenge(webhookUrl, challenge)
   if (!challengeOk) {
-    console.warn(
+    serverLog.warn(
       JSON.stringify({
         timestamp: new Date().toISOString(),
         level: "warn",

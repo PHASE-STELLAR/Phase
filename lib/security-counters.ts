@@ -306,6 +306,26 @@ export const SECURITY_COUNTER_REGISTRY = {
   db_dual_write_ok: { surface: "operations", reasons: NO_REASONS },
   db_dual_write_drift: { surface: "operations", reasons: NO_REASONS },
   db_dual_write_shed: { surface: "operations", reasons: NO_REASONS },
+  // phase-212: Postgres driver + async CAS.
+  db_postgres_driver_opened: { surface: "operations", reasons: NO_REASONS },
+  db_postgres_schema_created: { surface: "operations", reasons: NO_REASONS },
+  db_postgres_schema_dropped: { surface: "operations", reasons: NO_REASONS },
+  db_cas_applied: { surface: "operations", reasons: NO_REASONS },
+  db_cas_conflict: { surface: "operations", reasons: NO_REASONS },
+  db_pool_shed: { surface: "operations", reasons: NO_REASONS },
+  // phase-211: server-runtime log routing + freeze flush.
+  log_server_emitted: { surface: "operations", reasons: NO_REASONS },
+  log_server_flushed_on_freeze: { surface: "operations", reasons: NO_REASONS },
+  // phase-210: owner batching / sidecar mget.
+  owner_batch_loaded: { surface: "operations", reasons: NO_REASONS },
+  owner_batch_index_hit: { surface: "operations", reasons: NO_REASONS },
+  owner_batch_sidecar_mget: { surface: "operations", reasons: NO_REASONS },
+  // phase-209: JSON-RPC batch + shared cache.
+  rpc_batch_sent: { surface: "operations", reasons: NO_REASONS },
+  rpc_batch_subcall_failed: { surface: "operations", reasons: NO_REASONS },
+  rpc_shared_cache_hit: { surface: "operations", reasons: NO_REASONS },
+  rpc_shared_cache_miss: { surface: "operations", reasons: NO_REASONS },
+  rpc_shared_cache_stale: { surface: "operations", reasons: NO_REASONS },
   preview_isolation_violation: { surface: "deployment", reasons: NO_REASONS },
   preview_cron_blocked: { surface: "deployment", reasons: NO_REASONS },
   leaderboard_entries_ingested: { surface: "growth", reasons: NO_REASONS },

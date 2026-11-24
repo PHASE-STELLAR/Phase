@@ -94,6 +94,10 @@ import { incSecurityCounter } from "@/lib/security-counters"
  * - phase-171: backup and disaster-recovery snapshots for sidecars, SQLite and the secrets map (spike 605 / issue #469)
  * - phase-172: SQLite to Postgres migration rehearsal with dual-write, parity and rollback (spike 604 / issue #468)
  * - phase-173: Vercel preview-environment isolation for data roots, secrets, contracts and cron (spike 603 / issue #467)
+ * - phase-209: Soroban RPC batch transport with per-call error isolation, shared cache interface and closed hit/miss/batch counters (issue #517 follow-up)
+ * - phase-210: batched owner reads wired into explore/market/collection surfaces, index pushdown and sidecar mget (issue #518 follow-up)
+ * - phase-211: server-runtime logging routed through emitLog, waitUntil flush on freeze, closed counter export and leak test (issue #470 follow-up)
+ * - phase-212: Postgres driver behind PHASE_DATABASE_URL, async-safe CAS re-plumbing, real-Postgres parity and pool-storm test (issue #468 follow-up)
  * - phase-226: Horizon wallet-history timeline on the dashboard: settle/forge correlation, stale-on-error cache, isolated Horizon bulkhead partition, closed counters (issue #650)
  * - phase-228: per-PR Soroban contract deploy, preview CI job, branch-DB seeding and env collision guard (issue #655)
  * - phase-178: leaderboard integrity with anti-farm scoring, time decay and sybil discount (spike 616 / issue #479)
@@ -306,6 +310,10 @@ export type PhaseFeatureFlag =
   | "phase-244"
   | "phase-245"
   | "phase-226"
+  | "phase-209"
+  | "phase-210"
+  | "phase-211"
+  | "phase-212"
   | "phase-232"
   | "phase-233"
   | "phase-234"
@@ -458,6 +466,10 @@ const FLAG_ENV_MAP: Record<PhaseFeatureFlag, string[]> = {
   "phase-244": ["NEXT_PUBLIC_FEATURE_PHASE_244", "FEATURE_PHASE_244"],
   "phase-245": ["NEXT_PUBLIC_FEATURE_PHASE_245", "FEATURE_PHASE_245"],
   "phase-226": ["NEXT_PUBLIC_FEATURE_PHASE_226", "FEATURE_PHASE_226"],
+  "phase-209": ["NEXT_PUBLIC_FEATURE_PHASE_209", "FEATURE_PHASE_209"],
+  "phase-210": ["NEXT_PUBLIC_FEATURE_PHASE_210", "FEATURE_PHASE_210"],
+  "phase-211": ["NEXT_PUBLIC_FEATURE_PHASE_211", "FEATURE_PHASE_211"],
+  "phase-212": ["NEXT_PUBLIC_FEATURE_PHASE_212", "FEATURE_PHASE_212"],
   "phase-232": ["NEXT_PUBLIC_FEATURE_PHASE_232", "FEATURE_PHASE_232"],
   "phase-233": ["NEXT_PUBLIC_FEATURE_PHASE_233", "FEATURE_PHASE_233"],
   "phase-234": ["NEXT_PUBLIC_FEATURE_PHASE_234", "FEATURE_PHASE_234"],
@@ -600,6 +612,10 @@ export const ALL_FEATURE_FLAGS: readonly PhaseFeatureFlag[] = [
   "phase-244",
   "phase-245",
   "phase-226",
+  "phase-209",
+  "phase-210",
+  "phase-211",
+  "phase-212",
   "phase-232",
   "phase-233",
   "phase-234",
@@ -751,6 +767,10 @@ export function getEnabledFeatureFlags(): PhaseFeatureFlag[] {
     "phase-266",
     "phase-267",
     "phase-268",
+    "phase-209",
+    "phase-210",
+    "phase-211",
+    "phase-212",
     "phase-227",
   ];
 

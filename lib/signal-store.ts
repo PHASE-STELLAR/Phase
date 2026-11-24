@@ -2,6 +2,7 @@
 import { nanoid } from "nanoid";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { getDb } from "@/lib/sqlite-db";
+import { applySyncCas, getPrimaryCasGate, shadowCasWrite } from "@/lib/async-cas";
 import { recordSignalVersionConflict } from "@/lib/signal-version-metrics";
 import { getLatestForTarget, hiddenTargetFilterSql, isModerationTriageEnabled } from "@/lib/moderation-triage";
 
@@ -344,13 +345,6 @@ export async function voteOnPoll(
   optionId: string,
   wallet: string,
 ): Promise<Signal> {
-  const db = getDb();
-  const update = db.prepare(
-    `UPDATE signals
-        SET poll_json = ?, version = ?
-      WHERE id = ? AND version = ?`,
-  );
-
   for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt++) {
     const row = getSignalRow(signalId);
     if (!row || row.type !== "poll" || !row.poll_json)
@@ -367,8 +361,16 @@ export async function voteOnPoll(
 
     const pollJson = JSON.stringify(poll);
     const nextVersion = row.version + 1;
-    const result = update.run(pollJson, nextVersion, signalId, row.version);
-    if (result.changes === 1) {
+    const update = {
+      table: "signals",
+      sql: `UPDATE signals
+              SET poll_json = ?, version = ?
+            WHERE id = ? AND version = ?`,
+      params: [pollJson, nextVersion, signalId, row.version],
+    };
+    const applied = applySyncCas(getPrimaryCasGate(), update);
+    if (applied) {
+      shadowCasWrite(update);
       return rowToSignal({ ...row, poll_json: pollJson, version: nextVersion });
     }
     // Lost the CAS: a peer committed between our read and our write.
@@ -405,13 +407,6 @@ export async function upvoteSignal(
   wallet: string,
   expectedVersion?: number,
 ): Promise<Signal> {
-  const db = getDb();
-  const update = db.prepare(
-    `UPDATE signals
-        SET upvotes_json = ?, upvote_count = ?, version = ?
-      WHERE id = ? AND version = ?`,
-  );
-
   for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt++) {
     const row = getSignalRow(id);
     if (!row) throw new Error("Signal not found");
@@ -430,14 +425,16 @@ export async function upvoteSignal(
     const upvotesJson = JSON.stringify(upvotes);
     const nextVersion = row.version + 1;
 
-    const result = update.run(
-      upvotesJson,
-      upvotes.length,
-      nextVersion,
-      id,
-      row.version,
-    );
-    if (result.changes === 1) {
+    const update = {
+      table: "signals",
+      sql: `UPDATE signals
+              SET upvotes_json = ?, upvote_count = ?, version = ?
+            WHERE id = ? AND version = ?`,
+      params: [upvotesJson, upvotes.length, nextVersion, id, row.version],
+    };
+    const applied = applySyncCas(getPrimaryCasGate(), update);
+    if (applied) {
+      shadowCasWrite(update);
       return rowToSignal({ ...row, upvotes_json: upvotesJson, version: nextVersion });
     }
     // Lost the CAS: a peer committed between our read and our write, so the
