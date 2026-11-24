@@ -130,6 +130,10 @@ Owns:
 | `phase-122` | `NEXT_PUBLIC_FEATURE_PHASE_122` / `FEATURE_PHASE_122` | Off-chain metadata delta storage (reduce on-chain rent) | off | Unset var, restart — verify falls back to on-chain `token_uri`, off-chain files remain on disk (no ledger revert) |
 | `phase-123` | `NEXT_PUBLIC_FEATURE_PHASE_123` / `FEATURE_PHASE_123` | IPFS timeout fallback chain across providers | off | Unset var, restart — reverts to 8s sequential fallback; no data migration |
 | `phase-124` | `NEXT_PUBLIC_FEATURE_PHASE_124` / `FEATURE_PHASE_124` | Metadata version migration tool (v1→v2) | off | Unset var, restart — v2 payloads remain readable as v1 where additive; no destructive rewrite without `--apply` |
+| `phase-167` | `NEXT_PUBLIC_FEATURE_PHASE_167` / `FEATURE_PHASE_167` | WalletConnect session resilience: relay failover, chain guard, deep-link return, closed `session_restored` counter (Spike 623) | off | Unset var, restart — default wallet-kit behavior; localStorage session metadata is ignored, no migration |
+| `phase-182` | `NEXT_PUBLIC_FEATURE_PHASE_182` / `FEATURE_PHASE_182` | Classic PHASELQ/XLM pools + Soroswap router adapter, quote-hash/min-out idempotency, router drift fails closed (Spike 574) | off | Unset var, restart — `/api/liquidity-pools` returns 404; `liquidity-pool-intents.json` and `pool-activity.json` stay inert |
+| `phase-220` | `NEXT_PUBLIC_FEATURE_PHASE_220` / `FEATURE_PHASE_220` | Stellar Expert deep links + read-only tx/asset enrichment with timeout and fallback (Spike 648) | off | Unset var, restart — enrichment endpoint returns 404 and component renders raw hashes only; mainnet links fenced by default |
+| `phase-221` | `NEXT_PUBLIC_FEATURE_PHASE_221` / `FEATURE_PHASE_221` | Albedo sunset: call-site registry, parity-freeze with pinned intent 0.12.0, retired mode fails closed with migration copy (Spike 626) | off | Unset var, restart — banner hidden, legacy guarded Albedo paths restored |
 
 Flags are read via `lib/feature-flags.ts:isFeatureEnabled`. Client flags use `NEXT_PUBLIC_*`, server also accepts `FEATURE_*`. Zero regression when off.
 
@@ -141,3 +145,10 @@ Flags are read via `lib/feature-flags.ts:isFeatureEnabled`. Client flags use `NE
   - relevant API docs
 - Contract/address changes require synchronized env and docs updates.
 - Flag-gated features must document rollback in this table and in `docs/TECHNICAL.md` § Feature Flags.
+
+## 12) Gated integration boundaries (phase-167 / 182 / 220 / 221)
+
+- **Explorer (phase-220)**: `lib/explorer-links.ts` builds allow-listed Stellar Expert URLs (testnet default; mainnet fenced) and performs read-only Horizon enrichment with a hard timeout. The request contract accepts only `kind` + `id`; wallet/email/memo fields are rejected before any fetch. Failed enrichment degrades to the raw hash.
+- **Pools (phase-182)**: quote and XDR preparation happen server-side but **signing stays client-side** via `signTransaction`. There is no default Soroswap router: drift between configured and pinned router IDs fails closed before a transaction is built. Quote hash + min-out + short TTL are the idempotency contract; double submits replay, stale/slippage returns 409. Pool seed capital is subtracted from available balance and self-provisioned/self-swap activity is excluded from volume.
+- **WalletConnect (phase-167)**: relay candidates, chain guard, session persistence and deep-link return live in `lib/walletconnect-resilience.ts`. Wrong-chain sessions are rejected before use; return paths must be same-origin relative. Telemetry uses a closed counter set (`session_restored`, `relay_failover`, `deep_link_return`).
+- **Albedo sunset (phase-221)**: every Albedo call site is registered and gated through `lib/albedo-sunset.ts`; `retired` mode blocks signing before the intent bundle loads and surfaces migration copy. `@albedo-link/intent` remains pinned at 0.12.0; new call sites are rejected while the program is active.

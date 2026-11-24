@@ -15,12 +15,24 @@ import {
   isAlbedoSelectedInKit,
   requestAlbedoImplicitTxFlow,
 } from "@/lib/albedo-intent-client"
-import { initStellarWalletKit, kit, KitEventType, parseError } from "@/lib/stellar-wallet-kit"
+import {
+  initStellarWalletKit,
+  isWalletConnectSelectedInKit,
+  kit,
+  KitEventType,
+  parseError,
+} from "@/lib/stellar-wallet-kit"
+import { isWcResilienceEnabled, restoreWcSession } from "@/lib/walletconnect-resilience"
+import { isAlbedoRetired, isAlbedoSunset221Enabled } from "@/lib/albedo-sunset"
+import { AlbedoSunsetBanner } from "@/components/albedo-sunset-banner"
+import { WalletConnectBanner } from "@/components/walletconnect-banner"
 import { cn } from "@/lib/utils"
 
 type WalletContextValue = {
   address: string | null
   connecting: boolean
+  /** phase-167: true when the active kit module is WalletConnect. */
+  isWalletConnect: boolean
   hint: string | null
   artistAlias: string | null
   aliasLoading: boolean
@@ -54,6 +66,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const [address, setAddress] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
+  const [isWalletConnect, setIsWalletConnect] = useState(false)
   const [hint, setHint] = useState<string | null>(null)
   const [artistAlias, setArtistAlias] = useState<string | null>(null)
   const [aliasLoading, setAliasLoading] = useState(false)
@@ -71,6 +84,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [albedoPrepError, setAlbedoPrepError] = useState<string | null>(null)
 
   const syncAlbedoTxPrep = useCallback(async (addr: string | null) => {
+    // phase-221: the legacy prep banner is replaced by the sunset banner.
+    if (isAlbedoRetired()) {
+      setAlbedoTxPrep("hidden")
+      return
+    }
     if (!addr || typeof window === "undefined") {
       setAlbedoTxPrep("hidden")
       return
@@ -125,6 +143,27 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh().catch(() => {})
   }, [refresh])
+
+  /** phase-167: keep the mobile banner in sync with the kit's selected module. */
+  useEffect(() => {
+    setIsWalletConnect(isWalletConnectSelectedInKit())
+    if (!address) return
+    const id = window.setTimeout(() => setIsWalletConnect(isWalletConnectSelectedInKit()), 0)
+    return () => window.clearTimeout(id)
+  }, [address])
+
+  /** Cross-session resume: validate the persisted WC session before trusting it. */
+  useEffect(() => {
+    if (!isWcResilienceEnabled()) return
+    const restored = restoreWcSession({ expectedNetwork: "testnet" })
+    if (!restored.restored) return
+    void fetch("/api/wallet/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event: "connect" }),
+      cache: "no-store",
+    }).catch(() => {})
+  }, [])
 
   useEffect(() => {
     const onFocus = () => void refresh().catch(() => {})
@@ -326,6 +365,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     () => ({
       address,
       connecting,
+      isWalletConnect,
       hint,
       artistAlias,
       aliasLoading,
@@ -339,6 +379,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     [
       address,
       connecting,
+      isWalletConnect,
       hint,
       artistAlias,
       aliasLoading,
@@ -354,7 +395,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   return (
     <>
       <WalletContext.Provider value={value}>{children}</WalletContext.Provider>
-      {address && albedoTxPrep === "needed" && (
+      {isWcResilienceEnabled() ? <WalletConnectBanner /> : null}
+      {isAlbedoSunset221Enabled() ? <AlbedoSunsetBanner /> : null}
+      {address && albedoTxPrep === "needed" && !isAlbedoRetired() && (
         <div
           role="status"
           className={cn(

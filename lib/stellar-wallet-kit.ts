@@ -9,6 +9,12 @@ import {
 import { defaultModules } from "@creit.tech/stellar-wallets-kit/modules/utils"
 import { FREIGHTER_ID } from "@creit.tech/stellar-wallets-kit/modules/freighter"
 import { albedoImplicitTxAllowed, isAlbedoSelectedInKit } from "@/lib/albedo-intent-client"
+import {
+  AlbedoSunsetError,
+  albedoRetiredSignMessage,
+  assertAlbedoCallSiteAllowed,
+} from "@/lib/albedo-sunset"
+import { incSecurityCounter } from "@/lib/security-counters"
 
 let initialized = false
 
@@ -37,6 +43,17 @@ export function initStellarWalletKit() {
  */
 export const kit = StellarWalletsKit
 
+/** WalletConnect module detection mirrors the Albedo helper in albedo-intent-client. */
+export function isWalletConnectSelectedInKit(): boolean {
+  if (typeof window === "undefined") return false
+  try {
+    return StellarWalletsKit.selectedModule.productId.toLowerCase().includes("walletconnect")
+  } catch {
+    const stored = window.localStorage.getItem(LS_SELECTED_MODULE_ID) ?? ""
+    return stored.toLowerCase().includes("walletconnect")
+  }
+}
+
 export { FREIGHTER_ID, KitEventType, Networks, parseError }
 
 /** Compatibilidad con el shape de `signTransaction` de Freighter (`error` en lugar de throw). */
@@ -48,6 +65,18 @@ export async function signTransaction(
   | { error: { message: string }; signedTxXdr?: undefined; signedTransaction?: undefined }
 > {
   initStellarWalletKit()
+  // phase-221: fail closed with migration copy once Albedo is retired.
+  if (typeof window !== "undefined" && opts.address && isAlbedoSelectedInKit()) {
+    try {
+      assertAlbedoCallSiteAllowed("kit-sign-guard")
+    } catch (e) {
+      if (e instanceof AlbedoSunsetError) {
+        incSecurityCounter("albedo_signing_blocked")
+        return { error: { message: albedoRetiredSignMessage() } }
+      }
+      throw e
+    }
+  }
   if (typeof window !== "undefined" && opts.address && isAlbedoSelectedInKit()) {
     const implicitOk = await albedoImplicitTxAllowed(opts.address)
     if (!implicitOk) {

@@ -17,6 +17,8 @@ const FILES = {
   marketListings: "market-listings.json",
   marketOffers: "market-offers.json",
   achievements: "achievements.json",
+  liquidityPoolIntents: "liquidity-pool-intents.json",
+  poolActivity: "pool-activity.json",
 } as const
 
 export type ServerDataFile = keyof typeof FILES

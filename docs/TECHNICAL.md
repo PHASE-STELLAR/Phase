@@ -71,11 +71,17 @@ flowchart TB
 | `lib/classic-liq.ts` | Classic asset trustline utilities (`changeTrust` XDR, Horizon checks) |
 | `lib/phase-copy.ts` | Centralized i18n dictionary (EN/ES) |
 | `lib/server-data-paths.ts` | Writable data location abstraction |
-| `lib/feature-flags.ts` | Flag registry (phase-121..124, env resolution, rollback notes) |
+| `lib/feature-flags.ts` | Flag registry (phase-121..124, 167, 182, 220, 221; env resolution, rollback notes) |
 | `lib/gateway-health.ts` | Gateway latency scoring + dashboard snapshot (phase-121) |
 | `lib/offchain-delta.ts` | Off-chain delta store, hash/stub helpers (phase-122) |
 | `lib/ipfs-fallback.ts` / `lib/phase-nft-metadata-build.ts` | IPFS timeout fallback chain (phase-123) |
 | `lib/metadata-migration.ts` | Metadata version migration v1→v2 (phase-124) |
+| `lib/walletconnect-resilience.ts` | Relay failover, chain guard, session resume, deep-link return (phase-167) |
+| `lib/liquidity-pool.ts` / `lib/pool-activity-store.ts` | Classic pool quotes, router drift gate, intent idempotency, wash exclusion (phase-182) |
+| `lib/explorer-links.ts` | Allow-listed Stellar Expert links + read-only enrichment (phase-220) |
+| `lib/albedo-sunset.ts` | Albedo call-site registry, parity-freeze, retired fail-closed gate (phase-221) |
+| `lib/security-counters.ts` | Closed observability counter names (including `session_restored`) |
+| `lib/json-store.ts` | Locked, atomic JSON sidecar access shared by gated stores |
 | `contracts/` | Soroban Rust contracts and tooling docs |
 | `docs/` | Technical and operational documentation |
 
@@ -125,6 +131,10 @@ All handlers live in `app/api/**/route.ts`.
 | `phase-122` | `POST /api/phase-nft/verify` | Adds `delta` + `storage` fields (off-chain manifest, stub note) | Fields omitted |
 | `phase-123` | `GET /api/metadata/[id]` & `GET /api/ipfs/[...cid]` | Adds `X-Phase-*` headers, per-gateway timeout, structured `perGateway` error | Legacy 8s sequential, no headers |
 | `phase-124` | `scripts/*` | Migration logs, `--migrate-metadata` CLI | No-op with hint |
+| `phase-167` | `POST /api/wallet/session` | Closed session telemetry events (`session_restored`, `wc_*`) | `404` disabled |
+| `phase-182` | `GET/POST /api/liquidity-pools` | Quotes (quote hash + min-out), unsigned XDR prepare, Horizon-verified `record`; 409 stale/conflict, 412 trustlines, 503 router drift | `404` disabled |
+| `phase-220` | `GET /api/explorer/enrichment` | Read-only tx/asset metadata, 3s timeout, `ok:false` fallback on failure | `404` disabled |
+| `phase-221` | `GET /api/albedo/status` | Sunset mode, pinned version check, call-site registry | `404` disabled |
 
 ---
 
@@ -183,20 +193,32 @@ Critical groups:
 - Gemini runtime (`GEMINI_API_KEY`)
 - Writable server data directory (`PHASE_SERVER_DATA_DIR`)
 
-### 9.1 Feature flags (phase-121..124)
+### 9.1 Feature flags (phase-121..124, 167, 182, 220, 221)
 
 All flags default to **off** (safe rollback). Set to `1`/`true` to enable.
 
 ```
-# Enable all four (example)
+# Rolling delivery (legacy set)
 NEXT_PUBLIC_FEATURE_PHASE_121=1
 NEXT_PUBLIC_FEATURE_PHASE_122=1
 NEXT_PUBLIC_FEATURE_PHASE_123=1
 NEXT_PUBLIC_FEATURE_PHASE_124=1
-# Server-only aliases also accepted: FEATURE_PHASE_121, etc.
+# Gated integrations
+NEXT_PUBLIC_FEATURE_PHASE_167=1
+NEXT_PUBLIC_FEATURE_PHASE_182=1
+NEXT_PUBLIC_FEATURE_PHASE_220=1
+NEXT_PUBLIC_FEATURE_PHASE_221=1
+# Server-only aliases also accepted: FEATURE_PHASE_167, etc.
 ```
 
-Rollback: unset the var or set `0` and restart. No ledger migration to revert; off-chain stores remain but are ignored when flag off. See `PROJECT_ARCHITECTURE.md` §10.
+Rollback: unset the var or set `0` and restart. No ledger migration to revert; sidecars (`liquidity-pool-intents.json`, `pool-activity.json`) and WC session metadata stay inert when their flags are off. See `PROJECT_ARCHITECTURE.md` §10 and §12.
+
+### 9.2 Gated integration verification
+
+- **phase-220**: `npx tsx --test lib/__tests__/explorer-links.test.ts` — link correctness, mainnet fence, PII-field rejection, timeout fallback.
+- **phase-182**: `npx tsx --test lib/__tests__/liquidity-pool.test.ts` — quote hash/min-out, 409 stale/conflict, router drift, seed-capital arithmetic, wash exclusion, unsigned XDR builders. Live proof: `npx tsx scripts/phase-182-pool-proof.ts` (requires a funded testnet key; writes `phase-182-pool-proof.json` with real tx hashes, never fabricated).
+- **phase-221**: `npx tsx --test lib/__tests__/albedo-sunset.test.ts` — mode resolution, call-site gate, pin drift, migration copy.
+- **phase-167**: `npx tsx --test lib/__tests__/walletconnect-resilience.test.ts` — relay failover, chain guard, session resume counter, deep-link return.
 
 ---
 

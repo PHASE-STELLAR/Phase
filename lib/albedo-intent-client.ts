@@ -1,6 +1,11 @@
 "use client"
 
 import { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit"
+import {
+  AlbedoSunsetError,
+  albedoRetiredSignMessage,
+  assertAlbedoCallSiteAllowed,
+} from "@/lib/albedo-sunset"
 
 /** Misma red que `Networks.TESTNET` del kit Albedo (`albedo.module.js`). */
 export const ALBEDO_NETWORK_TESTNET = "testnet"
@@ -45,12 +50,20 @@ export function isAlbedoSelectedInKit(): boolean {
 }
 
 export async function getAlbedoIntent(): Promise<AlbedoLike> {
+  // phase-221: once retired the intent bundle is never loaded and no popup opens.
+  assertAlbedoCallSiteAllowed("intent-implicit-flow")
   const pkg = await import("@albedo-link/intent")
   return resolveAlbedoApi(pkg)
 }
 
 export async function albedoImplicitTxAllowed(pubkey: string): Promise<boolean> {
   if (!pubkey || !isAlbedoSelectedInKit()) return true
+  try {
+    assertAlbedoCallSiteAllowed("intent-session-check")
+  } catch (e) {
+    if (e instanceof AlbedoSunsetError) return true
+    throw e
+  }
   const albedo = await getAlbedoIntent()
   return albedo.isImplicitSessionAllowed("tx", pubkey)
 }
@@ -61,6 +74,7 @@ export async function albedoImplicitTxAllowed(pubkey: string): Promise<boolean> 
  */
 export async function requestAlbedoImplicitTxFlow(): Promise<{ ok: true } | { ok: false; message: string }> {
   try {
+    assertAlbedoCallSiteAllowed("intent-implicit-flow")
     const albedo = await getAlbedoIntent()
     const res = await albedo.implicitFlow({
       // `tx`: Soroban y envelopes firmados; `trust`: intent dedicado de Albedo (changeTrust vía UI).

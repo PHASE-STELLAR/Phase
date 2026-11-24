@@ -1,6 +1,8 @@
 "use client"
 
 import { albedoImplicitTxAllowed, isAlbedoSelectedInKit } from "@/lib/albedo-intent-client"
+import { isAlbedoRetired } from "@/lib/albedo-sunset"
+import { ExplorerEnrichmentPanel } from "@/components/explorer-enrichment-panel"
 import { useCallback, useEffect, useState } from "react"
 import { createPortal } from "react-dom"
 import { signTransaction } from "@/lib/stellar-wallet-kit"
@@ -121,6 +123,8 @@ export function LiquidityFaucetControl({
   )
 
   const [status, setStatus] = useState<FaucetStatusResponse | null>(null)
+  /** phase-220: last public tx hash shown through the explorer panel. */
+  const [lastTxHash, setLastTxHash] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [loadingReward, setLoadingReward] = useState<RewardType | null>(null)
   const [rewardFlowPhase, setRewardFlowPhase] = useState<RewardFlowPhase>("idle")
@@ -261,6 +265,12 @@ export function LiquidityFaucetControl({
     onNarrativeLog?.(L.classicTrustlineFreighter)
     setRewardFlowPhase("trustline")
     try {
+      if (isAlbedoSelectedInKit() && isAlbedoRetired()) {
+        const msg = pickCopy(lang).integrations.albedo.signBlocked
+        onNarrativeLog?.(msg)
+        toast.error(msg)
+        return false
+      }
       if (isAlbedoSelectedInKit() && !(await albedoImplicitTxAllowed(address))) {
         onNarrativeLog?.(chamber.rewardsTrustlineAlbedoImplicitRequired)
         toast.error(chamber.rewardsTrustlineAlbedoImplicitRequired)
@@ -367,7 +377,10 @@ export function LiquidityFaucetControl({
             : `[ REWARD_CREDITED ] +${amount} PHASELQ`
         onNarrativeLog?.(logs.faucetOk)
         onNarrativeLog?.(line)
-        if (data.hash) onNarrativeLog?.(`${logs.tracePrefix} ${data.hash}`)
+        if (data.hash) {
+          setLastTxHash(data.hash)
+          onNarrativeLog?.(`${logs.tracePrefix} ${data.hash}`)
+        }
         toast.success(line, {
           icon: <TokenIcon className="h-4 w-4" pulse />,
         })
@@ -437,7 +450,10 @@ export function LiquidityFaucetControl({
           ? `NFT enviado a tu wallet${hash ? `. Hash: ${hash}` : ""}`
           : `NFT sent to your wallet${hash ? `. Hash: ${hash}` : ""}`,
       )
-      if (hash) onNarrativeLog?.(`${logs.tracePrefix} ${hash}`)
+      if (hash) {
+        setLastTxHash(hash)
+        onNarrativeLog?.(`${logs.tracePrefix} ${hash}`)
+      }
       setNftCollectEligibility({
         status: "ready",
         viewerIsOwner: true,
@@ -729,6 +745,7 @@ export function LiquidityFaucetControl({
           </button>
         </div>
       )}
+      {lastTxHash ? <ExplorerEnrichmentPanel hash={lastTxHash} compact={compact} /> : null}
       {freighterNftCollect && address && nftCollectEligibility?.status === "loading" ? (
         <div
           className={cn(

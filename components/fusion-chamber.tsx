@@ -1,6 +1,7 @@
 "use client"
 
 import { albedoImplicitTxAllowed, isAlbedoSelectedInKit } from "@/lib/albedo-intent-client"
+import { isAlbedoRetired } from "@/lib/albedo-sunset"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react"
@@ -1128,6 +1129,12 @@ export function FusionChamber() {
     setClassicBusy(true)
     try {
       const chCopy = pickCopy(lang).chamber
+      if (isAlbedoSelectedInKit() && isAlbedoRetired()) {
+        const msg = pickCopy(lang).integrations.albedo.signBlocked
+        toast.error(msg)
+        appendLog(msg)
+        return
+      }
       if (isAlbedoSelectedInKit() && !(await albedoImplicitTxAllowed(address))) {
         toast.error(chCopy.rewardsTrustlineAlbedoImplicitRequired)
         appendLog(chCopy.rewardsTrustlineAlbedoImplicitRequired)
