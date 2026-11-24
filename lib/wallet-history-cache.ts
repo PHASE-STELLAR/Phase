@@ -7,7 +7,7 @@
  * polling cadence and UI refetches never fan out into unbounded
  * `transactions?account=` / `effects?account=` reads.
  *
- * Feature flag: phase-173 (rides the same flag as the timeline itself).
+ * Feature flag: phase-226 (rides the same flag as the timeline itself, #650).
  * Rollback: unset flag → `isWalletHistoryCacheEnabled()` false → the route
  * skips cache reads/writes entirely and behaves as a direct Horizon proxy.
  */
@@ -23,7 +23,7 @@ export const DEFAULT_FRESH_MS = 30_000;
 const store = new Map<string, WalletHistoryCacheEntry>();
 
 export function isWalletHistoryCacheEnabled(): boolean {
-  return isFeatureEnabled("phase-173");
+  return isFeatureEnabled("phase-226");
 }
 
 export function isWalletHistoryCacheEntryFresh(

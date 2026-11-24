@@ -2,9 +2,40 @@
 
 export const HORIZON_BULKHEAD_LIMIT = 5
 
+/**
+ * Isolated partitions (#650): each has its own concurrency limit and queue,
+ * so a burst on one partition cannot hold slots the default gate's callers
+ * need. The wallet-history timeline reads through `history`; every other
+ * Horizon caller keeps the shared `default` gate unchanged.
+ */
+export type HorizonBulkheadPartition = "default" | "history"
+
+export const HORIZON_PARTITION_LIMITS: Readonly<Record<HorizonBulkheadPartition, number>> = {
+  default: HORIZON_BULKHEAD_LIMIT,
+  history: 2,
+}
+
+/** Waiting callers allowed per partition; past this, `history` sheds instead of queueing. */
+export const HORIZON_PARTITION_MAX_QUEUE: Readonly<Record<HorizonBulkheadPartition, number>> = {
+  default: Number.POSITIVE_INFINITY,
+  history: 8,
+}
+
+/** Thrown when a partition's queue is full: the read was shed, not attempted. */
+export class HorizonBulkheadFullError extends Error {
+  readonly status = 503
+  constructor(readonly partition: HorizonBulkheadPartition) {
+    super(`Horizon ${partition} bulkhead is full`)
+    this.name = "HorizonBulkheadFullError"
+  }
+}
+
 type Waiter = () => void
-let inFlight = 0
-const waiters: Waiter[] = []
+type Gate = { inFlight: number; waiters: Waiter[] }
+const gates: Record<HorizonBulkheadPartition, Gate> = {
+  default: { inFlight: 0, waiters: [] },
+  history: { inFlight: 0, waiters: [] },
+}
 let batch429Count = 0
 
 export type HorizonBulkheadMetrics = {
@@ -25,30 +56,45 @@ export function isHorizon429(error: unknown): boolean {
   return statusOf(error) === 429
 }
 
-export function getHorizonBulkheadMetrics(): HorizonBulkheadMetrics {
-  return { inFlight, queued: waiters.length, limit: HORIZON_BULKHEAD_LIMIT, horizon_429_batch: batch429Count }
+export function getHorizonBulkheadMetrics(
+  partition: HorizonBulkheadPartition = "default",
+): HorizonBulkheadMetrics {
+  const gate = gates[partition]
+  return {
+    inFlight: gate.inFlight,
+    queued: gate.waiters.length,
+    limit: HORIZON_PARTITION_LIMITS[partition],
+    horizon_429_batch: batch429Count,
+  }
 }
 
 export function resetHorizonBulkheadMetrics(): void {
   batch429Count = 0
 }
 
-async function acquire(): Promise<() => void> {
-  if (inFlight >= HORIZON_BULKHEAD_LIMIT) {
-    await new Promise<void>((resolve) => waiters.push(resolve))
+async function acquire(partition: HorizonBulkheadPartition): Promise<() => void> {
+  const gate = gates[partition]
+  if (gate.inFlight >= HORIZON_PARTITION_LIMITS[partition]) {
+    if (gate.waiters.length >= HORIZON_PARTITION_MAX_QUEUE[partition]) {
+      throw new HorizonBulkheadFullError(partition)
+    }
+    await new Promise<void>((resolve) => gate.waiters.push(resolve))
   }
-  inFlight += 1
+  gate.inFlight += 1
   let released = false
   return () => {
     if (released) return
     released = true
-    inFlight -= 1
-    waiters.shift()?.()
+    gate.inFlight -= 1
+    gate.waiters.shift()?.()
   }
 }
 
-export async function withHorizonBulkhead<T>(operation: () => Promise<T>): Promise<T> {
-  const release = await acquire()
+export async function withHorizonBulkhead<T>(
+  operation: () => Promise<T>,
+  options: { partition?: HorizonBulkheadPartition } = {},
+): Promise<T> {
+  const release = await acquire(options.partition ?? "default")
   try {
     return await operation()
   } catch (error) {

@@ -202,8 +202,8 @@ describe("minPagingToken — gap-free cursor (Spike 629 requirement)", () => {
 });
 
 describe("getWalletTimeline — flag gate and degrade paths (Spike 629)", () => {
-  const originalFlag = process.env.FEATURE_PHASE_173;
-  const originalPublicFlag = process.env.NEXT_PUBLIC_FEATURE_PHASE_173;
+  const originalFlag = process.env.FEATURE_PHASE_226;
+  const originalPublicFlag = process.env.NEXT_PUBLIC_FEATURE_PHASE_226;
   const fetchMock = vi.fn();
 
   beforeEach(() => {
@@ -214,10 +214,10 @@ describe("getWalletTimeline — flag gate and degrade paths (Spike 629)", () => 
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    if (originalFlag === undefined) delete process.env.FEATURE_PHASE_173;
-    else process.env.FEATURE_PHASE_173 = originalFlag;
-    if (originalPublicFlag === undefined) delete process.env.NEXT_PUBLIC_FEATURE_PHASE_173;
-    else process.env.NEXT_PUBLIC_FEATURE_PHASE_173 = originalPublicFlag;
+    if (originalFlag === undefined) delete process.env.FEATURE_PHASE_226;
+    else process.env.FEATURE_PHASE_226 = originalFlag;
+    if (originalPublicFlag === undefined) delete process.env.NEXT_PUBLIC_FEATURE_PHASE_226;
+    else process.env.NEXT_PUBLIC_FEATURE_PHASE_226 = originalPublicFlag;
   });
 
   const horizonReply = (records: Array<Record<string, unknown>>) => ({
@@ -226,9 +226,9 @@ describe("getWalletTimeline — flag gate and degrade paths (Spike 629)", () => 
     json: async () => ({ _embedded: { records } }),
   });
 
-  it("throws FLAG_DISABLED when phase-173 is off (rollback path)", async () => {
-    delete process.env.FEATURE_PHASE_173;
-    delete process.env.NEXT_PUBLIC_FEATURE_PHASE_173;
+  it("throws FLAG_DISABLED when phase-226 is off (rollback path)", async () => {
+    delete process.env.FEATURE_PHASE_226;
+    delete process.env.NEXT_PUBLIC_FEATURE_PHASE_226;
     await expect(getWalletTimeline(WALLET)).rejects.toMatchObject({
       name: "WalletHistoryError",
       code: "FLAG_DISABLED",
@@ -237,7 +237,7 @@ describe("getWalletTimeline — flag gate and degrade paths (Spike 629)", () => 
   });
 
   it("throws INVALID_ADDRESS for malformed accounts", async () => {
-    process.env.FEATURE_PHASE_173 = "1";
+    process.env.FEATURE_PHASE_226 = "1";
     await expect(getWalletTimeline("not-an-address")).rejects.toMatchObject({
       code: "INVALID_ADDRESS",
     });
@@ -245,7 +245,7 @@ describe("getWalletTimeline — flag gate and degrade paths (Spike 629)", () => 
   });
 
   it("merges both Horizon streams and serves a 'miss' page with shared cursor", async () => {
-    process.env.FEATURE_PHASE_173 = "1";
+    process.env.FEATURE_PHASE_226 = "1";
     fetchMock.mockImplementation(async (url: string) => {
       if (url.includes("/transactions?")) {
         return horizonReply([
@@ -286,7 +286,7 @@ describe("getWalletTimeline — flag gate and degrade paths (Spike 629)", () => 
   });
 
   it("serves stale cache instead of failing when Horizon errors (stale-on-error)", async () => {
-    process.env.FEATURE_PHASE_173 = "1";
+    process.env.FEATURE_PHASE_226 = "1";
     const { setCachedWalletHistory } = await import("@/lib/wallet-history-cache");
     setCachedWalletHistory(WALLET, null, [event({ id: "effect:cached" })], "1");
     fetchMock.mockRejectedValue(new Error("Horizon down"));
@@ -297,7 +297,7 @@ describe("getWalletTimeline — flag gate and degrade paths (Spike 629)", () => 
   });
 
   it("maps a Horizon 429 to HORIZON_RATE_LIMITED when no cache exists", async () => {
-    process.env.FEATURE_PHASE_173 = "1";
+    process.env.FEATURE_PHASE_226 = "1";
     fetchMock.mockResolvedValue({ ok: false, status: 429, json: async () => ({}) });
 
     await expect(getWalletTimeline(WALLET)).rejects.toBeInstanceOf(WalletHistoryError);
@@ -307,7 +307,7 @@ describe("getWalletTimeline — flag gate and degrade paths (Spike 629)", () => 
   });
 
   it("serves a fresh cache page without touching Horizon", async () => {
-    process.env.FEATURE_PHASE_173 = "1";
+    process.env.FEATURE_PHASE_226 = "1";
     const { setCachedWalletHistory } = await import("@/lib/wallet-history-cache");
     setCachedWalletHistory(WALLET, null, [event({ id: "effect:fresh" })], "7");
 
