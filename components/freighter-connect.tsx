@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, type ReactNode } from "react"
+import { FreighterMobileNotice } from "@/components/freighter-mobile-notice"
 import { ProfilePanel } from "@/components/profile-panel"
 import { useLang } from "@/components/lang-context"
 import { useWallet } from "@/components/wallet-provider"
@@ -161,6 +162,8 @@ export function FreighterConnect({ trailing }: FreighterConnectProps) {
           {hint}
         </p>
       ) : null}
+      {/* Spike 627: mobile in-app browser adaptation + WalletConnect guidance (renders nothing on desktop). */}
+      <FreighterMobileNotice />
     </div>
   )
 }

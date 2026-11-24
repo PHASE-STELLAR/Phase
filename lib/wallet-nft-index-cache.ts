@@ -14,6 +14,12 @@
  */
 
 import { isFeatureEnabled } from "@/lib/feature-flags"
+import { incSecurityCounter } from "@/lib/security-counters"
+import { z } from "zod"
+
+export function isPhase241Enabled(): boolean {
+  return isFeatureEnabled("phase-241")
+}
 
 export type WalletNftIndexEntry = {
   tokenIds: number[]
@@ -32,8 +38,8 @@ function cacheKey(contractId: string, address: string): string {
   return `${contractId}:${address.trim().toUpperCase()}`
 }
 
-export function isWalletNftIndexCacheEnabled(): boolean {
-  return isFeatureEnabled("phase-135")
+export function isWalletNftIndexCacheEnabled(address?: string): boolean {
+  return isFeatureEnabled("phase-135", address ? { wallet: address } : undefined)
 }
 
 export function isWalletNftIndexEntryFresh(entry: WalletNftIndexEntry, freshMs = DEFAULT_FRESH_MS): boolean {
@@ -67,6 +73,55 @@ export function setCachedWalletNftIndex(
 
 export function clearWalletNftIndexCache(): void {
   store.clear()
+}
+
+export function invalidateCachedWalletNftIndex(contractId: string, address: string): boolean {
+  const key = cacheKey(contractId, address)
+  const existed = store.delete(key)
+  if (existed) {
+    incSecurityCounter("nft_index_invalidated")
+  }
+  return existed
+}
+
+export const NftIndexEventSchema = z.object({
+  contractId: z.string().trim().min(1),
+  type: z.enum(["mint", "transfer", "burn"]),
+  from: z.string().trim().optional(),
+  to: z.string().trim().optional(),
+  recipient: z.string().trim().optional(),
+  tokenId: z.number().int().nonnegative().optional(),
+})
+
+export type NftIndexEvent = z.infer<typeof NftIndexEventSchema>
+
+export function processNftIndexSubscriptionEvent(
+  raw: unknown,
+): { ok: boolean; invalidatedCount: number } {
+  if (!isPhase241Enabled()) {
+    return { ok: false, invalidatedCount: 0 }
+  }
+
+  const parsed = NftIndexEventSchema.safeParse(raw)
+  if (!parsed.success) {
+    incSecurityCounter("nft_index_event_malformed")
+    return { ok: false, invalidatedCount: 0 }
+  }
+
+  const event = parsed.data
+  const targets = new Set<string>()
+  if (event.recipient) targets.add(event.recipient)
+  if (event.from) targets.add(event.from)
+  if (event.to) targets.add(event.to)
+
+  let count = 0
+  for (const wallet of targets) {
+    if (invalidateCachedWalletNftIndex(event.contractId, wallet)) {
+      count++
+    }
+  }
+
+  return { ok: true, invalidatedCount: count }
 }
 
 export function walletNftIndexCacheStats(): { size: number; maxEntries: number } {

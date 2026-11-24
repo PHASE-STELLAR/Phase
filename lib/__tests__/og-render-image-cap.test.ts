@@ -2,7 +2,7 @@
  * Module #24: fetchImageBuffer must not buffer unbounded remote images —
  * that is the root cause of the OG lambda hitting Vercel's memory ceiling.
  */
-import { describe, it } from "node:test"
+import { describe, it } from "vitest"
 import * as assert from "node:assert/strict"
 import { fetchImageBuffer } from "@/lib/og-render-utils"
 

@@ -1,6 +1,6 @@
-import { describe, it } from "node:test"
+import { describe, it } from "vitest"
 import * as assert from "node:assert/strict"
-import { migrateMetadataPayload, batchMigrateMetadataPayloads, CURRENT_METADATA_VERSION } from "@/lib/metadata-migration"
+import { migrateMetadataPayload, batchMigrateMetadataPayloads, CURRENT_METADATA_VERSION, generateMigrationManifest, computePayloadChecksum, NftMetadataV1Schema } from "@/lib/metadata-migration"
 
 describe("phase-124 metadata migration", () => {
   const OLD_V1 = { name: "Test", description: "Old", image: "ipfs://Qm123" }
@@ -37,6 +37,31 @@ describe("phase-124 metadata migration", () => {
     assert.equal(report.migrated, 1)
     assert.equal(report.alreadyCurrent, 1)
     assert.equal(report.failed, 0)
+  })
+
+  it("two-phase migration with dry-run diff, checksums, and manifest", () => {
+    const raw = { name: "Artifact", description: "Desc", image: "ipfs://test" }
+    const res = migrateMetadataPayload(raw, { dryRun: true, force: true })
+    assert.equal(res.ok, true)
+    if (res.ok) {
+      const manifest = generateMigrationManifest({
+        records: [{ id: 1, before: raw, after: res.data }],
+        isDryRun: true,
+      })
+      assert.equal(manifest.isDryRun, true)
+      assert.equal(manifest.records.length, 1)
+      assert.equal(manifest.records[0].beforeChecksum, computePayloadChecksum(raw))
+      assert.equal(manifest.records[0].afterChecksum, computePayloadChecksum(res.data))
+    }
+  })
+
+  it("v1 readers can still parse additive v2 fields", () => {
+    const v2 = { version: 2 as const, name: "Artifact", description: "Desc", image: "ipfs://test", external_url: "https://phase.fun", attributes: [{ trait_type: "tier", value: "gold" }], collectionId: 10 }
+    const parsedV1 = NftMetadataV1Schema.safeParse(v2)
+    assert.equal(parsedV1.success, true)
+    if (parsedV1.success) {
+      assert.equal(parsedV1.data.name, "Artifact")
+    }
   })
 
   it("validates invalid payload", () => {

@@ -7,6 +7,7 @@ export type PublishIpfsStepInput = {
   imageSource: string
   payerAddress?: string
   collectionId?: number
+  focalPoint?: { x: number; y: number }
 }
 
 export type PublishIpfsStepResult = {
@@ -25,6 +26,15 @@ function sha256Hex(s: string): string {
  * Real IPFS pin path uses /api/ipfs proxy when available.
  */
 export async function publishIpfsStep(input: PublishIpfsStepInput): Promise<PublishIpfsStepResult> {
+  const { isFeatureEnabled } = await import("@/lib/feature-flags")
+  let variants: Record<string, unknown> | undefined
+
+  if (isFeatureEnabled("phase-142")) {
+    const { generateArtifactVariants, estimateFocalPointFromKeywords } = await import("@/lib/focal-crop")
+    const fp = input.focalPoint ?? estimateFocalPointFromKeywords(input.prompt)
+    variants = generateArtifactVariants(input.imageUrl, { width: 2048, height: 2048 }, fp)
+  }
+
   const metadata = {
     name: `PHASE Artifact — ${input.prompt.slice(0, 48)}`,
     description: input.lore,
@@ -36,7 +46,11 @@ export async function publishIpfsStep(input: PublishIpfsStepInput): Promise<Publ
       ...(input.collectionId ? [{ trait_type: "collection_id", value: input.collectionId }] : []),
       { trait_type: "standard", value: "SEP-41/50" },
     ],
-    properties: { lore: input.lore, prompt: input.prompt },
+    properties: {
+      lore: input.lore,
+      prompt: input.prompt,
+      ...(variants ? { variants, focal_point: input.focalPoint } : {}),
+    },
   }
 
   const json = JSON.stringify(metadata)

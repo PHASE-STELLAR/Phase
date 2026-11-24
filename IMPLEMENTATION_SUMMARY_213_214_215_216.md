@@ -74,6 +74,17 @@ because they were never merged into `main`.
   `lib/__tests__` that `vitest` reports as "No test suite found"; those are
   unchanged by this branch.
 
+## Conflict resolution with upstream `main`
+
+Upstream had already merged the precursor slices and advanced 218 commits.
+The merge keeps upstream's richer versions of `feature-flags.ts`, `json-store.ts`,
+`server-data-paths.ts`, the admin subscriber routes, the RPC proxy and the
+marketing/claim flows, then re-applies the phase-213..216 additions on top.
+Two upstream defects surfaced while rebasing the changes and were fixed:
+`REFERRAL_QUEST_REASONS` was referenced but never declared in
+`lib/security-counters.ts`, and importing the flag registry through that cycle
+could read `FLAG_ENV_MAP` before initialization.
+
 ## Rollback
 
 Unset the relevant flag(s) and restart. No collection/evaluation, no transport

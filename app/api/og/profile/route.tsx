@@ -1,5 +1,4 @@
 import { type NextRequest, NextResponse } from "next/server";
-import path from "node:path";
 import sharp from "sharp";
 import { z } from "zod";
 import { getProfile } from "@/lib/profile-store";
@@ -15,11 +14,13 @@ import {
   type OgTheme,
 } from "@/lib/og-design-tokens";
 import {
+  NOTO_SANS_TTF,
   textLayer,
   solidPng,
   resolveOgTemplatePath,
   templateName,
   withOgErrorBoundary,
+  renderOgWithTimeoutAndCache,
 } from "@/lib/og-render-utils";
 
 export const runtime = "nodejs";
@@ -101,27 +102,23 @@ export async function pinOgProfilePngWithRetry(
 const OG_THEME = getOgTheme("monitor");
 const OG_W = OG_THEME.dimensions.canvas.width;
 const OG_H = OG_THEME.dimensions.canvas.height;
-const NOTO_SANS_TTF = path.join(
-  process.cwd(),
-  "public",
-  "fonts",
-  "NotoSans-Regular.ttf",
-);
 
 // ─── Profile Activity Chart Generator ──────────────────────────────────────────
 
 async function generateProfileActivityChart(
   wallet: string,
-  width: number,
-  height: number,
   theme: OgTheme,
 ): Promise<Buffer | null> {
   try {
+    const profileTokens = theme.dimensions.profile;
+    const width = profileTokens?.chartWidth ?? 180;
+    const height = profileTokens?.chartHeight ?? 60;
+    const padding = profileTokens?.chartPadding ?? 5;
+
     const activityData = await fetchProfileActivityHistory(wallet, 30);
     if (activityData.length === 0) return null;
 
-    const maxActivity = Math.max(...activityData.map((d) => d.count));
-    const padding = 5;
+    const maxActivity = Math.max(...activityData.map((d) => d.count)) || 1;
     const chartWidth = width - padding * 2;
     const chartHeight = height - padding * 2;
     const barWidth = chartWidth / activityData.length;
@@ -185,121 +182,120 @@ export async function GET(request: NextRequest) {
   const shouldPin = pinIntent.shouldPin;
   const pinRetries = pinIntent.retries;
 
-  const render = withOgErrorBoundary(async (): Promise<Buffer> => {
-    const profile = wallet.length >= 10 ? await getProfile(wallet) : null;
-    const displayName = profile?.display_name
-      ? sanitizeAscii(profile.display_name, truncate(wallet))
-      : truncate(wallet);
+  const profileTokens = OG_THEME.dimensions.profile;
+  const paddingX = profileTokens?.paddingX ?? 60;
 
-    // Build base canvas — themed dark background
-    const base = await solidPng(OG_W, OG_H, OG_THEME.canvasBackground);
+  const rendered = await renderOgWithTimeoutAndCache({
+    surface: "profile",
+    theme: OG_THEME,
+    params: { wallet },
+    render: async (): Promise<Buffer> => {
+      const profile = wallet.length >= 10 ? await getProfile(wallet) : null;
+      const displayName = profile?.display_name
+        ? sanitizeAscii(profile.display_name, truncate(wallet))
+        : truncate(wallet);
 
-    // Violet accent rectangle — left strip, themed
-    const accentBuf = await solidPng(
-      OG_THEME.accentStripWidth,
-      OG_H,
-      OG_THEME.accentStrip,
-    );
+      // Build base canvas — themed dark background
+      const base = await solidPng(OG_W, OG_H, OG_THEME.canvasBackground);
 
-    const layers: sharp.OverlayOptions[] = [
-      { input: accentBuf, left: 0, top: 0 },
-    ];
+      // Violet accent rectangle — left strip, themed
+      const accentBuf = await solidPng(
+        OG_THEME.accentStripWidth,
+        OG_H,
+        OG_THEME.accentStrip,
+      );
 
-    // PHASE label — themed primary
-    const phaseLayer = await textLayer(
-      "PHASE",
-      {
-        left: 60,
-        top: 60,
-        width: OG_W - 120,
-        fontSize: 11,
-        color: OG_THEME.colors.primary,
-        align: "left",
-      },
-      NOTO_SANS_TTF,
-    );
-    if (phaseLayer) layers.push(phaseLayer);
+      const layers: sharp.OverlayOptions[] = [
+        { input: accentBuf, left: 0, top: 0 },
+      ];
 
-    // Display name — themed badge/headline
-    const truncName =
-      displayName.length > 28 ? displayName.slice(0, 28) + "..." : displayName;
-    const nameLayer = await textLayer(
-      truncName.toUpperCase(),
-      {
-        left: 60,
-        top: OG_H / 2 - 40,
-        width: OG_W - 120,
-        fontSize: 32,
-        color: OG_THEME.colors.badge,
-        align: "left",
-      },
-      NOTO_SANS_TTF,
-    );
-    if (nameLayer) layers.push(nameLayer);
-
-    // Wallet address — themed muted
-    if (wallet) {
-      const addrLayer = await textLayer(
-        truncate(wallet),
+      // PHASE label — themed primary
+      const phaseLayer = await textLayer(
+        "PHASE",
         {
-          left: 60,
-          top: OG_H / 2 + 16,
-          width: OG_W - 120,
-          fontSize: 13,
-          color: OG_THEME.colors.muted,
+          left: paddingX,
+          top: profileTokens?.phaseTop ?? 60,
+          width: OG_W - paddingX * 2,
+          fontSize: profileTokens?.phaseFontSize ?? 11,
+          color: OG_THEME.colors.primary,
           align: "left",
         },
         NOTO_SANS_TTF,
       );
-      if (addrLayer) layers.push(addrLayer);
-    }
+      if (phaseLayer) layers.push(phaseLayer);
 
-    // Social handles — themed faint
-    const handles: string[] = [];
-    if (profile?.twitter) handles.push(`X: ${profile.twitter}`);
-    if (profile?.discord) handles.push(`DC: ${profile.discord}`);
-    if (profile?.telegram) handles.push(`TG: ${profile.telegram}`);
-    if (handles.length > 0) {
-      const handlesLayer = await textLayer(
-        handles.join("   "),
+      // Display name — themed badge/headline
+      const maxChars = profileTokens?.maxNameChars ?? 28;
+      const truncName =
+        displayName.length > maxChars
+          ? displayName.slice(0, maxChars) + "..."
+          : displayName;
+      const nameLayer = await textLayer(
+        truncName.toUpperCase(),
         {
-          left: 60,
-          top: OG_H - 80,
-          width: OG_W - 120,
-          fontSize: 11,
-          color: OG_THEME.colors.faint,
+          left: paddingX,
+          top: OG_H / 2 + (profileTokens?.nameOffsetY ?? -40),
+          width: OG_W - paddingX * 2,
+          fontSize: profileTokens?.nameFontSize ?? 32,
+          color: OG_THEME.colors.badge,
           align: "left",
         },
         NOTO_SANS_TTF,
       );
-      if (handlesLayer) layers.push(handlesLayer);
-    }
+      if (nameLayer) layers.push(nameLayer);
 
-    // Add profile activity chart overlay
-    const activityChart = await generateProfileActivityChart(
-      wallet,
-      180,
-      60,
-      OG_THEME,
-    );
-    if (activityChart) {
-      layers.push({
-        input: activityChart,
-        left: OG_W - 200,
-        top: 60,
-      });
-    }
+      // Wallet address — themed muted
+      if (wallet) {
+        const addrLayer = await textLayer(
+          truncate(wallet),
+          {
+            left: paddingX,
+            top: OG_H / 2 + (profileTokens?.addrOffsetY ?? 16),
+            width: OG_W - paddingX * 2,
+            fontSize: profileTokens?.addrFontSize ?? 13,
+            color: OG_THEME.colors.muted,
+            align: "left",
+          },
+          NOTO_SANS_TTF,
+        );
+        if (addrLayer) layers.push(addrLayer);
+      }
 
-    return sharp(base).composite(layers).png().toBuffer();
+      // Social handles — themed faint
+      const handles: string[] = [];
+      if (profile?.twitter) handles.push(`X: ${profile.twitter}`);
+      if (profile?.discord) handles.push(`DC: ${profile.discord}`);
+      if (profile?.telegram) handles.push(`TG: ${profile.telegram}`);
+      if (handles.length > 0) {
+        const handlesLayer = await textLayer(
+          handles.join("   "),
+          {
+            left: paddingX,
+            top: OG_H - (profileTokens?.handlesBottomOffset ?? 80),
+            width: OG_W - paddingX * 2,
+            fontSize: profileTokens?.handlesFontSize ?? 11,
+            color: OG_THEME.colors.faint,
+            align: "left",
+          },
+          NOTO_SANS_TTF,
+        );
+        if (handlesLayer) layers.push(handlesLayer);
+      }
+
+      // Add profile activity chart overlay
+      const activityChart = await generateProfileActivityChart(wallet, OG_THEME);
+      if (activityChart) {
+        layers.push({
+          input: activityChart,
+          left: OG_W - (profileTokens?.chartRightOffset ?? 200),
+          top: profileTokens?.chartTop ?? 60,
+        });
+      }
+
+      return sharp(base).composite(layers).png().toBuffer();
+    },
   });
-  const renderOutcome = await render;
-  if (!renderOutcome.ok) {
-    return new NextResponse("OG render failed", {
-      status: 500,
-      headers: { "Content-Type": "text/plain" },
-    });
-  }
-  const png = renderOutcome.value;
+  const png = rendered.buffer;
 
   // phase-120: optional pin of generated OG asset with retry + checksum (non-blocking unless ?pin=1)
   let pinMeta: OgProfilePinResult | null = null;
@@ -340,6 +336,11 @@ export async function GET(request: NextRequest) {
     "Cache-Control": "private, no-store, must-revalidate",
     Vary: "Accept-Language, Authorization, X-Phase-Lang",
     "X-Phase-Og-Template": usedTemplate,
+    "X-Phase-Og-Digest": rendered.digest,
+    "X-Phase-Og-Cache": rendered.cacheHit ? "hit" : "miss",
+    ...(rendered.fallbackReason
+      ? { "X-Phase-Og-Fallback": rendered.fallbackReason }
+      : {}),
     ...(isPhase120Enabled() ? { "X-Phase120": "enabled" } : {}),
     ...(isSybilResistanceEnabled() ? { "X-Phase145": "enabled" } : {}),
     ...(sybilBand

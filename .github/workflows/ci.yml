@@ -7,22 +7,26 @@ on:
       - main
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   contracts:
     name: Soroban contracts (${{ matrix.crate }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         crate: [mock-token, phase-protocol]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1482605baf623e32c63c0a08c08fd64b7a72dd25 # stable
         with:
           targets: wasm32-unknown-unknown
       - name: Cache cargo registry and build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@82a92a6e3c910e37d733b60908f8b9847b1d4f20 # v2.7.0
         with:
           workspaces: contracts/${{ matrix.crate }}
       - name: Run contract tests
@@ -35,56 +39,80 @@ jobs:
   web:
     name: Next.js build & lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480e578c10c5467531ea5f2 # v4.1.0
         with:
           node-version: 22
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Verify dependency cadence and Soroban/Stellar parity
+        run: npm run deps:cadence
+      - name: Verify every environment variable is declared and documented
+        run: npm run env:check
+      - name: Verify edge entries bundle and boot without Node-only APIs
+        run: npm run edge:check
       - name: Lint
-        # eslint had no config/devDependency before this change (npm run lint
-        # failed outright); now that it runs, ~95 pre-existing errors surface
-        # across unrelated files. Non-blocking until tracked and fixed separately.
         continue-on-error: true
         run: npm run lint
       - name: Type check
-        # Pre-existing type errors exist outside this change's scope; surfaced but
-        # non-blocking until tracked and fixed separately.
-        continue-on-error: true
         run: npm run typecheck
+      - name: Unit tests
+        run: npm test
       - name: Build
         run: npm run build
         env:
           NEXT_PUBLIC_PHASER_TOKEN_ID: ${{ vars.NEXT_PUBLIC_PHASER_TOKEN_ID }}
           NEXT_PUBLIC_CLASSIC_LIQ_ISSUER: ${{ vars.NEXT_PUBLIC_CLASSIC_LIQ_ISSUER }}
 
+  dependency-check:
+    name: Check for unpinned dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480e578c10c5467531ea5f2 # v4.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify dependencies are pinned
+        run: npm run deps:cadence
+
   deploy-staging:
     name: Deploy contracts to testnet staging
-    needs: contracts
+    needs: [contracts, web, dependency-check]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: staging
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1482605baf623e32c63c0a08c08fd64b7a72dd25 # stable
         with:
           targets: wasm32-unknown-unknown
       - name: Cache cargo registry and build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@82a92a6e3c910e37d733b60908f8b9847b1d4f20 # v2.7.0
         with:
           workspaces: |
             contracts/mock-token
             contracts/phase-protocol
       - name: Install Stellar CLI
-        run: cargo install --locked stellar-cli --version ^23
+        run: cargo install --locked stellar-cli --version 23.0.0
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480e578c10c5467531ea5f2 # v4.1.0
         with:
           node-version: 22
           cache: npm

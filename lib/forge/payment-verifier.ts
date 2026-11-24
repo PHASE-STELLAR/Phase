@@ -2,6 +2,8 @@ import { Address, extractBaseAddress, FeeBumpTransaction, rpc, scValToNative, Tr
 import { decodePaymentHeader, PaymentPayloadSchema, PaymentRequirementsSchema, useFacilitator, type PaymentRequirements } from "x402-stellar"
 import { getPhaseProtocolConfigFromChain, NETWORK_PASSPHRASE, phaseProtocolContractIdForServer, READONLY_SIM_SOURCE_G, REQUIRED_AMOUNT, RPC_URL, stroopsToLiqDisplay, PHASER_LIQ_SYMBOL, tokenContractIdForServer } from "@/lib/phase-protocol"
 import { logUnknownStellarError } from "@/lib/stellar"
+import { isExperimentationEnabled, resolveForgeRequiredAmountStroops } from "@/lib/experiments"
+import { incSecurityCounter } from "@/lib/security-counters"
 
 const PHASE_PROTOCOL_CONTRACT = phaseProtocolContractIdForServer()
 const PHASE_LIQ_TOKEN_CONTRACT = tokenContractIdForServer()
@@ -9,8 +11,22 @@ export const X402_NETWORK = "stellar:testnet"
 
 export type ForgePaymentResolution = "paid" | "missing" | "facilitator_rejected"
 
-export function forgePriceDisplay(): string {
-  return `${stroopsToLiqDisplay(REQUIRED_AMOUNT)} ${PHASER_LIQ_SYMBOL}`
+export function forgePriceDisplay(amountStroops: string = REQUIRED_AMOUNT): string {
+  return `${stroopsToLiqDisplay(amountStroops)} ${PHASER_LIQ_SYMBOL}`
+}
+
+/**
+ * Spike 612 (phase-174): resolve the price for a payer. Flag off / no
+ * experiment / control → REQUIRED_AMOUNT. Callers must treat the result as the
+ * single source of truth for challenge amount, header and verifier floor so a
+ * variant can never sell at A and verify at B.
+ */
+export async function resolveForgePaymentAmount(
+  payerAddress?: string,
+  challengeId?: string,
+): Promise<string> {
+  const resolution = await resolveForgeRequiredAmountStroops(payerAddress, challengeId)
+  return resolution.amountStroops
 }
 
 // ── helpers extracted from monolith ────────────────────────────────────────
@@ -57,8 +73,8 @@ export type LegacyChallenge = {
   invoice: string; resource: string; note: string
 }
 
-function parseRequiredAmountInt(): number {
-  const p = Number.parseInt(REQUIRED_AMOUNT, 10)
+function parseRequiredAmountInt(amountStroops: string = REQUIRED_AMOUNT): number {
+  const p = Number.parseInt(amountStroops, 10)
   return Number.isFinite(p) && p > 0 ? p : 0
 }
 
@@ -68,26 +84,26 @@ export function facilitatorUrlFromRequest(origin: string): string {
   return `${origin}/api/x402`
 }
 
-export function buildLegacyChallenge(origin: string, pathname: string): LegacyChallenge {
+export function buildLegacyChallenge(origin: string, pathname: string, amountStroops: string = REQUIRED_AMOUNT): LegacyChallenge {
   return {
     protocol: "x402", version: "2", network: X402_NETWORK,
     token: PHASE_LIQ_TOKEN_CONTRACT, contract_id: PHASE_PROTOCOL_CONTRACT,
-    token_contract: PHASE_LIQ_TOKEN_CONTRACT, amount: parseRequiredAmountInt(),
-    priceDisplay: forgePriceDisplay(), facilitator: facilitatorUrlFromRequest(origin),
+    token_contract: PHASE_LIQ_TOKEN_CONTRACT, amount: parseRequiredAmountInt(amountStroops),
+    priceDisplay: forgePriceDisplay(amountStroops), facilitator: facilitatorUrlFromRequest(origin),
     invoice: `forge_${Date.now()}`, resource: pathname,
     note: "Payment in PHASELQ via PHASE protocol `settle` on-chain, or x402 exact payment per paymentRequirements.",
   }
 }
 
-export function buildOfficialPaymentRequirements(origin: string): PaymentRequirements | null {
+export function buildOfficialPaymentRequirements(origin: string, amountStroops: string = REQUIRED_AMOUNT): PaymentRequirements | null {
   try {
     const resource = `${origin}/api/forge-agent`
     const payTo = process.env.X402_FORGE_PAY_TO?.trim() || READONLY_SIM_SOURCE_G
     return PaymentRequirementsSchema.parse({
-      scheme: "exact", network: "stellar-testnet", maxAmountRequired: REQUIRED_AMOUNT,
+      scheme: "exact", network: "stellar-testnet", maxAmountRequired: amountStroops,
       resource, description: "PHASELQ (Soroban) — pago x402 exact para el agente de forja.",
       mimeType: "application/json", payTo, maxTimeoutSeconds: 600, asset: PHASE_LIQ_TOKEN_CONTRACT,
-      extra: { phaserLiqContract: PHASE_LIQ_TOKEN_CONTRACT, phaseProtocolContract: PHASE_PROTOCOL_CONTRACT, requiredAmountStroops: REQUIRED_AMOUNT },
+      extra: { phaserLiqContract: PHASE_LIQ_TOKEN_CONTRACT, phaseProtocolContract: PHASE_PROTOCOL_CONTRACT, requiredAmountStroops: amountStroops },
     })
   } catch { return null }
 }
@@ -104,7 +120,7 @@ async function verifyOfficialX402(rawHeader: string, paymentRequirements: Paymen
 }
 
 // ── on-chain settle verification ────────────────────────────────────────────
-export async function verifyPhaseSettleTxOnChain(txHash: string, payerAddress: string): Promise<boolean> {
+export async function verifyPhaseSettleTxOnChain(txHash: string, payerAddress: string, requiredAmountStroops: string = REQUIRED_AMOUNT): Promise<boolean> {
   const payerComparable = comparableEd25519AccountG(payerAddress.trim())
   if (!payerComparable.startsWith("G") || payerComparable.length !== 56) return false
   const chainCfg = await getPhaseProtocolConfigFromChain()
@@ -133,7 +149,7 @@ export async function verifyPhaseSettleTxOnChain(txHash: string, payerAddress: s
     if (comparableEd25519AccountG(userG) !== payerComparable) continue
     let tokenC: string; try { tokenC = Address.fromScVal(args[1]).toString() } catch { continue }
     if (!allowedNorm.has(normalizeContractC(tokenC))) continue
-    const bi = sorobanAmountScValToBigInt(args[2]); if (bi === null || bi < BigInt(REQUIRED_AMOUNT)) continue
+    const bi = sorobanAmountScValToBigInt(args[2]); if (bi === null || bi < BigInt(requiredAmountStroops)) continue
     return true
   }
   return false
@@ -184,12 +200,14 @@ export function extractSettlementReceiptTxHash(authHeader: string | null, body: 
 // ── pipeline step ───────────────────────────────────────────────────────────
 export type VerifyPaymentStepInput = {
   authHeader: string | null
-  body: { settlementTxHash?: string; payerAddress?: string }
+  body: { settlementTxHash?: string; payerAddress?: string; invoice?: string }
   paymentRequirements: PaymentRequirements | null
+  challengeId?: string
 }
 
 export async function verifyPaymentStep(input: VerifyPaymentStepInput): Promise<ForgePaymentResolution> {
   const { authHeader, body, paymentRequirements } = input
+  const challengeId = input.challengeId ?? body.invoice
   const bearerHash = parseBearerSettlementTxHash(authHeader)
   let settlementTx = body.settlementTxHash?.trim() ?? ""
   if (bearerHash) {
@@ -200,13 +218,25 @@ export async function verifyPaymentStep(input: VerifyPaymentStepInput): Promise<
   if (settlementTx) {
     if (!payer) payer = (await sorobanSuccessfulTxSourcePublicKey(settlementTx)) ?? ""
     if (payer) {
-      try { return (await verifyPhaseSettleTxOnChain(settlementTx, payer)) ? "paid" : "missing" }
+      // Spike 612: the verifier floor follows the payer's locked challenge or
+      // price variant so a variant-priced settlement verifies at the same price it was sold at.
+      const requiredAmount = await resolveForgePaymentAmount(payer, challengeId)
+      try {
+        const ok = await verifyPhaseSettleTxOnChain(settlementTx, payer, requiredAmount)
+        if (ok && isExperimentationEnabled()) incSecurityCounter("experiment_challenge_verified")
+        return ok ? "paid" : "missing"
+      }
       catch (e) { logUnknownStellarError("forge verifyPaymentStep (body settle)", e); return "missing" }
     }
   }
   const phaseFromAuth = tryPhaseProofFromAuthHeader(authHeader)
   if (phaseFromAuth) {
-    try { return (await verifyPhaseSettleTxOnChain(phaseFromAuth.settlementTxHash, phaseFromAuth.payerAddress)) ? "paid" : "missing" }
+    const requiredAmount = await resolveForgePaymentAmount(phaseFromAuth.payerAddress, challengeId)
+    try {
+      const ok = await verifyPhaseSettleTxOnChain(phaseFromAuth.settlementTxHash, phaseFromAuth.payerAddress, requiredAmount)
+      if (ok && isExperimentationEnabled()) incSecurityCounter("experiment_challenge_verified")
+      return ok ? "paid" : "missing"
+    }
     catch (e) { logUnknownStellarError("forge verifyPaymentStep (auth settle)", e); return "missing" }
   }
   if (!authHeader?.toLowerCase().startsWith("x402 ")) return "missing"
@@ -214,6 +244,10 @@ export async function verifyPaymentStep(input: VerifyPaymentStepInput): Promise<
   let decoded: unknown
   try { decoded = decodePaymentHeader<unknown>(raw) } catch { return "missing" }
   if (!PaymentPayloadSchema.safeParse(decoded).success) return "missing"
-  try { return (await verifyOfficialX402(raw, paymentRequirements)) ? "paid" : "facilitator_rejected" }
+  try {
+    const ok = await verifyOfficialX402(raw, paymentRequirements)
+    if (ok && isExperimentationEnabled()) incSecurityCounter("experiment_challenge_verified")
+    return ok ? "paid" : "facilitator_rejected"
+  }
   catch (e) { logUnknownStellarError("forge verifyPaymentStep (x402 verify)", e); return "facilitator_rejected" }
 }

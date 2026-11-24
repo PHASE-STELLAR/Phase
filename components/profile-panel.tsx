@@ -5,6 +5,9 @@ import { useRouter } from "next/navigation"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { useLang } from "@/components/lang-context"
 import { WalletAvatar } from "./wallet-avatar"
+import { WalletBadge } from "./wallet-badge"
+import { QrCodeDialog } from "./qr-code-dialog"
+import { fillCopy, pickCopy } from "@/lib/phase-copy"
 
 // Social icons (inline SVG)
 function DiscordIcon({ className }: { className?: string }) {
@@ -32,6 +35,9 @@ export type ProfileSocials = {
 
 type ProfileData = ProfileSocials & {
   avatar_token_id?: number
+  avatar_image_url?: string
+  version?: number
+  completeness?: { score: number; completedFields: number; totalFields: number }
 }
 
 function SocialChip({
@@ -778,6 +784,7 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
   const [copied, setCopied] = useState(false)
   const [avatarSelectorOpen, setAvatarSelectorOpen] = useState(false)
   const [savingAvatar, setSavingAvatar] = useState(false)
+  const [qrDialogOpen, setQrDialogOpen] = useState(false)
   const selectorRef = useRef<HTMLDivElement>(null)
 
   const t =
@@ -926,10 +933,15 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
     try {
       const res = await fetch(`/api/profile?wallet=${encodeURIComponent(address)}`)
       if (!res.ok) return
-      const json = (await res.json()) as { profile: ProfileData | null }
+      const json = (await res.json()) as {
+        profile: ProfileData | null
+        completeness?: ProfileData["completeness"]
+      }
       if (json.profile) {
         setProfile(json.profile)
         setForm(json.profile)
+      } else if (json.completeness) {
+        setProfile({ completeness: json.completeness })
       }
     } catch { /* ignore */ }
   }, [address])
@@ -981,10 +993,12 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
       const res = await fetch("/api/profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: address, ...form }),
+        body: JSON.stringify({ wallet: address, ...form, expected_version: profile.version ?? 0 }),
       })
       if (!res.ok) throw new Error("save failed")
-      setProfile(form)
+      const saved = (await res.json()) as { profile: ProfileData }
+      setProfile(saved.profile)
+      setForm(saved.profile)
       setEditing(false)
       setSaveMsg(t.saved)
       setTimeout(() => setSaveMsg(""), 2500)
@@ -1039,10 +1053,12 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
           telegram: profile.telegram,
           avatar_token_id: tokenId,
           avatar_image_url,
+          expected_version: profile.version ?? 0,
         }),
       })
       if (!res.ok) throw new Error("save failed")
-      setProfile((p) => ({ ...p, avatar_token_id: tokenId ?? undefined, avatar_image_url }))
+      const saved = (await res.json()) as { profile: ProfileData }
+      setProfile(saved.profile)
       setAvatarSelectorOpen(false)
     } catch { /* ignore */ }
     finally { setSavingAvatar(false) }
@@ -1078,9 +1094,12 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
 
           {/* Identity */}
           <div className="min-w-0 flex-1 pt-0.5">
-            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-violet-400 mb-0.5">
-              {t.profile}
-            </p>
+            <div className="flex items-center gap-2 mb-0.5">
+              <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-violet-400">
+                {t.profile}
+              </p>
+              <WalletBadge />
+            </div>
             {profile.display_name && (
               <p className="font-mono text-[11px] text-zinc-200 font-medium truncate mb-0.5">
                 {profile.display_name}
@@ -1097,7 +1116,20 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
               >
                 {copied ? t.copied : t.copyAddress}
               </button>
+              <button
+                type="button"
+                onClick={() => setQrDialogOpen(true)}
+                title="Show QR Code"
+                className="shrink-0 font-mono text-[8px] uppercase tracking-widest text-zinc-700 hover:text-violet-400 transition-colors"
+              >
+                [QR]
+              </button>
             </div>
+            {profile.completeness && (
+              <p className="font-mono text-[8px] text-violet-500 mt-1">
+                {fillCopy(pickCopy(lang).profileCompleteness.progressHint, { score: profile.completeness.score })}
+              </p>
+            )}
           </div>
         </div>
 
@@ -1330,6 +1362,12 @@ export function ProfilePanel({ open, onOpenChange, address, disconnect }: Profil
           </button>
         </div>
 
+        <QrCodeDialog
+          open={qrDialogOpen}
+          onOpenChange={setQrDialogOpen}
+          mode="receive"
+          address={address}
+        />
       </SheetContent>
     </Sheet>
   )

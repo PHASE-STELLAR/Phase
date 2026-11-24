@@ -62,3 +62,31 @@ export function setCachedExploreOwners(contractId: string, scanCap: number, owne
 export function clearExploreOwnersCache(): void {
   store.clear()
 }
+
+export function exploreOwnersCacheStats(): { size: number; maxEntries: number } {
+  return { size: store.size, maxEntries: MAX_ENTRIES }
+}
+
+/**
+ * phase-142: owner lookup for a known set of token ids, served from whichever
+ * cached scan is freshest. The curator needs owners only for its shortlist (to
+ * cap any one owner's share of a show), so it must not trigger the explore
+ * route's full owner_of scan; ids missing here are fetched individually by the
+ * caller. Entries older than `maxAgeMs` are ignored — an owner cap enforced
+ * against a stale owner is not enforced.
+ */
+export function lookupCachedOwners(tokenIds: readonly number[], maxAgeMs = 10 * 60_000): Map<number, string> {
+  const wanted = new Set(tokenIds)
+  const out = new Map<number, string>()
+  const now = Date.now()
+  const entries = [...store.values()]
+    .filter((e) => now - e.cachedAt < maxAgeMs)
+    .sort((a, b) => b.cachedAt - a.cachedAt)
+  for (const entry of entries) {
+    for (const { id, owner } of entry.owners) {
+      if (wanted.has(id) && !out.has(id)) out.set(id, owner)
+    }
+    if (out.size === wanted.size) break
+  }
+  return out
+}

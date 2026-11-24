@@ -15,7 +15,7 @@
  * admin route returns 404; subscription rows remain inert on disk.
  */
 
-import { createHmac, randomUUID } from "node:crypto"
+import { createHash, createHmac, randomUUID } from "node:crypto"
 import {
   listActiveSubscriptionsForEvent,
   getSubscription,
@@ -56,6 +56,14 @@ export function signWebhookDelivery(
   return createHmac("sha256", secret)
     .update(`${timestamp}.${nonce}.${rawBody}`, "utf8")
     .digest("hex")
+}
+
+function eventIdLabel(eventType: WebhookEventType, payload: unknown): string {
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify(payload ?? null))
+    .digest("hex")
+    .slice(0, 24)
+  return `${eventType}:synthetic:${fingerprint}`
 }
 
 function sleep(ms: number): Promise<void> {
@@ -167,10 +175,12 @@ async function deliverToSubscription(
 export async function dispatchWebhookEvent(
   eventType: WebhookEventType,
   payload: unknown,
-  eventId: string,
+  eventId?: string,
 ): Promise<{ attempted: number; delivered: number }> {
   if (!isPhase215Enabled()) return { attempted: 0, delivered: 0 }
-  if (!(await claimEventId(eventId))) return { attempted: 0, delivered: 0 }
+  // Synthetic/admin callers may omit an id; derive one so dedupe still holds.
+  const resolvedEventId = eventId ?? `${eventIdLabel(eventType, payload)}`
+  if (!(await claimEventId(resolvedEventId))) return { attempted: 0, delivered: 0 }
 
   const subscriptions = await listActiveSubscriptionsForEvent(eventType)
   if (subscriptions.length === 0) return { attempted: 0, delivered: 0 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { addLoreLink, getLoreLinksForToken } from "@/lib/narrative-world-store"
+import { addLoreLink, getLoreLinksForToken, LoreLinkError } from "@/lib/narrative-world-store"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 
 export const runtime = "nodejs"
@@ -65,6 +65,10 @@ export async function POST(
     const link = await addLoreLink(fromTokenId, toTokenId, note)
     return NextResponse.json({ ok: true, link })
   } catch (e) {
+    if (e instanceof LoreLinkError) {
+      const status = e.code === "DEGREE_EXCEEDED" ? 409 : 400
+      return NextResponse.json({ error: e.message, code: e.code }, { status })
+    }
     return NextResponse.json({ error: e instanceof Error ? e.message : "No se pudo crear el enlace" }, { status: 400 })
   }
 }

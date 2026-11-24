@@ -25,7 +25,10 @@ import {
   Asset,
   BASE_FEE,
   Horizon,
+  getLiquidityPoolId,
   Keypair,
+  LiquidityPoolAsset,
+  LiquidityPoolFeeV18,
   Networks,
   Operation,
   StrKey,
@@ -163,6 +166,49 @@ async function main() {
     const trustRes = await server.submitTransaction(txTrust)
     console.log(`  OK — changeTrust. Hash: ${trustRes.hash}`)
     console.log(`  ${base}/transactions/${trustRes.hash}\n`)
+  }
+
+  // Spike 574 (phase-182): a PHASELQ/XLM pool needs a *second* trustline on the
+  // POOL SHARE asset. Without it the distributor can hold PHASELQ and XLM but
+  // can never receive LP shares, so the seed deposit fails after signing.
+  // Opt-in: LP_POOL_SEED_ENABLED=1.
+  if (process.env.LP_POOL_SEED_ENABLED?.trim() === "1") {
+    console.log("Pool seed enabled — verificando trustline de pool shares…")
+    try {
+      const accountDist = await server.loadAccount(distPub)
+      const poolAsset = new LiquidityPoolAsset(asset, Asset.native(), LiquidityPoolFeeV18)
+      const poolId = Buffer.from(
+        getLiquidityPoolId("constant_product", {
+          assetA: asset,
+          assetB: Asset.native(),
+          fee: LiquidityPoolFeeV18,
+        }),
+      ).toString("hex")
+      const hasShareLine = accountDist.balances.some(
+        (b: any) => b.asset_type === "liquidity_pool_shares" && b.liquidity_pool_id === poolId,
+      )
+      if (hasShareLine) {
+        console.log(`  Pool-share trustline ya activa (${poolId.slice(0, 12)}…).\n`)
+      } else {
+        const txPoolTrust = new TransactionBuilder(accountDist, {
+          fee: BASE_FEE,
+          networkPassphrase: Networks.TESTNET,
+        })
+          .addOperation(Operation.changeTrust({ asset: poolAsset }))
+          .setTimeout(180)
+          .build()
+        txPoolTrust.sign(distributorKp)
+        const poolTrustRes = await server.submitTransaction(txPoolTrust)
+        console.log(`  OK — changeTrust pool shares. Hash: ${poolTrustRes.hash}`)
+        console.log(`  pool_id: ${poolId}`)
+        console.log(
+          `  Siguiente: depositá LP_POOL_SEED_AMOUNT con POST /api/liquidity-pools (action=deposit) y registrá el seed con setPoolSeedReserve.\n`,
+        )
+      }
+    } catch (e) {
+      console.error("  No se pudo preparar la trustline del pool:", e instanceof Error ? e.message : e)
+      process.exit(1)
+    }
   }
 
   console.log("Enviando payment issuer → distribuidor (firma: issuer)…")

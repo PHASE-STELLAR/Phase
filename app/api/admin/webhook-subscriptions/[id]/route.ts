@@ -10,7 +10,7 @@ import {
  * DELETE /api/admin/webhook-subscriptions/[id]            - remove a subscription
  * POST   /api/admin/webhook-subscriptions/[id]?rotate=1    - rotate its secret
  *
- * Flag: phase-154. See ../route.ts for the shared admin-auth convention.
+ * Flag: phase-215 (phase-154 precursor). See ../route.ts for the shared admin-auth convention.
  */
 
 export const dynamic = "force-dynamic"

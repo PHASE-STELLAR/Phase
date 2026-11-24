@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { describe, it, beforeEach } from "node:test"
+import { describe, it, beforeEach } from "vitest"
 import * as assert from "node:assert/strict"
 import { Keypair } from "@stellar/stellar-sdk"
 import { getCreatorProfileViewAnalytics, recordCreatorProfileView } from "@/lib/market-store"

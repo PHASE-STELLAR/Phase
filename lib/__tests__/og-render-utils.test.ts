@@ -2,7 +2,7 @@
  * phase-60: shared OG render utilities — unit tests
  * Run: node --test --import tsx lib/__tests__/og-render-utils.test.ts
  */
-import { describe, it } from "node:test"
+import { describe, it } from "vitest"
 import * as assert from "node:assert/strict"
 import { monitorTheme } from "@/lib/og-design-tokens"
 import {

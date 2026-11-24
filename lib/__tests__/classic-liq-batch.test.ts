@@ -1,5 +1,6 @@
-import { describe, it } from "node:test"
+import { describe, it } from "vitest"
 import * as assert from "node:assert/strict"
+import { resetSecurityCounters, getSecurityCounter } from "@/lib/security-counters"
 import { submitTrustlineBatch } from "@/lib/classic-liq"
 
 function rateLimitError(): Error {
@@ -73,6 +74,24 @@ describe("phase-134 batch trustline submission", () => {
     })
     assert.equal(attempts, 1)
     assert.equal(results[0]!.ok, false)
+    delete process.env.FEATURE_PHASE_134
+  })
+
+  it("does not resubmit duplicate XDRs in the same batch", async () => {
+    process.env.FEATURE_PHASE_134 = "1"
+    resetSecurityCounters()
+    let submissions = 0
+    const results = await submitTrustlineBatch(["xdr-dup", "xdr-dup"], {
+      submit: async (xdr) => {
+        submissions++
+        return { hash: "hash-dup" }
+      },
+    })
+    assert.equal(submissions, 1, "identical XDR must only be submitted once")
+    assert.equal(results.length, 2)
+    assert.equal(results[0]!.ok, true)
+    assert.equal(results[1]!.ok, true)
+    assert.ok(getSecurityCounter("trustline_submitted") > 0)
     delete process.env.FEATURE_PHASE_134
   })
 

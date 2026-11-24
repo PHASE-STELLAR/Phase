@@ -158,3 +158,10 @@ export async function solveHashcashChallenge(
 
   throw new Error("Could not solve hashcash challenge")
 }
+
+// ── Spike 672 (flag-gated): drop-lobby ticket binding ──
+// Turnstile/hashcash verification is unchanged; lobby tickets bind (wallet, ticket_id)
+// so a solved challenge cannot be replayed across wallets. Pure.
+export function dropLobbyTicketBinding(wallet: string, ticketId: string): string {
+  return `${wallet.toUpperCase()}:${ticketId}`;
+}

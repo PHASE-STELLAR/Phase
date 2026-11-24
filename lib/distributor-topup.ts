@@ -22,8 +22,8 @@ import { isFeatureEnabled } from "@/lib/feature-flags"
 
 const FLAG: "phase-133" = "phase-133"
 
-export function isDistributorTopupEnabled(): boolean {
-  return isFeatureEnabled(FLAG)
+export function isDistributorTopupEnabled(distributorAddress?: string): boolean {
+  return isFeatureEnabled(FLAG, { wallet: distributorAddress, runtimeOnly: true })
 }
 
 const DEFAULT_TOPUP_THRESHOLD_STROOPS = 100_000_000n   // 10 PHASELQ
@@ -143,7 +143,7 @@ export async function prepareTopup(
   shouldTopup: boolean
   reason?: string
 }> {
-  if (!isDistributorTopupEnabled()) {
+  if (!isDistributorTopupEnabled(distributorAddress)) {
     return { topupAmountStroops: "0", shouldTopup: false, reason: "Feature disabled" }
   }
 

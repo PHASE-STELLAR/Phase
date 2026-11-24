@@ -1,4 +1,4 @@
-import { describe, it, beforeEach } from "node:test"
+import { describe, it, beforeEach } from "vitest"
 import * as assert from "node:assert/strict"
 import { assetContentHash, dedupeExploreItems, type ExploreItem } from "@/lib/explore-domain"
 

@@ -61,6 +61,7 @@ ${currencyBlocks}
     status: 200,
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
+      "Content-Length": String(new TextEncoder().encode(body).byteLength),
       "Cache-Control": "no-store, max-age=0",
       // Freighter / dApp (Origin www.phasee.xyz) y stellar.expert deben poder leer el TOML (CORS).
       "Access-Control-Allow-Origin": "*",

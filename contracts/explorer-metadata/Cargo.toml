@@ -1,0 +1,18 @@
+[package]
+name = "phase-explorer-metadata"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+soroban-sdk = "20"
+soroban-spec = "20"
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+lto = true
+codegen-units = 1
+strip = true

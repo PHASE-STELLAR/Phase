@@ -4,7 +4,7 @@
  * Validates translation loading, caching, and fallback mechanisms
  */
 
-import { describe, it, expect, beforeEach } from "@jest/globals"
+import { describe, it, expect, beforeEach } from "vitest"
 
 // Mock translations for testing
 const mockTranslations = {

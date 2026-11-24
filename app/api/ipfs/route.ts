@@ -7,6 +7,8 @@ import {
   pinFileToIpfsWithRetry,
   resolveRetryConfig,
 } from "@/lib/ipfs-upload-retry"
+import { ipfsClient } from "@/lib/ipfs-client"
+import { isPhase117Enabled } from "@/lib/ipfs-pinning"
 
 const PinataRetryQuerySchema = z.object({
   retries: z.coerce.number().int().min(0).max(6).optional(),
@@ -80,13 +82,32 @@ export async function POST(req: NextRequest) {
       }
       // Re-create Blob for pin (arrayBuffer may have consumed? use bytes copy)
       const verifiedBlob = new Blob([ab], { type: (file as Blob).type || "application/octet-stream" })
-      const result = await pinFileToIpfsWithRetry(verifiedBlob, jwt, {
-        config,
+      const fileName = (file as File).name ?? "phase-asset.bin"
+
+      // Unified client upload handles retry backoff + checksum verification + optional quorum verification
+      const result = await ipfsClient.upload(verifiedBlob, {
+        jwt,
+        fileName,
         expectedChecksum: serverChecksum,
-        fileName: (file as File).name ?? "phase-asset.bin",
+        retryConfig: config,
       })
+
+      if (!result.ok) {
+        return NextResponse.json(
+          {
+            error: result.error || "Upload failed",
+            code: result.error?.includes("quorum") ? "QUORUM_FAILED" : "UPLOAD_FAILED",
+            attempts: result.attempts,
+            checksum: serverChecksum,
+            quorumAchieved: result.quorumAchieved,
+            quorumRequired: result.quorumRequired,
+          },
+          { status: 502 },
+        )
+      }
+
       return NextResponse.json(
-        { uri: result.uri, checksum: result.checksum.hex, verified: true, attempts: result.attempts },
+        { uri: result.uri, checksum: result.checksum.hex, verified: result.verified, attempts: result.attempts },
         { headers: { "X-Checksum-Sha256": result.checksum.hex, "X-Phase120-Attempts": String(result.attempts) } },
       )
     } catch (e) {

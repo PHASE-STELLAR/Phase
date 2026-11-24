@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { after, before, describe, it } from "node:test"
+import { afterAll as after, beforeAll as before, describe, it } from "vitest"
 import { Keypair } from "@stellar/stellar-sdk"
 import { createSignal, diffWords, editSignal, getSignalEditHistory, SignalEditError } from "@/lib/signal-store"
 
@@ -58,7 +58,10 @@ describe("phase-82 signal edit history", () => {
     const { signal: updated, version } = await editSignal(signal.id, author, { title: "Updated title" })
     assert.equal(updated.title, "Updated title")
     assert.equal(updated.body, "Original body")
-    assert.equal(version.version, 1)
+    // Signals are created at version 1 (a 0-based origin would make the
+    // version unusable as an ETag / If-Match / parent_version value), so the
+    // first edit lands on 2.
+    assert.equal(version.version, 2)
     assert.equal(version.title, "Original title")
     assert.equal(version.body, "Original body")
     assert.equal(version.edited_by, author)
@@ -125,7 +128,7 @@ describe("phase-82 signal edit history", () => {
     assert.equal(history!.signal.title, "Final draft")
     assert.equal(history!.signal.body, "Second body")
     assert.equal(history!.diffs.length, 2)
-    assert.equal(history!.diffs[0]?.to_version, 2)
+    assert.equal(history!.diffs[0]?.to_version, 3)
     assert.equal(history!.diffs[1]?.to_version, "current")
     assert.deepEqual(history!.diffs[0]?.body_diff, [
       { type: "remove", value: "First" },

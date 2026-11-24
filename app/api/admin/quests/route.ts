@@ -9,6 +9,7 @@ import {
   reorderQuests,
   type QuestDefinition,
 } from "@/lib/quest-registry"
+import { ARC_LIMITS, QuestArcError, STEP_CATALOG, isQuestArcsEnabled, revokeArc } from "@/lib/quest-arcs"
 
 /**
  * Admin API for managing quest definitions
@@ -53,6 +54,26 @@ export async function GET(req: NextRequest) {
 
   try {
     const registry = await getQuestRegistry()
+    // phase-147: the closed step catalog generated arcs may draw from, so an
+    // operator reviewing static quests sees what arcs can (and cannot) ask for.
+    if (isQuestArcsEnabled()) {
+      const arcCatalog = Object.entries(STEP_CATALOG).map(([kind, entry]) => ({
+        kind,
+        condition: entry.condition(null).type,
+        onchain: entry.onchain,
+        farmable: entry.farmable,
+        difficulty: entry.difficulty,
+      }))
+      return NextResponse.json({
+        ...registry,
+        arcCatalog,
+        arcLimits: {
+          farmableMaxShare: ARC_LIMITS.FARMABLE_MAX_SHARE,
+          maxArcsPerWindow: ARC_LIMITS.MAX_ARCS_PER_WINDOW,
+          ttlMs: ARC_LIMITS.TTL_MS,
+        },
+      })
+    }
     return NextResponse.json(registry)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -188,6 +209,20 @@ export async function DELETE(req: NextRequest) {
   }
 
   try {
+    // phase-147: `?arcId=` revokes a generated arc (claimed steps stay paid).
+    const arcId = req.nextUrl.searchParams.get("arcId")
+    if (arcId && isQuestArcsEnabled()) {
+      try {
+        const arc = revokeArc(arcId)
+        return NextResponse.json({ ok: true, arcId, status: arc.status })
+      } catch (e) {
+        if (e instanceof QuestArcError) {
+          return NextResponse.json({ error: e.code }, { status: e.code === "NOT_FOUND" ? 404 : 409 })
+        }
+        throw e
+      }
+    }
+
     const questId = req.nextUrl.searchParams.get("questId")
     
     if (!questId) {

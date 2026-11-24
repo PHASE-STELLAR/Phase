@@ -157,8 +157,21 @@ export function validateWebhookUrl(
   if (/^\d+$/.test(host) || /^\[/.test(host) || host.includes(":")) {
     return { ok: false, error: "webhookUrl must use a public hostname", reason: "ip_literal" }
   }
-  if (host === "169.254.169.254" || host.startsWith("10.") || host.startsWith("192.168.")) {
-    return { ok: false, error: "webhookUrl must use a public hostname", reason: "private_network" }
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])]
+    if (a === 127 || a === 0) {
+      return { ok: false, error: "webhookUrl host is not routable", reason: "loopback" }
+    }
+    const isPrivate =
+      a === 10 ||
+      (a === 100 && b >= 64 && b <= 127) || // CGNAT
+      (a === 169 && b === 254) || // link-local, incl. cloud metadata
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    if (isPrivate) {
+      return { ok: false, error: "webhookUrl must use a public hostname", reason: "private_network" }
+    }
   }
   return { ok: true, url }
 }

@@ -1,7 +1,7 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { readJsonFile, updateStore, updateStoreWithReader } from "@/lib/json-store";
 import { serverDataJsonPath } from "@/lib/server-data-paths";
 import { createNotification } from "@/lib/notification-store";
+import { isAnalyticsWarehouseEnabled, recordWarehouseEvent } from "@/lib/analytics-warehouse";
 
 export type AchievementId =
   | "first_mint"
@@ -79,27 +79,33 @@ function mergeEntries(
   };
 }
 
-async function readStore(): Promise<AchievementStore> {
-  let raw: AchievementStore;
-  try {
-    raw = JSON.parse(
-      await readFile(serverDataJsonPath("achievements"), "utf8"),
-    ) as AchievementStore;
-  } catch {
-    return {};
-  }
+/** Normalizes wallet keys and merges duplicate-cased rows, as the old reader did. */
+function readAchievementStore(raw: unknown): AchievementStore {
+  if (!raw || typeof raw !== "object") return {};
   const store: AchievementStore = {};
-  for (const [wallet, entry] of Object.entries(raw)) {
+  for (const [wallet, entry] of Object.entries(raw as AchievementStore)) {
     const key = walletKey(wallet);
     store[key] = store[key] ? mergeEntries(store[key]!, entry) : entry;
   }
   return store;
 }
 
-async function writeStore(data: AchievementStore): Promise<void> {
-  const fp = serverDataJsonPath("achievements");
-  await mkdir(path.dirname(fp), { recursive: true });
-  await writeFile(fp, JSON.stringify(data, null, 2), "utf8");
+async function readStore(): Promise<AchievementStore> {
+  return readJsonFile<unknown>(
+    serverDataJsonPath("achievements"),
+    undefined,
+  ).then(readAchievementStore);
+}
+
+/** Locked read-modify-write that normalizes wallet keys before mutating. */
+function updateAchievementStore<R>(
+  mutate: (store: AchievementStore) => R | Promise<R>,
+): Promise<R> {
+  return updateStoreWithReader<AchievementStore, R>(
+    "achievements",
+    readAchievementStore,
+    mutate,
+  );
 }
 
 function ensureEntry(
@@ -128,20 +134,36 @@ export async function unlockAchievement(
   id: AchievementId,
   evidence?: string,
 ): Promise<boolean> {
-  const store = await readStore();
-  const entry = ensureEntry(store, wallet);
-  if (entry.unlocked.some((a) => a.id === id)) return false; // idempotent
-  entry.unlocked.push({ id, unlocked_at: Date.now(), tx_evidence: evidence });
-  store[walletKey(wallet)] = entry;
-  await writeStore(store);
-  // Notify (fire-and-forget)
-  void createNotification(wallet, "achievement_unlocked", {
-    achievement_id: id,
-    achievement_name: ACHIEVEMENT_NAMES[id] ?? id,
-  }).catch(() => {
-    /* silent */
+  const didUnlock = await updateAchievementStore((store) => {
+    const entry = ensureEntry(store, wallet);
+    if (entry.unlocked.some((a) => a.id === id)) return false; // idempotent
+    entry.unlocked.push({ id, unlocked_at: Date.now(), tx_evidence: evidence });
+    store[walletKey(wallet)] = entry;
+    return true;
   });
-  return true;
+  if (didUnlock) {
+    // Notify (fire-and-forget) after the store lock is released.
+    void createNotification(wallet, "achievement_unlocked", {
+      achievement_id: id,
+      achievement_name: ACHIEVEMENT_NAMES[id] ?? id,
+    }).catch(() => {
+      /* silent */
+    });
+
+    if (isAnalyticsWarehouseEnabled(wallet)) {
+      void recordWarehouseEvent({
+        surface: "achievements",
+        stage: "achievement_unlocked",
+        wallet,
+        metadata: {
+          achievement_id: id,
+          achievement_name: ACHIEVEMENT_NAMES[id] ?? id,
+          tx_evidence: evidence,
+        },
+      }).catch(() => {});
+    }
+  }
+  return didUnlock;
 }
 
 /** Checks counters and unlocks newly earned achievements. Returns newly unlocked IDs. */
@@ -159,75 +181,90 @@ export async function checkAndUnlock(
     phaselq_earned?: number;
   },
 ): Promise<AchievementId[]> {
-  const store = await readStore();
-  const entry = ensureEntry(store, wallet);
-  const unlocked = new Set(entry.unlocked.map((a) => a.id));
-  const newUnlocks: AchievementId[] = [];
+  // The whole counter update and every unlock it triggers happen in ONE locked
+  // mutation. Previously this read the store, let tryUnlock call
+  // unlockAchievement (its own read-modify-write), then wrote this stale
+  // snapshot back over the top — so checkAndUnlock reported unlocks to its
+  // caller and sent "achievement unlocked" notifications for achievements that
+  // were never persisted. Re-entering the store lock from inside a locked
+  // mutation would deadlock, so unlocks are applied to the in-flight store.
+  const newUnlocks = await updateAchievementStore((store) => {
+    const entry = ensureEntry(store, wallet);
+    const unlocked = new Set(entry.unlocked.map((a) => a.id));
+    const newlyUnlocked: AchievementId[] = [];
 
-  async function tryUnlock(id: AchievementId, evidence?: string) {
-    if (unlocked.has(id)) return;
-    const didUnlock = await unlockAchievement(wallet, id, evidence);
-    if (didUnlock) {
-      newUnlocks.push(id);
+    function tryUnlock(id: AchievementId) {
+      if (unlocked.has(id)) return;
+      entry.unlocked.push({ id, unlocked_at: Date.now() });
       unlocked.add(id);
+      newlyUnlocked.push(id);
     }
+
+    // Mint counts
+    if (hints?.mints !== undefined) {
+      entry.mint_count = (entry.mint_count ?? 0) + hints.mints;
+      if (entry.mint_count >= 1) tryUnlock("first_mint");
+      if (entry.mint_count >= 5) tryUnlock("collector_5");
+      if (entry.mint_count >= 10) tryUnlock("collector_10");
+    }
+
+    // First collection
+    if (hints?.has_collection) tryUnlock("first_collection");
+
+    // World builder
+    if (hints?.has_world) tryUnlock("world_builder");
+
+    // Signal pioneer
+    if (hints?.signal_posted) tryUnlock("signal_pioneer");
+
+    // Upvotes
+    if (hints?.upvote_delta !== undefined) {
+      entry.total_upvotes = (entry.total_upvotes ?? 0) + hints.upvote_delta;
+      if (entry.total_upvotes >= 25) tryUnlock("community_voice");
+    }
+
+    // Followers
+    if (hints?.follower_delta !== undefined) {
+      entry.follower_count = (entry.follower_count ?? 0) + hints.follower_delta;
+      if (entry.follower_count >= 10) tryUnlock("connector_10");
+    }
+
+    // Narrator
+    if (hints?.narrator_delta !== undefined) {
+      entry.narrator_count = (entry.narrator_count ?? 0) + hints.narrator_delta;
+      if (entry.narrator_count >= 10) tryUnlock("narrator_10");
+    }
+
+    // Daily streak
+    if (hints?.daily_claim) {
+      const now = Date.now();
+      const last = entry.last_daily ?? 0;
+      const dayMs = 86_400_000;
+      const withinWindow = last > 0 && now - last < dayMs * 2;
+      entry.daily_streak = withinWindow ? (entry.daily_streak ?? 0) + 1 : 1;
+      entry.last_daily = now;
+      if (entry.daily_streak >= 7) tryUnlock("daily_streak_7");
+      if (entry.daily_streak >= 30) tryUnlock("daily_streak_30");
+    }
+
+    // PHASELQ (placeholder — would need tracking from faucet totals)
+    // For now just check if they've earned any
+    if (hints?.phaselq_earned !== undefined && hints.phaselq_earned >= 100) {
+      tryUnlock("phaselq_100");
+    }
+
+    store[walletKey(wallet)] = entry;
+    return newlyUnlocked;
+  });
+
+  // Notify after the store lock is released, matching unlockAchievement.
+  for (const id of newUnlocks) {
+    void createNotification(wallet, "achievement_unlocked", {
+      achievement_id: id,
+      achievement_name: ACHIEVEMENT_NAMES[id] ?? id,
+    }).catch(() => { /* silent */ });
   }
 
-  // Mint counts
-  if (hints?.mints !== undefined) {
-    entry.mint_count = (entry.mint_count ?? 0) + hints.mints;
-    if (entry.mint_count >= 1) await tryUnlock("first_mint");
-    if (entry.mint_count >= 5) await tryUnlock("collector_5");
-    if (entry.mint_count >= 10) await tryUnlock("collector_10");
-  }
-
-  // First collection
-  if (hints?.has_collection) await tryUnlock("first_collection");
-
-  // World builder
-  if (hints?.has_world) await tryUnlock("world_builder");
-
-  // Signal pioneer
-  if (hints?.signal_posted) await tryUnlock("signal_pioneer");
-
-  // Upvotes
-  if (hints?.upvote_delta !== undefined) {
-    entry.total_upvotes = (entry.total_upvotes ?? 0) + hints.upvote_delta;
-    if (entry.total_upvotes >= 25) await tryUnlock("community_voice");
-  }
-
-  // Followers
-  if (hints?.follower_delta !== undefined) {
-    entry.follower_count = (entry.follower_count ?? 0) + hints.follower_delta;
-    if (entry.follower_count >= 10) await tryUnlock("connector_10");
-  }
-
-  // Narrator
-  if (hints?.narrator_delta !== undefined) {
-    entry.narrator_count = (entry.narrator_count ?? 0) + hints.narrator_delta;
-    if (entry.narrator_count >= 10) await tryUnlock("narrator_10");
-  }
-
-  // Daily streak
-  if (hints?.daily_claim) {
-    const now = Date.now();
-    const last = entry.last_daily ?? 0;
-    const dayMs = 86_400_000;
-    const withinWindow = last > 0 && now - last < dayMs * 2;
-    entry.daily_streak = withinWindow ? (entry.daily_streak ?? 0) + 1 : 1;
-    entry.last_daily = now;
-    if (entry.daily_streak >= 7) await tryUnlock("daily_streak_7");
-    if (entry.daily_streak >= 30) await tryUnlock("daily_streak_30");
-  }
-
-  // PHASELQ (placeholder — would need tracking from faucet totals)
-  // For now just check if they've earned any
-  if (hints?.phaselq_earned !== undefined && hints.phaselq_earned >= 100) {
-    await tryUnlock("phaselq_100");
-  }
-
-  store[walletKey(wallet)] = entry;
-  await writeStore(store);
   return newUnlocks;
 }
 
@@ -255,19 +292,131 @@ export type TimelineEvent = {
   unlocked_at: number;
 };
 
-/** Returns the wallet's achievement unlocks ordered oldest-first, with display names attached. */
+export type TimelinePage = {
+  events: TimelineEvent[];
+  /** Opaque cursor for the next page; absent when this is the last page. */
+  next_cursor?: string;
+  /** Total number of achievements unlocked (all time). */
+  closed_count: number;
+};
+
+export class AchievementVersionConflictError extends Error {
+  constructor(message = "stale achievement store version") {
+    super(message);
+    this.name = "AchievementVersionConflictError";
+  }
+}
+
+/** Stable comparator: oldest first; tie-break by lexicographic achievement id. */
+function compareTimelineEvents(a: Achievement, b: Achievement): number {
+  const dt = a.unlocked_at - b.unlocked_at;
+  if (dt !== 0) return dt;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Returns a paginated, chronologically ordered timeline of achievement unlocks.
+ *
+ * Pagination uses an opaque base64-encoded cursor that encodes
+ * `{unlocked_at, id}` of the last-seen event. This guarantees no duplicates
+ * across pages even when new achievements are unlocked between requests.
+ *
+ * Flag off → returns `{ events: [], closed_count: 0 }` with no next_cursor.
+ */
 export async function getAchievementTimeline(
   wallet: string,
-): Promise<TimelineEvent[]> {
+  opts: { limit?: number; cursor?: string } = {},
+): Promise<TimelinePage> {
+  if (!isTimelineVisualizationEnabled()) {
+    return { events: [], closed_count: 0 };
+  }
+
   const achievements = await getAchievements(wallet);
-  return achievements
-    .slice()
-    .sort((a, b) => a.unlocked_at - b.unlocked_at)
-    .map((a) => ({
-      id: a.id,
-      name: ACHIEVEMENT_NAMES[a.id] ?? a.id,
-      unlocked_at: a.unlocked_at,
-    }));
+  const sorted = achievements.slice().sort(compareTimelineEvents);
+  const closed_count = sorted.length;
+
+  const limit = Math.min(50, Math.max(1, Math.floor(opts.limit ?? 20)));
+
+  // Decode cursor: { unlocked_at: number; id: string }
+  let startAfter: { unlocked_at: number; id: string } | null = null;
+  if (opts.cursor) {
+    try {
+      startAfter = JSON.parse(
+        Buffer.from(opts.cursor, "base64url").toString("utf-8"),
+      ) as { unlocked_at: number; id: string };
+    } catch {
+      startAfter = null;
+    }
+  }
+
+  // Find the index to start from (exclusive of the cursor event).
+  let startIdx = 0;
+  if (startAfter) {
+    const idx = sorted.findIndex(
+      (a) =>
+        a.unlocked_at === startAfter!.unlocked_at && a.id === startAfter!.id,
+    );
+    startIdx = idx === -1 ? 0 : idx + 1;
+  }
+
+  const page = sorted.slice(startIdx, startIdx + limit);
+  const hasMore = startIdx + limit < sorted.length;
+
+  const events: TimelineEvent[] = page.map((a) => ({
+    id: a.id,
+    name: ACHIEVEMENT_NAMES[a.id] ?? a.id,
+    unlocked_at: a.unlocked_at,
+  }));
+
+  let next_cursor: string | undefined;
+  if (hasMore && page.length > 0) {
+    const last = page[page.length - 1]!;
+    next_cursor = Buffer.from(
+      JSON.stringify({ unlocked_at: last.unlocked_at, id: last.id }),
+    ).toString("base64url");
+  }
+
+  return { events, closed_count, next_cursor };
+}
+
+/**
+ * Version-guarded unlock: writes `id` to `wallet`'s achievement list only if
+ * the store's current version matches `expectedVersion`.  Throws
+ * `AchievementVersionConflictError` (HTTP 409) on a mismatch.
+ *
+ * Version is a monotonic counter stored alongside the wallet entry.  Callers
+ * read the version with `getAchievementVersion`, then pass it back here.
+ */
+export async function unlockAchievementVersioned(
+  wallet: string,
+  id: AchievementId,
+  expectedVersion: number,
+  evidence?: string,
+): Promise<{ unlocked: boolean; version: number }> {
+  return updateAchievementStore((store) => {
+    const key = walletKey(wallet);
+    const entry = ensureEntry(store, wallet);
+    const currentVersion: number = (store as any)[`${key}__v`] ?? 0;
+    if (currentVersion !== expectedVersion) {
+      throw new AchievementVersionConflictError(
+        `expected version ${expectedVersion}, current is ${currentVersion}`,
+      );
+    }
+    const alreadyUnlocked = entry.unlocked.some((a) => a.id === id);
+    if (!alreadyUnlocked) {
+      entry.unlocked.push({ id, unlocked_at: Date.now(), tx_evidence: evidence });
+      store[key] = entry;
+    }
+    const nextVersion = currentVersion + 1;
+    (store as any)[`${key}__v`] = nextVersion;
+    return { unlocked: !alreadyUnlocked, version: nextVersion };
+  });
+}
+
+/** Returns the current version for a wallet's achievement entry (0 if never written). */
+export async function getAchievementVersion(wallet: string): Promise<number> {
+  const store = await readStore();
+  return (store as any)[`${walletKey(wallet)}__v`] ?? 0;
 }
 
 // ── Issue #102: Relevance-based Feed Ranking (phase-84) ──────────────────────
@@ -342,3 +491,14 @@ function getAchievementImportance(id: AchievementId): number {
   };
   return weights[id] ?? 0.5;
 }
+
+/** Spike 611: Expose achievement unlock history for retention cohort joins. */
+export async function getAchievementCohortData(): Promise<Record<string, Achievement[]>> {
+  const store = await readStore();
+  const out: Record<string, Achievement[]> = {};
+  for (const [w, data] of Object.entries(store)) {
+    out[w] = data.unlocked ?? [];
+  }
+  return out;
+}
+

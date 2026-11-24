@@ -23,6 +23,13 @@ import { TOKEN_ADDRESS, CONTRACT_ID } from "@/lib/phase-protocol"
 import { auditFaucetRateLimitWiring, isFaucetRateLimitRedisEnabled } from "@/lib/profile-store"
 import { auditQuestExpiryWiring, isQuestExpiryEnabled } from "@/lib/explore-domain"
 import { auditFaucetAnalyticsWiring, isFaucetAnalyticsEnabled } from "@/lib/notification-store"
+import {
+  ALL_FEATURE_FLAGS,
+  auditFeatureFlagOpsWiring,
+  getEnabledFeatureFlags,
+  isFeatureFlagOpsEnabled,
+  listFeatureFlagRules,
+} from "@/lib/feature-flags"
 
 console.log("=".repeat(70))
 console.log("DIAGNÓSTICO DE CONFIGURACIÓN PHASE")
@@ -182,6 +189,19 @@ if (isFaucetAnalyticsEnabled()) {
   console.log("\n📉 Faucet analytics — claim funnel metrics (module #53):")
   const funnelAudit = auditFaucetAnalyticsWiring()
   console.log(`   ${funnelAudit.ok ? "✅" : "❌"} ${funnelAudit.note}`)
+}
+
+// 5g. Feature-flag ops: staged rollout, per-wallet targeting & kill-switch (Spike 607 / phase-174)
+console.log("\n🚩 Feature-flag ops & rollout state (Spike 607 / phase-174):")
+const flagOpsAudit = auditFeatureFlagOpsWiring()
+console.log(`   ${flagOpsAudit.ok ? "✅" : "❌"} ${flagOpsAudit.note}`)
+const enabledFlags = getEnabledFeatureFlags()
+const activeRules = listFeatureFlagRules()
+console.log(
+  `   ℹ️  Flags enabled: ${enabledFlags.length}/${ALL_FEATURE_FLAGS.length} (${enabledFlags.length ? enabledFlags.join(", ") : "none"})`,
+)
+if (isFeatureFlagOpsEnabled() || activeRules.length > 0) {
+  console.log(`   ℹ️  Runtime override/kill-switch rules active: ${activeRules.length}`)
 }
 
 // 6. Resumen

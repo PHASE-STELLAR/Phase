@@ -1,4 +1,4 @@
-import { describe, it, before, after } from "node:test"
+import { describe, it, beforeAll as before, afterAll as after } from "vitest"
 import * as assert from "node:assert/strict"
 import {
   checkWorldConflict,

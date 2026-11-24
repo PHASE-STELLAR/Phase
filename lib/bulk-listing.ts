@@ -23,6 +23,10 @@ export const BulkListingItemSchema = z.object({
   imageUri: z.string().url().optional(),
   collectionId: z.number().int().min(0).optional(),
   metadata: z.record(z.unknown()).optional(),
+  // Spike 673 (phase-editions): optional per-item edition numbering; validated only when flag on.
+  editionNumber: z.number().int().positive().optional(),
+  editionSize: z.number().int().positive().optional(),
+  isArtistProof: z.boolean().optional(),
 })
 
 export type BulkListingItem = z.infer<typeof BulkListingItemSchema>

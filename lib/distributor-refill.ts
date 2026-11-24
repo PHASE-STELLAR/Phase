@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 /**
  * Distributor Auto-Refill Engine
  * 
@@ -16,7 +16,9 @@ import {
   TransactionBuilder,
 } from "@stellar/stellar-sdk"
 import { NETWORK_PASSPHRASE, RPC_URL } from "@/lib/phase-protocol"
+import { evaluateFeatureFlag } from "@/lib/feature-flags"
 import { incSecurityCounter } from "@/lib/security-counters"
+import { isDecimalAmountParsingEnabled, tryParseDecimalAmount } from "@/lib/decimal-amount"
 
 export interface RefillResult {
   ok: boolean
@@ -46,6 +48,21 @@ export async function executeDistributorRefill(
   amountStroops: string,
   tokenContractId: string
 ): Promise<RefillResult> {
+  // Spike 607 (phase-174): enforce instant server-side kill-switch before
+  // reserving funds or touching Soroban RPC so an incident kill halts hourly
+  // distributor refills without waiting for a redeploy.
+  const flagEval = evaluateFeatureFlag("phase-133", {
+    wallet: distributorAddress,
+    runtimeOnly: true,
+  })
+  if (flagEval.reason === "kill_switch" || flagEval.reason === "wallet_denied") {
+    return {
+      ok: false,
+      code: "KILL_SWITCH_ACTIVE",
+      error: `refill halted by feature-flag ops (${flagEval.reason})`,
+    }
+  }
+
   // Issue #231: take the reservation before touching the network. If the
   // distributor cannot cover the refill, this returns without a single RPC
   // call, and a concurrent caller that got here first has already consumed the
@@ -183,6 +200,11 @@ export async function executeClassicDistributorRefill(
   amount: string,
   assetCode: string
 ): Promise<RefillResult> {
+  // phase-265: validate before anything is signed, so a bad amount never reaches Horizon.
+  const exactStroops = isDecimalAmountParsingEnabled() ? tryParseDecimalAmount(amount) : null
+  if (exactStroops && !exactStroops.ok) {
+    return { ok: false, code: "INVALID_AMOUNT", error: `Invalid refill amount: ${exactStroops.error.message}` }
+  }
   try {
     const { Horizon, Asset, Operation, Networks } = await import("@stellar/stellar-sdk")
     const { HORIZON_URL } = await import("@/lib/phase-protocol")
@@ -225,7 +247,9 @@ export async function executeClassicDistributorRefill(
     
     return {
       ok: true,
-      amountStroops: (parseFloat(amount) * 10_000_000).toString(),
+      amountStroops: exactStroops?.ok
+        ? exactStroops.units.toString()
+        : (parseFloat(amount) * 10_000_000).toString(),
       hash: result.hash,
     }
   } catch (e) {

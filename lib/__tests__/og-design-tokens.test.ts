@@ -2,7 +2,7 @@
  * phase-60: design-token theming system — unit tests
  * Run: node --test --import tsx lib/__tests__/og-design-tokens.test.ts
  */
-import { describe, it } from "node:test"
+import { describe, it } from "vitest"
 import * as assert from "node:assert/strict"
 import {
   HexColorSchema,

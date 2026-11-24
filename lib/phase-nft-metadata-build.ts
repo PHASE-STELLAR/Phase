@@ -357,6 +357,9 @@ export async function buildPhaseTokenMetadataJson(
         ? [{ trait_type: "collection_id", value: colId as number, display_type: "number" as const }]
         : []),
       { trait_type: "token_id", value: tokenId, display_type: "number" as const },
+      // Spike 673 (phase-editions): edition attributes are additive — existing token_id
+      // names/URIs stay stable; edition resolvers append Edition X/Y + Artist Proof traits.
+      ...((await resolveEditionAttributes(tokenId, colId)) ?? []),
       ...(phaseLevel && phaseLevel.length > 0 ? [{ trait_type: "phase_level", value: phaseLevel }] : []),
       { trait_type: "network", value: "stellar-testnet" },
       { trait_type: "standard", value: "SEP-50-draft" },
@@ -535,4 +538,33 @@ export function auditGasEstimateWiring(): { ok: boolean; note: string } {
     return { ok: false, note: `[phase-78] audit error: ${e instanceof Error ? e.message : String(e)}` }
   }
 }
-
+// ── Spike 673 (flag-gated): edition attribute resolver ──
+// Off by default → returns null (no attributes, legacy shape). When phase-editions is on,
+// callers provide edition data via editionAttributeOverride (tests/indexers); otherwise null
+// keeps token_id-stable names while new mints get Edition X/Y traits off-chain.
+export type EditionAttributesInput = { edition_number?: number; edition_size?: number; is_artist_proof?: boolean };
+let editionAttributeOverride: ((tokenId: number, collectionId: number | null) => Promise<EditionAttributesInput | null>) | null = null;
+export function setEditionAttributeResolver(fn: typeof editionAttributeOverride): void {
+  editionAttributeOverride = fn;
+}
+async function resolveEditionAttributes(tokenId: number, colId: number | null) {
+  try {
+    const { isFeatureEnabled } = await import("@/lib/feature-flags");
+    if (!isFeatureEnabled("phase-editions")) return null;
+    if (!editionAttributeOverride) return null;
+    const e = await editionAttributeOverride(tokenId, colId);
+    if (!e) return null;
+    const attrs: Array<{ trait_type: string; value: string | number; display_type?: "number" }> = [];
+    if (e.edition_number != null && e.edition_size != null) {
+      attrs.push({ trait_type: "edition", value: `${e.edition_number}/${e.edition_size}` });
+      attrs.push({ trait_type: "edition_number", value: e.edition_number, display_type: "number" as const });
+      attrs.push({ trait_type: "edition_total", value: e.edition_size, display_type: "number" as const });
+    } else if (e.edition_number != null) {
+      attrs.push({ trait_type: "edition_number", value: e.edition_number, display_type: "number" as const });
+    }
+    if (e.is_artist_proof) attrs.push({ trait_type: "artist_proof", value: "true" });
+    return attrs;
+  } catch {
+    return null;
+  }
+}

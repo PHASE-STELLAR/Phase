@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { useWallet } from "@/components/wallet-provider"
 import { useLang } from "@/components/lang-context"
+import { fillCopy, phaseCopy, pickCopy } from "@/lib/phase-copy"
 
 type NotificationType =
   | "mint_in_collection"
@@ -19,6 +20,12 @@ type NotificationType =
   | "offer_rejected"
   | "achievement_unlocked"
   | "content_takedown"
+  | "exhibition_published"
+  | "moderation_hold"
+  | "moderation_appeal_resolved"
+  | "quest_arc_generated"
+  | "quest_arc_completed"
+  | "winback_reactivation"
 
 type Notification = {
   id: string
@@ -48,6 +55,8 @@ const PREFERENCE_TYPES: NotificationType[] = [
   "new_offer",
   "achievement_unlocked",
   "content_takedown",
+  "exhibition_published",
+  "quest_arc_generated",
 ]
 
 const POLL_INTERVAL_MS = 30_000
@@ -165,6 +174,30 @@ function notifText(n: Notification, lang: string): { text: string; url: string }
           : `Your signal "${String(d.signal_title ?? "")}" was taken down: ${String(d.reason ?? "")}`,
         url: `/signals`,
       }
+    case "exhibition_published":
+      return {
+        text: fillCopy(pickCopy(es ? "es" : "en").curator.notifyPublished, {
+          token: String(d.token_id ?? ""),
+          title: String(d.title ?? ""),
+        }),
+        url: `/exhibitions/${encodeURIComponent(String(d.exhibition_id ?? ""))}`,
+      }
+    case "moderation_hold":
+      return { text: pickCopy(es ? "es" : "en").moderationQueue.notifyHeld, url: `/signals` }
+    case "moderation_appeal_resolved": {
+      const mq = pickCopy(es ? "es" : "en").moderationQueue
+      return { text: d.restored ? mq.appealResolvedRestored : mq.appealResolvedUpheld, url: `/signals` }
+    }
+    case "quest_arc_generated":
+      return {
+        text: fillCopy(pickCopy(es ? "es" : "en").questArcs.notifyGenerated, { title: String(d.title ?? "") }),
+        url: `/faucet`,
+      }
+    case "quest_arc_completed":
+      return {
+        text: fillCopy(pickCopy(es ? "es" : "en").questArcs.notifyCompleted, { title: String(d.title ?? "") }),
+        url: `/faucet`,
+      }
     default:
       return { text: es ? "Nueva actividad" : "New activity", url: "/" }
   }
@@ -183,6 +216,12 @@ const NOTIF_LABELS: Record<NotificationType, { en: string; es: string }> = {
   offer_rejected: { en: "Rejected offers", es: "Ofertas rechazadas" },
   achievement_unlocked: { en: "Achievements", es: "Logros" },
   content_takedown: { en: "Moderation", es: "Moderacion" },
+  exhibition_published: { en: phaseCopy.en.curator.notifyLabel, es: phaseCopy.es.curator.notifyLabel },
+  moderation_hold: { en: phaseCopy.en.moderationQueue.notifyLabel, es: phaseCopy.es.moderationQueue.notifyLabel },
+  moderation_appeal_resolved: { en: phaseCopy.en.moderationQueue.notifyLabel, es: phaseCopy.es.moderationQueue.notifyLabel },
+  quest_arc_generated: { en: phaseCopy.en.questArcs.notifyLabel, es: phaseCopy.es.questArcs.notifyLabel },
+  quest_arc_completed: { en: phaseCopy.en.questArcs.notifyLabel, es: phaseCopy.es.questArcs.notifyLabel },
+  winback_reactivation: { en: "Welcome back", es: "Bienvenida de vuelta" },
 }
 
 const NOTIF_ICONS: Record<NotificationType, string> = {
@@ -198,6 +237,12 @@ const NOTIF_ICONS: Record<NotificationType, string> = {
   offer_rejected: "✕",
   achievement_unlocked: "★",
   content_takedown: "⚠",
+  exhibition_published: "▣",
+  moderation_hold: "⚠",
+  moderation_appeal_resolved: "⚖",
+  quest_arc_generated: "➶",
+  quest_arc_completed: "✓",
+  winback_reactivation: "↺",
 }
 
 function timeAgo(ts: number): string {

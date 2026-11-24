@@ -1,6 +1,10 @@
+import { isPhase233Enabled, persistWashDecision } from "@/lib/wash-screening"
+import { isFeatureEnabled } from "@/lib/feature-flags"
+import { verifySignalSignature } from "@/lib/viewer-signature"
 import { NextRequest, NextResponse } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
 import {
+  decideOfferAtomic,
   getListing,
   getOffers,
   updateOfferStatus,
@@ -8,14 +12,18 @@ import {
   isPhase140Enabled,
   computeRoyaltySplit,
   recordRoyaltyPayout,
+  computeCollabSplits,
+  isPhaseCollabSplitsEnabled,
+  recordCollabSplits,
 } from "@/lib/market-store"
 import { createNotification } from "@/lib/notification-store"
 import { dispatchWebhookEvent } from "@/lib/webhook-delivery"
+import { isPricingOracleEnabled, markSuggestionSold } from "@/lib/pricing-oracle"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-type ActionBody = { action?: unknown; wallet?: unknown }
+type ActionBody = { action?: unknown; wallet?: unknown; timestamp?: unknown; signature?: unknown }
 
 export async function POST(
   request: NextRequest,
@@ -36,9 +44,31 @@ export async function POST(
     return NextResponse.json({ error: "action must be accept or reject" }, { status: 400 })
   }
 
+  const atomic = isFeatureEnabled("phase-175") || isFeatureEnabled("phase-177")
+  if (atomic) {
+    const timestamp = body.timestamp
+    if (typeof timestamp !== "number" || !Number.isSafeInteger(timestamp) || Math.abs(Date.now() - timestamp) > 300_000 || typeof body.signature !== "string" ||
+      !(await verifySignalSignature(wallet, { title: `market:${id}:${offer_id}:${action}`, body: wallet, timestamp }, body.signature))) {
+      return NextResponse.json({ code: "INVALID_SIGNATURE" }, { status: 401 })
+    }
+  }
   const listing = await getListing(id)
   if (!listing) return NextResponse.json({ error: "Listing not found" }, { status: 404 })
   if (listing.seller_wallet !== wallet) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+
+  if (offer.buyer_wallet.toLowerCase() === listing.seller_wallet.toLowerCase()) {
+    if (isPhase233Enabled()) {
+      persistWashDecision({
+        entityType: "offer",
+        entityId: offer_id,
+        actorWallet: offer.buyer_wallet,
+        targetWallet: listing.seller_wallet,
+        decision: "reject",
+        reason: "self_trade",
+      })
+    }
+    return NextResponse.json({ error: "Self-dealing cannot be accepted", code: "SELF_DEAL_REJECTED" }, { status: 400 })
+  }
 
   const offers = await getOffers(id)
   const offer = offers.find((o) => o.id === offer_id)
@@ -46,12 +76,32 @@ export async function POST(
   if (offer.status !== "pending") return NextResponse.json({ error: "Offer not pending" }, { status: 409 })
 
   const newStatus = action === "accept" ? "accepted" : "rejected"
-  const updated = await updateOfferStatus(offer_id, newStatus)
+  let updated
+  try { updated = atomic ? decideOfferAtomic(id, offer_id, wallet, action) : await updateOfferStatus(offer_id, newStatus) }
+  catch (error) {
+    return NextResponse.json({ code: "OFFER_CONFLICT", current_status: error instanceof Error && "current_status" in error ? error.current_status : "unavailable" }, { status: 409 })
+  }
 
   // If accepted, mark listing as sold
   let royalty: Awaited<ReturnType<typeof recordRoyaltyPayout>> | null = null
+  let splits: Awaited<ReturnType<typeof recordCollabSplits>> | null = null
   if (action === "accept") {
-    await soldListing(id)
+    if (!atomic) await soldListing(id)
+
+    // phase-143: time-to-sale for the suggestion this listing was priced from.
+    if (isPricingOracleEnabled()) {
+      try {
+        markSuggestionSold(id)
+      } catch (error) {
+        console.warn("[phase-143] time-to-sale not stamped:", error)
+      }
+    }
+
+    // Spike 674 (flag-gated): N-way fan-out at accept (dust → first payee, idempotent per offer).
+    if (isPhaseCollabSplitsEnabled() && listing.split_payees && listing.split_payees.length > 0) {
+      const computed = computeCollabSplits(offer.amount_phaselq, listing.split_payees)
+      splits = await recordCollabSplits(id, offer.id, computed)
+    }
 
     // phase-140: split proceeds with the original creator on a secondary sale.
     if (isPhase140Enabled()) {
@@ -69,7 +119,7 @@ export async function POST(
 
     void createNotification(offer.buyer_wallet, "offer_accepted", { listing_id: id, token_id: listing.token_id })
       .catch(() => { /* silent */ })
-    // phase-215: one event per accepted offer transition.
+    // phase-215: one webhook event per accepted offer transition.
     void dispatchWebhookEvent(
       "market.offer_accepted",
       {

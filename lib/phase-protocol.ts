@@ -26,6 +26,7 @@ import {
 } from "@/lib/phase-contract-defaults"
 import { getGatewayHealthSnapshot as _getGatewayHealthSnapshot, recordGatewayLatency as _recordGatewayLatency } from "@/lib/gateway-health"
 import { withHorizonBulkhead } from "@/lib/horizon-bulkhead"
+import { formatDecimalAmount, isDecimalAmountParsingEnabled, tryParseDecimalAmount } from "@/lib/decimal-amount"
 
 // ── phase-121: gateway health dashboard (isolated, flag-gated) ──
 // Operators cannot see which gateway is slow. Scoring lives in @/lib/gateway-health;
@@ -34,11 +35,13 @@ export { recordGatewayLatency, getGatewayHealthSnapshot, getGatewayRanking, rese
 export type { GatewayHealthEntry, GatewayHealthSnapshot } from "@/lib/gateway-health"
 
 function isPhase121Enabled(): boolean {
+  // This local check keeps the dashboard gate usable before feature-flag initialization.
   const v = (typeof process !== "undefined" ? (process.env.NEXT_PUBLIC_FEATURE_PHASE_121 ?? process.env.FEATURE_PHASE_121 ?? "") : "")?.trim().toLowerCase()
   return v === "1" || v === "true" || v === "yes" || v === "on"
 }
 // Light wrapper for dashboard consumers (adds flag context, structured error)
 export function getGatewayHealthDashboardSafe(): { enabled: boolean; snapshot: import("@/lib/gateway-health").GatewayHealthSnapshot | null; error: string | null } {
+  // UI callers receive structured state instead of handling a thrown dashboard error.
   if (!isPhase121Enabled()) return { enabled: false, snapshot: null, error: "phase-121 flag disabled (set NEXT_PUBLIC_FEATURE_PHASE_121=1)" }
   try {
     return { enabled: true, snapshot: _getGatewayHealthSnapshot(), error: null }
@@ -68,6 +71,7 @@ function sorobanContractIdFromEnv(
   fallback: string,
   settingName: string,
 ): string {
+  // Prefer the first configured key, then validate the resolved value uniformly.
   const raw = envKeys.map((k) => k?.trim()).find((v) => v && v.length > 0)
   const id = raw ?? fallback
   if (StrKey.isValidContract(id)) return id
@@ -83,6 +87,7 @@ function sorobanContractIdFromEnv(
 }
 
 export const CONTRACT_ID = (() => {
+  // Client bundles must use public environment variables to avoid hydration drift.
   const e = (typeof process !== "undefined" ? process.env : {}) as NodeJS.ProcessEnv
   // Solo NEXT_PUBLIC_*: PHASE_PROTOCOL_ID (sin prefijo) no existe en el bundle del cliente → hydration mismatch.
   return sorobanContractIdFromEnv(
@@ -97,6 +102,7 @@ export const CONTRACT_ID = (() => {
  * No uses esto en componentes cliente.
  */
 export function phaseProtocolContractIdForServer(): string {
+  // Server routes may additionally read the non-public protocol ID override.
   const e = process.env
   return sorobanContractIdFromEnv(
     [e.NEXT_PUBLIC_PHASE_PROTOCOL_ID, e.PHASE_PROTOCOL_ID],
@@ -107,6 +113,7 @@ export function phaseProtocolContractIdForServer(): string {
 
 /** Contrato PHASE (NFT de utilidad) en Stellar Expert — testnet */
 export function stellarExpertTestnetContractUrl(contractId: string = CONTRACT_ID) {
+  // Centralizing explorer links keeps network selection consistent across the UI.
   return `https://stellar.expert/explorer/testnet/contract/${contractId}`
 }
 
@@ -179,6 +186,7 @@ export const RPC_URL = "https://soroban-testnet.stellar.org"
  * o deja que se infiera desde `<script src="…/_next/…">` (reverse proxy sin `basePath` en next.config).
  */
 function inferClientBasePathFromNextScripts(): string {
+  // Script URLs reveal a reverse-proxy subpath when Next.js has no explicit basePath.
   if (typeof document === "undefined") return ""
   const scripts = document.getElementsByTagName("script")
   for (let i = 0; i < scripts.length; i++) {
@@ -197,6 +205,7 @@ function inferClientBasePathFromNextScripts(): string {
 }
 
 function effectiveSorobanRpcUrl(): string {
+  // Browser requests prefer the same-origin proxy because public Soroban RPC lacks CORS.
   if (typeof window !== "undefined") {
     const pub = process.env.NEXT_PUBLIC_SOROBAN_RPC_PROXY_URL?.trim()
     if (pub && /^https?:\/\//i.test(pub)) return pub
@@ -322,6 +331,7 @@ export const READONLY_SIM_SOURCE_G =
 
 /** El SDK rechaza URLs `http://` (p. ej. `http://localhost:3000/api/soroban-rpc`) sin este flag. */
 function newRpcServerForUrl(url: string): rpc.Server {
+  // The SDK requires an explicit opt-in for local HTTP endpoints.
   const allowHttp = url.toLowerCase().startsWith("http://")
   return new rpc.Server(url, allowHttp ? { allowHttp: true } : undefined)
 }
@@ -329,6 +339,7 @@ function newRpcServerForUrl(url: string): rpc.Server {
 let _rpcServer: rpc.Server | null = null
 let _cachedRpcUrl: string | null = null
 function getRpc(): rpc.Server {
+  // Reuse the RPC client until configuration changes, avoiding needless connections.
   const url = effectiveSorobanRpcUrl()
   if (_rpcServer && _cachedRpcUrl === url) return _rpcServer
   _cachedRpcUrl = url
@@ -698,12 +709,20 @@ export type CollectionInfo = {
 
 /** Convierte cantidad LIQ humana (ej. 1 o 1.5) a stroops (7 decimales). */
 export function liqToStroops(liq: string): string {
+  if (isDecimalAmountParsingEnabled()) {
+    const parsed = tryParseDecimalAmount(liq, { acceptComma: true, rounding: "half-up" })
+    return parsed.ok ? parsed.units.toString() : "0"
+  }
   const n = parseFloat(liq.replace(",", "."))
   if (Number.isNaN(n) || n <= 0) return "0"
   return Math.round(n * 10_000_000).toString()
 }
 
 export function stroopsToLiqDisplay(stroops: string): string {
+  if (isDecimalAmountParsingEnabled()) {
+    const parsed = tryParseDecimalAmount(stroops, { decimals: 0, allowZero: true, allowNegative: true, max: 2n ** 127n })
+    return parsed.ok ? formatDecimalAmount(parsed.units, { fractionDigits: 2 }) : "0.00"
+  }
   const v = parseInt(stroops, 10)
   if (Number.isNaN(v)) return "0.00"
   return (v / 10_000_000).toFixed(2)
@@ -2496,3 +2515,72 @@ export function isStellarDesyncError(message: string) {
     m.includes("method not found")
   )
 }
+
+
+// ── Spikes 672-675 (flag-gated pure helpers; no chain change when flags off) ──
+// Rollback: unset phase-editions / phase-collab-splits / phase-timed-drops /
+// phase-dutch-auction → callers fall back to legacy fixed-price / single-creator paths.
+
+export type EditionInfo = { edition_number?: number; edition_size?: number; is_artist_proof?: boolean; supply_mode?: 'limited' | 'open' };
+export type DutchQuoteInput = { start_price: number; floor_price: number; listed_at: number; end_at: number };
+
+/** Spike 673: 'Edition X/Y' or 'Artist Proof'. Null when uneditioned (legacy). */
+export function editionLabel(e: EditionInfo): string | null {
+  if (e.is_artist_proof) return 'Artist Proof';
+  if (e.edition_number != null && e.edition_size != null) return `Edition ${e.edition_number}/${e.edition_size}`;
+  if (e.edition_number != null) return `Edition ${e.edition_number}`;
+  return null;
+}
+
+/** Spike 675: off-chain mirror of on-chain dutch_quote (linear decay, floor-bound). */
+export function dutchQuoteAt(q: DutchQuoteInput, now = Date.now()): number {
+  if (now <= q.listed_at) return q.start_price;
+  if (now >= q.end_at || q.end_at <= q.listed_at) return q.floor_price;
+  const t = (now - q.listed_at) / (q.end_at - q.listed_at);
+  return Math.max(q.floor_price, q.start_price - (q.start_price - q.floor_price) * t);
+}
+
+/** Spike 675: slippage guard — quote older than maxAgeMs is stale (reject, do not settle). */
+export function isDutchQuoteStale(quotedAt: number, now = Date.now(), maxAgeMs = 60_000): boolean {
+  return now - quotedAt > maxAgeMs;
+}
+
+/** Spike 672: drop-window gate. Null bounds = always live (legacy collections). */
+export function isDropLive(drop_start_at: number | null | undefined, drop_end_at: number | null | undefined, now = Date.now()): boolean {
+  if (drop_start_at != null && now < drop_start_at) return false;
+  if (drop_end_at != null && now > drop_end_at) return false;
+  return true;
+}
+
+/** Spike 674: validate N-way payees (sum bps <= 10000, max 20, G-addresses). */
+export function validateSplitPayees(payees: Array<{ wallet: string; bps: number }>): { valid: boolean; error?: string } {
+  if (payees.length === 0) return { valid: false, error: 'at least one payee required' };
+  if (payees.length > 20) return { valid: false, error: 'too many payees (max 20)' };
+  let total = 0;
+  for (const p of payees) {
+    if (!/^G[A-Z2-7]{55}$/.test(p.wallet)) return { valid: false, error: 'invalid payee wallet' };
+    if (!Number.isInteger(p.bps) || p.bps <= 0) return { valid: false, error: 'bps must be a positive integer' };
+    total += p.bps;
+  }
+  if (total > 10000) return { valid: false, error: 'split bps exceed 10000' };
+  return { valid: true };
+}
+
+/** Map new on-chain spike errors to normalized UI codes (preserves #13 mapping). */
+export function spikeContractErrorCode(message: string): string | null {
+  if (/Contract\s*,\s*#18\b/.test(message)) return 'EDITION_SUPPLY_EXHAUSTED';
+  if (/Contract\s*,\s*#19\b/.test(message)) return 'DROP_NOT_LIVE';
+  if (/Contract\s*,\s*#20\b/.test(message)) return 'INVALID_SPLIT_PAYEES';
+  if (/Contract\s*,\s*#21\b/.test(message)) return 'DUTCH_QUOTE_STALE';
+  return null;
+}
+
+export {
+  CANONICAL_SOROBAN_ABI_VERSION,
+  CANONICAL_SOROBAN_SDK_MAJOR,
+  CANONICAL_STELLAR_CLI_VERSION,
+  CANONICAL_STELLAR_SDK_MAJOR,
+  CANONICAL_WASM_TARGET,
+  isDependencyCadenceEnabled,
+} from "@/lib/dependency-cadence-shared"
+

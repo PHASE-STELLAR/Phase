@@ -15,7 +15,21 @@ import {
   WALLET_CONNECT_ID,
 } from "@creit.tech/stellar-wallets-kit/modules/wallet-connect"
 import { albedoImplicitTxAllowed, isAlbedoSelectedInKit } from "@/lib/albedo-intent-client"
-import { randomUUID } from "node:crypto"
+import { albedoRetiredSignMessage, isAlbedoRetired } from "@/lib/albedo-sunset"
+import { getWalletConnectRelayUrl } from "@/lib/walletconnect-resilience"
+import {
+  XBULL_ID,
+  isXBullSelected,
+  normalizeXBullSignResult,
+  mapXBullError,
+} from "@/lib/xbull-adapter"
+import { isFeatureEnabled } from "@/lib/feature-flags"
+import {
+  decodeSorobanTransaction,
+  validateLedgerPreflight,
+  mapLedgerHardwareError,
+} from "@/lib/ledger-soroban-decoder"
+
 
 let initialized = false
 
@@ -36,7 +50,7 @@ const WC_PROJECT_ID =
 
 function generatePostMessageNonce(): string {
   if (typeof window === "undefined") return ""
-  const nonce = randomUUID()
+  const nonce = window.crypto.randomUUID()
   try {
     window.localStorage.setItem(LS_POSTMESSAGE_NONCE, nonce)
     window.localStorage.setItem(LS_POSTMESSAGE_ORIGIN, window.location.origin)
@@ -85,15 +99,18 @@ export function initStellarWalletKit() {
     }
   }
 
+  const relayUrl = getWalletConnectRelayUrl()
+
   const walletConnectModule = new WalletConnectModule({
     projectId: WC_PROJECT_ID,
+    relayUrl,
     metadata: {
       name: "PHASE Protocol",
       description: "AI artifact minting gated by on-chain Stellar payment.",
       url: typeof window !== "undefined" ? window.location.origin : "https://phase.app",
       icons: ["https://phase.app/icon.png"],
     },
-    allowedChains: [WalletConnectTargetChain.TESTNET],
+    allowedChains: [WalletConnectTargetChain.TESTNET, WalletConnectTargetChain.PUBLIC],
   })
 
   const ledgerModule = new LedgerModule()
@@ -116,6 +133,8 @@ export {
   FREIGHTER_ID,
   LEDGER_ID,
   WALLET_CONNECT_ID,
+  XBULL_ID,
+  isXBullSelected,
   KitEventType,
   Networks,
   parseError,
@@ -171,6 +190,32 @@ export async function signTransaction(
     if (opts.networkPassphrase === MAINNET_PASSPHRASE) {
       console.warn("[PHASE] Ledger: signing a MAINNET transaction — ensure your Ledger Stellar app is in mainnet mode.")
     }
+
+    // ── Ledger clear-signing & preflight gate #13 (phase-169) ─────────────────
+    if (isFeatureEnabled("phase-169")) {
+      const decoded = decodeSorobanTransaction(xdr, opts.networkPassphrase)
+      if (decoded) {
+        const preflight = validateLedgerPreflight(decoded, opts.address)
+        if (!preflight.valid) {
+          return {
+            error: {
+              message: `Ledger Preflight Blocked: ${preflight.errors.join("; ")}`,
+            },
+          }
+        }
+      }
+    }
+  }
+
+  // ── Albedo sunset guard (spike 626) ───────────────────────────────────────
+  // Retired: fail closed with migration copy instead of demanding the popup
+  // permission that the sunset removed.
+  if (typeof window !== "undefined" && opts.address && isAlbedoSelectedInKit() && isAlbedoRetired()) {
+    return {
+      error: {
+        message: albedoRetiredSignMessage(),
+      },
+    }
   }
 
   // ── Albedo implicit-tx guard ───────────────────────────────────────────────
@@ -194,10 +239,30 @@ export async function signTransaction(
     }
   }
 
+  // ── xBull signing and error normalization ─────────────────────────────────
+  if (typeof window !== "undefined" && isXBullSelected()) {
+    try {
+      const rawRes = await StellarWalletsKit.signTransaction(xdr, opts)
+      const normalized = normalizeXBullSignResult(rawRes)
+      if (normalized.error) return { error: { message: normalized.error } }
+      return { signedTxXdr: normalized.signedTxXdr, signedTransaction: normalized.signedTransaction }
+    } catch (err: unknown) {
+      const mapped = mapXBullError(err)
+      return { error: { message: mapped.message } }
+    }
+  }
+
   try {
     const { signedTxXdr } = await StellarWalletsKit.signTransaction(xdr, opts)
     return { signedTxXdr, signedTransaction: signedTxXdr }
   } catch (e: unknown) {
+    if (isHardwareWalletSelected()) {
+      const hw = mapLedgerHardwareError(e)
+      if (hw.code !== "LEDGER_SIGN_ERROR") {
+        return { error: { message: hw.message } }
+      }
+    }
+
     const err = parseError(e)
     const raw = err.message ?? ""
     let message = raw
@@ -215,3 +280,4 @@ export async function signTransaction(
     return { error: { message } }
   }
 }
+

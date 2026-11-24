@@ -3,7 +3,13 @@ import { Keypair, StrKey } from "@stellar/stellar-sdk"
 import { fetchDistributorBalance, distributorNeedsTopup } from "@/lib/distributor-topup"
 import { sendWebhookAlert, WebhookAlertType } from "@/lib/webhook-alerts"
 import { executeDistributorRefill } from "@/lib/distributor-refill"
+import { isRestoreInProgress } from "@/lib/backup-snapshot"
+import { isCronBlockedInPreview, previewTrustsVercelCronHeader } from "@/lib/preview-isolation"
+import { incSecurityCounter } from "@/lib/security-counters"
 import { getDistributorHealthStatus, recordHealthCheck } from "@/lib/distributor-health-store"
+import { evaluateFeatureFlag, refreshFeatureFlagOpsCache } from "@/lib/feature-flags"
+import { readJsonFile } from "@/lib/json-store"
+import { serverDataJsonPath } from "@/lib/server-data-paths"
 
 /**
  * Automated Faucet Distributor Health Monitor
@@ -44,7 +50,7 @@ function validateCronAuth(req: NextRequest): boolean {
   
   // Vercel Cron sends this header
   const vercelCronHeader = req.headers.get("x-vercel-cron")
-  if (vercelCronHeader) {
+  if (vercelCronHeader && previewTrustsVercelCronHeader()) {
     return true
   }
   
@@ -81,6 +87,20 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       { error: "Unauthorized - valid cron secret required" },
       { status: 401 }
+    )
+  }
+
+  // phase-173: previews do not run scheduled refills against the shared issuer.
+  if (isCronBlockedInPreview()) {
+    incSecurityCounter("preview_cron_blocked")
+    return NextResponse.json({ ok: true, skipped: "preview_cron_disabled" })
+  }
+
+  // phase-171: a refill mid-restore would act on half-restored distributor state.
+  if (await isRestoreInProgress()) {
+    return NextResponse.json(
+      { error: "Restore in progress" },
+      { status: 503, headers: { "Retry-After": "60" } },
     )
   }
 
@@ -196,8 +216,22 @@ export async function GET(req: NextRequest) {
       })
     }
 
-    // Attempt auto-refill for PHASELQ
-    if (distLowPhaseLiq && distributorNeedsTopup(distBalance, DISTRIBUTOR_PHASELQ_MIN_STROOPS)) {
+    // Attempt auto-refill for PHASELQ (unless halted by phase-174 kill-switch on phase-133)
+    await refreshFeatureFlagOpsCache(() =>
+      readJsonFile(serverDataJsonPath("featureFlagOps"), {}),
+    )
+    const refillFlagEval = evaluateFeatureFlag("phase-133", {
+      wallet: distributorAddress,
+      runtimeOnly: true,
+    })
+    if (refillFlagEval.reason === "kill_switch" || refillFlagEval.reason === "wallet_denied") {
+      results.refillAttempt = {
+        success: false,
+        skippedByKillSwitch: true,
+        reason: refillFlagEval.reason,
+      }
+      results.alerts.push(`🛑 Auto-refill skipped: feature-flag kill-switch active (${refillFlagEval.reason})`)
+    } else if (distLowPhaseLiq && distributorNeedsTopup(distBalance, DISTRIBUTOR_PHASELQ_MIN_STROOPS)) {
       try {
         const refillResult = await executeDistributorRefill(
           issuerKp,

@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useToastQueue } from "@/hooks/use-toast-queue"
+import { IpfsDisplayImg } from "@/components/ipfs-display-img"
 
 type Attribute = {
   trait_type: string
@@ -136,11 +137,14 @@ export function CrtCollectionPreview({
             style={CARD_GLOW}
           >
             {image ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={image}
+              <IpfsDisplayImg
+                uri={image}
                 alt={name}
                 className="w-full h-full object-cover"
+                priority
+                width={720}
+                height={720}
+                sizes="(max-width: 768px) 90vw, 720px"
               />
             ) : (
               <div className="w-full h-full flex items-center justify-center bg-purple-950/10">

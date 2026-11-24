@@ -1,5 +1,6 @@
 import os from "node:os"
 import path from "node:path"
+import { previewDataSubdir } from "@/lib/preview-isolation"
 
 /** Local filenames only — Next file tracing stays predictable. */
 const FILES = {
@@ -38,14 +39,36 @@ const FILES = {
   x402DeadLetter: "x402-dead-letter.json",
   generationJobs: "generation-jobs.json",
   generationDlq: "generation-dlq.json",
-  ageDeclarations: "age-declarations.json",
-  rumEvents: "rum-events.json",
+  winbackExperiments: "winback-experiments.json",
   webhookSubscriptions: "webhook-subscriptions.json",
-  subscribers: "webhook-subscribers.json",
-  webhookDeliveries: "webhook-deliveries.json",
+  authSessions: "auth-sessions.json",
+  ageDeclarations: "age-declarations.json",
   licenseAttestations: "license-attestations.json",
   licenseAudit: "license-audit.json",
+  rumEvents: "rum-events.json",
+  webhookDeliveries: "webhook-deliveries.json",
+  termsConsents: "terms-consents.json",
+  legalDocuments: "legal-documents.json",
+  legalHolds: "legal-holds.json",
+  qrAudit: "qr-audit.json",
+  walletSessions: "wallet-sessions.json",
+  ledgerAudit: "ledger-audit.json",
+  experimentAssignments: "experiment-assignments.json",
+  searchQueryLog: "search-query-log.json",
+  costBudgets: "cost-budgets.json",
+  forgeBilling: "forge-billing.json",
+  leaderboardEntries: "leaderboard-entries.json",
+  gdprErasureLog: "gdpr-erasure-log.json",
+  anomalyBaselines: "anomaly-baselines.json",
+  featureFlagOps: "feature-flag-ops.json",
+  referralQuests: "referral-quests.json",
+  liquidityPoolIntents: "liquidity-pool-intents.json",
+  artifactMetadataDrafts: "artifact-metadata-drafts.json",
+  bountyClaimLedger: "bounty-claim-ledger.json",
+  pushEventDedupe: "push-event-dedupe.json",
+  fractionalListings: "fractional-listings.json",
 } as const
+
 
 export type ServerDataFile = keyof typeof FILES
 
@@ -54,8 +77,9 @@ export type ServerDataFile = keyof typeof FILES
  * - Local: `<cwd>/.data`
  * - Vercel: `<os.tmpdir()>/phase-server-data` (project dir is read-only)
  * - Override: `PHASE_SERVER_DATA_DIR` (e.g. mounted volume)
+ * - Preview (phase-173): `serverDataRoot()` appends `previews/<id>` to the above
  */
-function serverDataRoot(): string {
+function baseDataRoot(): string {
   const fromEnv = process.env.PHASE_SERVER_DATA_DIR?.trim()
   if (fromEnv) return fromEnv
   if (process.env.VERCEL) {
@@ -64,6 +88,21 @@ function serverDataRoot(): string {
   return path.join(process.cwd(), ".data")
 }
 
+export function serverDataRoot(): string {
+  const base = baseDataRoot()
+  const preview = previewDataSubdir()
+  return preview ? path.join(base, preview) : base
+}
+
 export function serverDataJsonPath(key: ServerDataFile): string {
   return path.join(serverDataRoot(), FILES[key])
+}
+
+/** Every sidecar key, so backup tooling never drifts from the FILES table. */
+export function serverDataFileKeys(): ServerDataFile[] {
+  return Object.keys(FILES) as ServerDataFile[]
+}
+
+export function serverDataFileName(key: ServerDataFile): string {
+  return FILES[key]
 }

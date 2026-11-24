@@ -32,17 +32,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 import { z } from "zod"
+import { isFeatureEnabled } from "@/lib/feature-flags"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
 
-export function isFaucetDenyListEnabled(): boolean {
-  const v = (
-    process.env.NEXT_PUBLIC_FEATURE_PHASE_156 ??
-    process.env.FEATURE_PHASE_156 ??
-    ""
-  )
-    .trim()
-    .toLowerCase()
-  return v === "1" || v === "true" || v === "yes" || v === "on"
+export function isFaucetDenyListEnabled(wallet?: string): boolean {
+  return isFeatureEnabled("phase-156", wallet ? { wallet, runtimeOnly: true } : { runtimeOnly: true })
 }
 
 export function flag156RollbackNote(): string {
@@ -237,7 +231,7 @@ export async function liftDenyListEntry(entryId: string, liftedBy: string): Prom
 }
 
 export async function isWalletDenied(wallet: string): Promise<boolean> {
-  if (!isFaucetDenyListEnabled()) return false
+  if (!isFaucetDenyListEnabled(wallet)) return false
   if (!G_ADDRESS_RE.test(wallet.trim())) return false
   const store = await readStore()
   return Object.values(store).some(

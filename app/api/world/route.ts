@@ -12,6 +12,14 @@ import {
 } from "@/lib/narrative-world-store"
 import { checkAndUnlock } from "@/lib/achievement-store"
 import { checkWorldConflict, normalizeVectorClock, type VectorClock } from "@/lib/world-conflict"
+import { isAge164Enabled, isAgeGate, assertAgeGate, AgeGateError, type AgeGate } from "@/lib/age-gate"
+import {
+  isLicense165Enabled,
+  recordLicenseAttestation,
+  LicenseAttestationError,
+  type RightsBasis,
+} from "@/lib/license-attestation"
+import { resolveSessionWallet } from "@/lib/sep10-auth"
 
 export type WorldsListItem = {
   collectionId: number
@@ -85,6 +93,19 @@ type WorldSaveBody = {
   expected_version?: unknown
   /** Client's last-known vector clock (object or `[node, counter]` entries) — phase-105. */
   expected_vector_clock?: unknown
+  /** Campaign age gate for this world — phase-164. Requires a SEP-10 session from the creator. */
+  age_gate?: unknown
+  /** Signed licensing declaration, required on first creation when phase-165 is on. */
+  license_attestation?: unknown
+}
+
+type LicenseAttestationBody = {
+  wallet?: unknown
+  rights_basis?: unknown
+  evidence_cid?: unknown
+  issued_at?: unknown
+  nonce?: unknown
+  signature?: unknown
 }
 
 function isNonEmptyString(v: unknown): v is string {
@@ -157,11 +178,30 @@ export async function POST(request: NextRequest) {
     expectedVectorClock = normalized
   }
 
-  const conflict = checkWorldConflict(
-    await getWorldForCollection(collectionId),
-    expectedVersion,
-    expectedVectorClock,
-  )
+  if (body.age_gate !== undefined && !isAgeGate(body.age_gate)) {
+    return NextResponse.json({ error: "age_gate inválido. Valores permitidos: none, 18+, 21+" }, { status: 400 })
+  }
+  const ageGate: AgeGate = isAgeGate(body.age_gate) ? body.age_gate : "none"
+  if (isAge164Enabled() && ageGate !== "none") {
+    const sessionWallet = await resolveSessionWallet(request)
+    if (!sessionWallet) {
+      return NextResponse.json({ error: "SESSION_REQUIRED" }, { status: 401 })
+    }
+    if (sessionWallet !== creatorWallet) {
+      return NextResponse.json({ error: "creator_wallet must match the session wallet" }, { status: 403 })
+    }
+    try {
+      await assertAgeGate(sessionWallet, ageGate)
+    } catch (err) {
+      if (err instanceof AgeGateError) {
+        return NextResponse.json({ error: err.code, required: ageGate }, { status: 451 })
+      }
+      throw err
+    }
+  }
+
+  const existingWorld = await getWorldForCollection(collectionId)
+  const conflict = checkWorldConflict(existingWorld, expectedVersion, expectedVectorClock)
   if (conflict.conflict) {
     return NextResponse.json(
       {
@@ -174,6 +214,33 @@ export async function POST(request: NextRequest) {
       },
       { status: 409 },
     )
+  }
+
+  if (!existingWorld && isLicense165Enabled()) {
+    const la = body.license_attestation as LicenseAttestationBody | undefined
+    if (!la || typeof la !== "object") {
+      return NextResponse.json({ error: "LICENSE_ATTESTATION_REQUIRED" }, { status: 422 })
+    }
+    if (!creatorWallet || la.wallet !== creatorWallet) {
+      return NextResponse.json({ error: "LICENSE_ATTESTATION_INVALID", detail: "attestation wallet must be the creator" }, { status: 422 })
+    }
+    try {
+      await recordLicenseAttestation({
+        collection_id: collectionId,
+        wallet: creatorWallet,
+        rights_basis: la.rights_basis as RightsBasis,
+        evidence_cid: typeof la.evidence_cid === "string" && la.evidence_cid.trim() ? la.evidence_cid.trim() : null,
+        issued_at: Number(la.issued_at),
+        nonce: typeof la.nonce === "string" ? la.nonce : "",
+        signature: typeof la.signature === "string" ? la.signature : "",
+      })
+    } catch (err) {
+      if (err instanceof LicenseAttestationError) {
+        const status = err.code === "ALREADY_ISSUED" || err.code === "NONCE_REUSED" ? 409 : 422
+        return NextResponse.json({ error: err.code, detail: err.message }, { status })
+      }
+      throw err
+    }
   }
 
   const saved = await saveWorldForCollection(collectionId, {

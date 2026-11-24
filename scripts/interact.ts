@@ -50,6 +50,7 @@ const header = () => {
   console.log(chalk.gray('  CORE:') + ' ' + chalk.green(PHASE_PROTOCOL_ID));
   console.log(chalk.gray('  ASSET:') + ' ' + chalk.green(MOCK_TOKEN_ID));
   console.log(chalk.gray('  WALLET:') + ' ' + chalk.green(ADMIN_ADDRESS));
+  console.log(chalk.gray('  SDK:') + ' ' + chalk.green('stellar-sdk v15 · soroban-sdk 22 (wasm32-unknown-unknown)'));
   console.log();
 };
 

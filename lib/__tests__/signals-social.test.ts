@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { after, before, test } from "node:test"
+import { afterAll as after, beforeAll as before, test } from "vitest"
 import { Keypair } from "@stellar/stellar-sdk"
 import { rankFollowSuggestions } from "@/lib/follow-store"
 import {

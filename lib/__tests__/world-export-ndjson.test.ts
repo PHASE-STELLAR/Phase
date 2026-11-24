@@ -5,7 +5,7 @@
  * line, trailing newline) so the export route can set Content-Type:
  * application/x-ndjson correctly instead of application/json.
  */
-import { describe, it } from "node:test"
+import { describe, it } from "vitest"
 import * as assert from "node:assert/strict"
 import { renderWorldExportNdjson } from "@/lib/narrative-world-store"
 import type { WorldExportSnapshot } from "@/lib/narrative-world-store"

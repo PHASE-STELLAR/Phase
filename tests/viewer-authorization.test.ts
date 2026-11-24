@@ -10,6 +10,7 @@ import {
   buildViewerSignatureMessage,
   consumeJti,
   releaseJti,
+  revokeJti,
   verifyViewerSignature,
 } from "@/lib/viewer-authorization"
 import {
@@ -20,7 +21,8 @@ import {
   snapshotSecurityCounters,
 } from "@/lib/security-counters"
 
-const WALLET = "GBRPYHIL2CI3WHZKYYXY5UYSZES3IQNB54GQMVWHTFXNAXN3C5GKQCVX"
+// Public key of SEED below; a hardcoded unrelated address meant no signature could ever verify.
+const WALLET = "GDTTJ2TMFNRFPXTSGVPEOKVALJGEQ7TLIY6AFHWTA3PS6ANVMNVVRS3E"
 const NET = "Test SDF Network ; September 2015"
 const CONTRACT = "CB3JUB4X5JJ2WDKRTQ5JZ2XHXZQSDY2MCT5JUUJ2QHZ2Z6F2S2VZQ2QZQ2"
 
@@ -29,7 +31,7 @@ const CONTRACT = "CB3JUB4X5JJ2WDKRTQ5JZ2XHXZQSDY2MCT5JUUJ2QHZ2Z6F2S2VZQ2QZQ2"
 async function signBytes(seedHex: string, bytes: Uint8Array): Promise<string> {
   const { Keypair } = await import("@stellar/stellar-sdk")
   const kp = Keypair.fromRawEd25519Seed(Buffer.from(seedHex, "hex"))
-  return Buffer.from(kp.sign(bytes)).toString("base64")
+  return Buffer.from(kp.sign(Buffer.from(bytes))).toString("base64")
 }
 
 const SEED = "a".repeat(64)
@@ -183,6 +185,18 @@ async function testSecurityCounters() {
   assert.equal(getSecurityCounter("gated_cdn_leak_blocked"), 0)
 }
 
+async function testRevocationPropagation() {
+  const { claims, signatureBase64 } = await mintClaims()
+  const before = await verifyViewerSignature({ claims, signatureBase64, contractId: CONTRACT, tokenId: 1 })
+  assert.equal(before.ok, true, "signature must verify before revocation")
+
+  revokeJti(claims.jti)
+
+  const after = await verifyViewerSignature({ claims, signatureBase64: signatureBase64, contractId: CONTRACT, tokenId: 1, consume: false })
+  assert.equal(after.ok, false, "revoked grant must be rejected")
+  assert.equal(after.ok === false && after.code, "revoked")
+}
+
 async function main() {
   await testAcceptsFreshValidSignature(); console.log("✓ accepts a fresh, bound signature")
   await testRejectsExpiredSignature(); console.log("✓ rejects an expired signature")
@@ -195,6 +209,7 @@ async function main() {
   await testJtiConsumeIsAtomicUnderConcurrency(); console.log("✓ jti consume is atomic (1 of 25)")
   await testReleaseJtiAllowsReuse(); console.log("✓ released jti can be consumed again")
   await testSecurityCounters(); console.log("✓ security counters record and reset")
+  await testRevocationPropagation(); console.log("✓ revoked grant is rejected on next use")
   console.log("\nAll gated-preview authorization tests passed.")
 }
 

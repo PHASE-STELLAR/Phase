@@ -47,6 +47,11 @@ function isPhase124Enabled(): boolean {
   return v === "1" || v === "true" || v === "yes" || v === "on"
 }
 
+/** Spike 608 (phase-175): verify @stellar/stellar-sdk v15 StrKey parity in scripts. */
+export function assertScriptsStellarSdkV15Ready(pubKey: string): boolean {
+  return StrKey.isValidEd25519PublicKey(pubKey)
+}
+
 const SetupMetadataV1Schema = z.object({
   version: z.literal(1).optional(),
   name: z.string().min(1).max(256),

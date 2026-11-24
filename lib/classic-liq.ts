@@ -1,3 +1,5 @@
+import { incSecurityCounter } from "@/lib/security-counters"
+import { createHash } from "node:crypto"
 import {
   Account,
   Asset,
@@ -244,10 +246,19 @@ export async function buildClassicTrustlineTransactionXdr(
 }
 
 export function parseSignedTxXdr(result: unknown): string | null {
-  if (!result || typeof result !== "object") return null
-  const r = result as { signedTxXdr?: string; signedTransaction?: string }
-  return r.signedTxXdr || r.signedTransaction || null
+  if (!result) return null
+  if (typeof result === "string") return result.trim() || null
+  if (typeof result !== "object") return null
+  const r = result as {
+    signedTxXdr?: string
+    signedTransaction?: string
+    xdr?: string
+    result?: string
+    signedXDR?: string
+  }
+  return r.signedTxXdr || r.signedTransaction || r.xdr || r.result || r.signedXDR || null
 }
+
 
 import { z } from "zod"
 
@@ -363,7 +374,18 @@ export async function verifyRePinnedCidIntegrity(
 
 export type TrustlineSubmitResult =
   | { signedXdr: string; ok: true; hash: string; attempts: number }
-  | { signedXdr: string; ok: false; error: string; attempts: number; cause?: unknown }
+  | { signedXdr: string; ok: false; error: string; attempts: number; resultCode?: string; cause?: unknown }
+
+/**
+ * Transaction-level Horizon result code (e.g. `tx_too_late`, `tx_bad_seq`) from a
+ * failed `submitTransaction`. The SDK error message alone does not carry it, and
+ * clients need it to decide between rebuild-and-retry and giving up.
+ */
+export function horizonTransactionResultCode(e: unknown): string | undefined {
+  const code = (e as { response?: { data?: { extras?: { result_codes?: { transaction?: unknown } } } } } | undefined)
+    ?.response?.data?.extras?.result_codes?.transaction
+  return typeof code === "string" ? code : undefined
+}
 
 export type TrustlineBatchSubmitOptions = {
   maxRetries?: number
@@ -402,12 +424,22 @@ async function submitTrustlineWithRetry(
 ): Promise<TrustlineSubmitResult> {
   for (let attempt = 1; ; attempt++) {
     try {
+      incSecurityCounter("trustline_submitted")
       const { hash } = await submit(signedXdr)
       return { signedXdr, ok: true, hash, attempts: attempt }
     } catch (e) {
       if (attempt > maxRetries || !isRetryableHorizonError(e)) {
-        return { signedXdr, ok: false, error: e instanceof Error ? e.message : String(e), attempts: attempt, cause: e }
+        incSecurityCounter("trustline_failed")
+        return {
+          signedXdr,
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+          attempts: attempt,
+          resultCode: horizonTransactionResultCode(e),
+          cause: e,
+        }
       }
+      incSecurityCounter("trustline_retried")
       const jitterMs = Math.random() * baseDelayMs
       await sleep(baseDelayMs * 2 ** (attempt - 1) + jitterMs)
     }
@@ -433,7 +465,14 @@ export async function submitTrustlineBatch(
         const { hash } = await submit(signedXdr)
         results.push({ signedXdr, ok: true, hash, attempts: 1 })
       } catch (e) {
-        results.push({ signedXdr, ok: false, error: e instanceof Error ? e.message : String(e), attempts: 1, cause: e })
+        results.push({
+          signedXdr,
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+          attempts: 1,
+          resultCode: horizonTransactionResultCode(e),
+          cause: e,
+        })
       }
     }
     return results
@@ -444,12 +483,22 @@ export async function submitTrustlineBatch(
   const concurrency = Math.max(1, Math.min(opts.concurrency ?? 3, signedXdrs.length || 1))
 
   const results: TrustlineSubmitResult[] = new Array(signedXdrs.length)
+  const inFlightPromises = new Map<string, Promise<TrustlineSubmitResult>>()
+
   let nextIndex = 0
   async function worker(): Promise<void> {
     for (;;) {
       const i = nextIndex++
       if (i >= signedXdrs.length) return
-      results[i] = await submitTrustlineWithRetry(signedXdrs[i]!, submit, maxRetries, baseDelayMs)
+      const xdr = signedXdrs[i]!
+      const xdrHash = createHash("sha256").update(xdr).digest("hex")
+
+      let p = inFlightPromises.get(xdrHash)
+      if (!p) {
+        p = submitTrustlineWithRetry(xdr, submit, maxRetries, baseDelayMs)
+        inFlightPromises.set(xdrHash, p)
+      }
+      results[i] = await p
     }
   }
   await Promise.all(Array.from({ length: concurrency }, () => worker()))

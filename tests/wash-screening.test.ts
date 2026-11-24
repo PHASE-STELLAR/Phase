@@ -11,6 +11,7 @@ import path from "node:path"
 const scratch = mkdtempSync(path.join(tmpdir(), "phase-wash-"))
 process.env.PHASE_DATA_DIR = scratch
 process.env.PHASE_DATA_ROOT = scratch
+process.env.PHASE_SERVER_DATA_DIR = scratch
 process.env.NEXT_PUBLIC_FEATURE_PHASE_77 = "1"
 process.env.FEATURE_PHASE_77 = "1"
 
@@ -122,12 +123,56 @@ async function testOnlyAcceptedOffersCount() {
   assert.equal(volume.offerCount, 0)
 }
 
+
+async function testCoordinatedWashLoopBlocked() {
+  const { getDb, resetDbForTests } = await import("@/lib/sqlite-db")
+  resetDbForTests()
+  const db = getDb()
+  const now = Date.now()
+
+  // Coordinated loop on token 99: Alice -> Bob -> Carol -> Alice
+  db.prepare(
+    `INSERT INTO listings (id, token_id, collection_id, seller_wallet, price_phaselq, accepts_offers, listed_at, status)
+     VALUES ('l_loop1', 99, 1, ?, 10, 1, ?, 'active')`,
+  ).run(ALICE, now - 1000)
+
+  db.prepare(
+    `INSERT INTO offers (id, listing_id, buyer_wallet, amount_phaselq, created_at, status, expires_at, wash_flagged)
+     VALUES ('t1', 'l_loop1', ?, 10, ?, 'accepted', ?, 0)`,
+  ).run(BOB, now - 800, now + 86400000)
+
+  db.prepare(
+    `INSERT INTO listings (id, token_id, collection_id, seller_wallet, price_phaselq, accepts_offers, listed_at, status)
+     VALUES ('l_loop2', 99, 1, ?, 10, 1, ?, 'active')`,
+  ).run(BOB, now - 600)
+
+  db.prepare(
+    `INSERT INTO offers (id, listing_id, buyer_wallet, amount_phaselq, created_at, status, expires_at, wash_flagged)
+     VALUES ('t2', 'l_loop2', ?, 10, ?, 'accepted', ?, 0)`,
+  ).run(CAROL, now - 500, now + 86400000)
+
+  // Prospective trade: Carol sells, Alice buys back -> loop A -> B -> C -> A
+  const result = screenOfferForWash({
+    listingId: 'l_loop3',
+    tokenId: 99,
+    sellerWallet: CAROL,
+    buyerWallet: ALICE,
+    amountPhaselq: 10,
+    now,
+  })
+
+  assert.equal(result.washFlagged, true, "coordinated wash loop must be flagged")
+  assert.ok(["wash_loop", "circular_trade"].includes(result.washReason ?? ""), "reason must be wash_loop or circular_trade")
+  assert.ok(getSecurityCounter("wash_trades_flagged") > 0)
+}
+
 async function main() {
   testFlagsDirectSelfDeal(); console.log("✓ flags a direct self-deal")
   testSelfDealIsCaseInsensitive(); console.log("✓ self-deal detection is case-insensitive")
   testDoesNotFlagDistinctParties(); console.log("✓ does not flag an ordinary offer")
   await testVolumeExcludesFlaggedOffers(); console.log("✓ volume excludes wash-flagged offers")
   await testOnlyAcceptedOffersCount(); console.log("✓ only accepted offers count toward volume")
+  await testCoordinatedWashLoopBlocked(); console.log("✓ coordinated wash loop is blocked")
   assert.ok(WASH_WINDOW_MS > 0)
   rmSync(scratch, { recursive: true, force: true })
   console.log("\nAll wash-screening tests passed.")

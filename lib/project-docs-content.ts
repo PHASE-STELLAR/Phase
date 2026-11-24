@@ -14,6 +14,26 @@ export type DocsBlock =
   | { type: "table"; headers: string[]; rows: string[][] }
   | { type: "code"; text: string; label?: string }
   | { type: "image"; src: string; alt: string; label?: string }
+  | { type: "recipe"; recipe: DocsRecipe }
+
+export type IntegrationRecipeId =
+  | "trustline-bootstrap"
+  | "liq-bootstrap-claim"
+  | "x402-settle"
+  | "forge-job-polling"
+  | "ownership-listing"
+
+export type DocsRecipe = {
+  id: IntegrationRecipeId
+  title: string
+  summary: string
+  steps: string[]
+  /** Each failure branch the snippet handles, and what it returns for it. */
+  failures: { when: string; outcome: string }[]
+  /** Function the snippet defines; CI calls it with a sandbox context. */
+  entry: string
+  code: string
+}
 
 export type DocsSection = {
   id: string
@@ -25,6 +45,7 @@ export type ProjectDocsPage = {
   pageTitle: string
   pageSubtitle: string
   tocLabel: string
+  recipeLabels: { steps: string; failures: string; when: string; outcome: string; code: string; tested: string }
   sections: DocsSection[]
 }
 
@@ -35,6 +56,14 @@ const projectDocs: Record<LandingLang, ProjectDocsPage> = {
     pageSubtitle:
       "Cómo funciona PHASE Protocol: x402 como paywall on-chain, creación de NFTs en Soroban, flujo de pago atómico y recompensas en PHASELQ.",
     tocLabel: "Índice",
+    recipeLabels: {
+      steps: "Pasos",
+      failures: "Ramas de error",
+      when: "Cuando",
+      outcome: "Resultado",
+      code: "Código",
+      tested: "Probado en CI",
+    },
     sections: [
       {
         id: "overview",
@@ -328,6 +357,14 @@ const projectDocs: Record<LandingLang, ProjectDocsPage> = {
     pageSubtitle:
       "How PHASE Protocol works: x402 as an on-chain paywall, NFT creation on Soroban, atomic payment flow, and PHASELQ rewards.",
     tocLabel: "Contents",
+    recipeLabels: {
+      steps: "Steps",
+      failures: "Failure branches",
+      when: "When",
+      outcome: "Outcome",
+      code: "Code",
+      tested: "CI-tested",
+    },
     sections: [
       {
         id: "overview",
@@ -625,7 +662,324 @@ export function sanitizeDocText(text: string): string {
     .replace(/javascript:/gi, "")
 }
 
-export function pickProjectDocs(lang: LandingLang): ProjectDocsPage {
-  return projectDocs[lang]
+// ─── phase-668: integration recipes ──────────────────────────────────────────
+// Snippet code is shared by both languages so EN and ES can never drift apart.
+// lib/__tests__/integration-recipes.test.ts extracts every snippet from the
+// rendered page data and runs it against the real route handlers, so a
+// breaking API change fails CI until the affected recipe is updated in the
+// same PR. Snippets are plain JavaScript (no imports, no process.env): they
+// receive everything through one context argument.
+
+const RECIPE_CODE: Record<IntegrationRecipeId, string> = {
+  "trustline-bootstrap": `// StellarSdk = import * as StellarSdk from "@stellar/stellar-sdk"
+// wallet.signTransaction(xdr) = Freighter / Stellar Wallets Kit. Signing stays in the browser.
+async function ensurePhaseTrustline({ baseUrl, wallet, StellarSdk, maxAttempts = 2 }) {
+  const statusRes = await fetch(baseUrl + "/api/classic-liq?walletAddress=" + encodeURIComponent(wallet.address))
+  const info = await statusRes.json()
+  if (!statusRes.ok) return { ok: false, code: "STATUS_UNAVAILABLE", error: info.error }
+  if (!info.status.accountExists) return { ok: false, code: "ACCOUNT_MISSING" }
+  if (info.status.hasTrustline) return { ok: true, alreadyTrusted: true }
+
+  const horizon = new StellarSdk.Horizon.Server("https://horizon-testnet.stellar.org")
+  const asset = new StellarSdk.Asset(info.asset.code, info.asset.issuer)
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Rebuild from a fresh sequence on every attempt: an expired envelope can't be resubmitted.
+    const account = await horizon.loadAccount(wallet.address)
+    const tx = new StellarSdk.TransactionBuilder(account, {
+      fee: StellarSdk.BASE_FEE,
+      networkPassphrase: StellarSdk.Networks.TESTNET,
+    })
+      .addOperation(StellarSdk.Operation.changeTrust({ asset }))
+      .setTimeout(60)
+      .build()
+    const signedXdr = await wallet.signTransaction(tx.toXDR())
+    const res = await fetch(baseUrl + "/api/classic-liq/trustline", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ signedXdr }),
+    })
+    const body = await res.json()
+    if (res.ok && body.ok === true) return { ok: true, hash: body.hash, attempts: attempt }
+    if (body.code !== "tx_too_late") {
+      return { ok: false, code: "SUBMIT_FAILED", resultCode: body.code, error: body.error }
+    }
+  }
+  return { ok: false, code: "TX_TOO_LATE" }
+}`,
+
+  "liq-bootstrap-claim": `async function claimPhaseLiqBootstrap({ baseUrl, wallet }) {
+  const res = await fetch(baseUrl + "/api/classic-liq", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ walletAddress: wallet.address }),
+  })
+  const body = await res.json()
+  if (res.ok && body.ok === true) return { ok: true, hash: body.hash, amount: body.amount }
+  // 409: an earlier request already paid this wallet, possibly one whose response
+  // was lost to a client timeout. The claim is idempotent, so this is success.
+  if (res.status === 409) return { ok: true, alreadyFunded: true, fundedAt: body.fundedAt }
+  if (res.status === 412) {
+    return { ok: false, code: body.code === "trustline_missing" ? "TRUSTLINE_MISSING" : "ACCOUNT_MISSING" }
+  }
+  if (res.status === 503) return { ok: false, code: "BOOTSTRAP_DISABLED" }
+  return { ok: false, code: "SUBMIT_FAILED", resultCode: body.code, error: body.error }
+}`,
+
+  "x402-settle": `async function settleX402Invoice({ baseUrl, wallet, invoice, amountStroops }) {
+  const paymentToken = btoa(JSON.stringify({ invoice, amount: amountStroops, network: "stellar-testnet" }))
+  const res = await fetch(baseUrl + "/api/x402/settle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ payment_token: paymentToken, user_address: wallet.address }),
+  })
+  const body = await res.json()
+  // Never infer success from a 200 alone: require the explicit settled flag.
+  if (res.ok && body.settled === true) {
+    return { ok: true, invoice: body.invoice, tokenContract: body.token_contract }
+  }
+  if (res.status === 401) return { ok: false, code: "PAYMENT_INSUFFICIENT" }
+  if (res.status === 503) return { ok: false, code: "SETTLEMENT_UNAVAILABLE" }
+  return { ok: false, code: "BAD_REQUEST", error: body.error }
+}`,
+
+  "forge-job-polling": `async function waitForForgeJob({
+  baseUrl,
+  txHash,
+  intervalMs = 4000,
+  timeoutMs = 180000,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+}) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const res = await fetch(baseUrl + "/api/jobs/" + encodeURIComponent(txHash), { cache: "no-store" })
+    if (res.status === 400) return { ok: false, code: "INVALID_TX_HASH" }
+    if (res.ok) {
+      const { job } = await res.json()
+      if (job.status === "completed") return { ok: true, job }
+      if (job.status === "failed") return { ok: false, code: "JOB_FAILED", error: job.error }
+    }
+    // 404: the job row is not written yet (settlement still confirming). 5xx: transient. Keep polling.
+    await sleep(intervalMs)
+  }
+  return { ok: false, code: "TIMEOUT" }
+}`,
+
+  "ownership-listing": `async function listOwnedPhaseNfts({ baseUrl, address }) {
+  const res = await fetch(baseUrl + "/api/wallet/phase-nfts?address=" + encodeURIComponent(address))
+  const body = await res.json()
+  if (res.status === 400) return { ok: false, code: "INVALID_ADDRESS" }
+  if (!res.ok) return { ok: false, code: "CONFIG_ERROR", error: body.detail }
+  // The route answers 200 even when every index path failed. Check indexedVia.
+  if (body.indexedVia === "unavailable") return { ok: false, code: "INDEX_UNAVAILABLE", retryable: true }
+  return {
+    ok: true,
+    contractId: body.contractId,
+    stale: body.indexedVia.endsWith("-stale"),
+    items: body.items,
+  }
+}`,
 }
 
+const RECIPE_ENTRY: Record<IntegrationRecipeId, string> = {
+  "trustline-bootstrap": "ensurePhaseTrustline",
+  "liq-bootstrap-claim": "claimPhaseLiqBootstrap",
+  "x402-settle": "settleX402Invoice",
+  "forge-job-polling": "waitForForgeJob",
+  "ownership-listing": "listOwnedPhaseNfts",
+}
+
+type RecipeText = Omit<DocsRecipe, "id" | "entry" | "code">
+
+const RECIPE_TEXT: Record<LandingLang, Record<IntegrationRecipeId, RecipeText>> = {
+  es: {
+    "trustline-bootstrap": {
+      title: "1. Trustline PHASELQ",
+      summary:
+        "Abre la trustline clásica de PHASELQ desde la wallet del usuario. El servidor nunca firma: solo envía a Horizon el XDR que la wallet ya firmó.",
+      steps: [
+        "GET /api/classic-liq?walletAddress= devuelve el asset (code + issuer) y el estado de la cuenta.",
+        "Si la trustline ya existe, termina sin firmar nada.",
+        "Construye changeTrust con la secuencia actual, fírmalo en Freighter y envíalo a POST /api/classic-liq/trustline.",
+      ],
+      failures: [
+        { when: "La cuenta no existe en testnet", outcome: "ACCOUNT_MISSING: fondéala con Friendbot y vuelve a ejecutar." },
+        { when: "Horizon responde tx_too_late", outcome: "Reconstruye con secuencia nueva y reintenta; tras maxAttempts devuelve TX_TOO_LATE." },
+        { when: "Cualquier otro rechazo de Horizon", outcome: "SUBMIT_FAILED con resultCode de Horizon (p. ej. tx_bad_seq)." },
+      ],
+    },
+    "liq-bootstrap-claim": {
+      title: "2. Fondeo inicial de PHASELQ",
+      summary:
+        "Reclama el fondeo inicial de PHASELQ clásico. Es idempotente por wallet: reintentar tras un timeout nunca paga dos veces.",
+      steps: [
+        "POST /api/classic-liq con walletAddress.",
+        "El servidor comprueba cuenta y trustline, reserva el claim bajo lock y paga desde el issuer.",
+      ],
+      failures: [
+        { when: "Falta la trustline", outcome: "TRUSTLINE_MISSING (412): ejecuta la receta 1 primero." },
+        { when: "La cuenta no existe", outcome: "ACCOUNT_MISSING (412)." },
+        { when: "Ya se reclamó (doble envío, timeout)", outcome: "409 tratado como éxito: alreadyFunded con fundedAt." },
+        { when: "Fondeo no configurado en el servidor", outcome: "BOOTSTRAP_DISABLED (503)." },
+        { when: "Horizon rechaza el pago", outcome: "SUBMIT_FAILED; el claim se libera y se puede reintentar." },
+      ],
+    },
+    "x402-settle": {
+      title: "3. Settlement x402 (shim local)",
+      summary:
+        "Liquida una factura x402 contra el shim local de demo. Solo testnet: en producción el settlement es la transacción Soroban settle.",
+      steps: [
+        "Codifica { invoice, amount, network } en base64 como payment_token.",
+        "POST /api/x402/settle y exige settled === true en la respuesta.",
+      ],
+      failures: [
+        { when: "Monto menor que REQUIRED_AMOUNT o sin invoice", outcome: "PAYMENT_INSUFFICIENT (401)." },
+        { when: "Shim deshabilitado (X402_LOCAL_SHIM_ENABLED)", outcome: "SETTLEMENT_UNAVAILABLE (503)." },
+        { when: "Body inválido", outcome: "BAD_REQUEST (400)." },
+      ],
+    },
+    "forge-job-polling": {
+      title: "4. Seguimiento del job de la Forja",
+      summary:
+        "Tras el settlement, consulta el estado del job de generación con el hash de la transacción hasta que termine.",
+      steps: [
+        "GET /api/jobs/{txHash} cada 3–5 s.",
+        "Termina en completed o failed; 404 significa que el job aún no existe.",
+      ],
+      failures: [
+        { when: "txHash inválido", outcome: "INVALID_TX_HASH (400), sin reintentos." },
+        { when: "El pipeline falla", outcome: "JOB_FAILED con el error del job." },
+        { when: "No termina antes de timeoutMs", outcome: "TIMEOUT." },
+      ],
+    },
+    "ownership-listing": {
+      title: "5. NFTs de una wallet",
+      summary:
+        "Lista los artefactos PHASE de una wallet con metadata. La ruta responde 200 aunque el índice falle, así que la receta revisa indexedVia.",
+      steps: [
+        "GET /api/wallet/phase-nfts?address=.",
+        "Usa contractId de la respuesta; nunca lo fijes en el código.",
+      ],
+      failures: [
+        { when: "Dirección inválida", outcome: "INVALID_ADDRESS (400)." },
+        { when: "Todos los índices caídos y sin caché", outcome: "INDEX_UNAVAILABLE con retryable: true." },
+        { when: "Índice servido desde caché vieja (phase-135)", outcome: "ok con stale: true." },
+      ],
+    },
+  },
+  en: {
+    "trustline-bootstrap": {
+      title: "1. PHASELQ trustline",
+      summary:
+        "Open the classic PHASELQ trustline from the user's wallet. The server never signs: it only forwards the XDR the wallet already signed to Horizon.",
+      steps: [
+        "GET /api/classic-liq?walletAddress= returns the asset (code + issuer) and the account status.",
+        "If the trustline already exists, stop without signing anything.",
+        "Build changeTrust from the current sequence, sign it in Freighter, and send it to POST /api/classic-liq/trustline.",
+      ],
+      failures: [
+        { when: "Account does not exist on testnet", outcome: "ACCOUNT_MISSING: fund it with Friendbot and rerun." },
+        { when: "Horizon returns tx_too_late", outcome: "Rebuild with a fresh sequence and retry; after maxAttempts returns TX_TOO_LATE." },
+        { when: "Any other Horizon rejection", outcome: "SUBMIT_FAILED with Horizon's resultCode (e.g. tx_bad_seq)." },
+      ],
+    },
+    "liq-bootstrap-claim": {
+      title: "2. PHASELQ bootstrap funding",
+      summary:
+        "Claim the initial classic PHASELQ funding. It is idempotent per wallet: retrying after a timeout never pays twice.",
+      steps: [
+        "POST /api/classic-liq with walletAddress.",
+        "The server checks account and trustline, reserves the claim under a lock, and pays from the issuer.",
+      ],
+      failures: [
+        { when: "Trustline missing", outcome: "TRUSTLINE_MISSING (412): run recipe 1 first." },
+        { when: "Account does not exist", outcome: "ACCOUNT_MISSING (412)." },
+        { when: "Already claimed (double submit, timeout)", outcome: "409 treated as success: alreadyFunded with fundedAt." },
+        { when: "Funding not configured on the server", outcome: "BOOTSTRAP_DISABLED (503)." },
+        { when: "Horizon rejects the payment", outcome: "SUBMIT_FAILED; the claim is released so the call can be retried." },
+      ],
+    },
+    "x402-settle": {
+      title: "3. x402 settlement (local shim)",
+      summary:
+        "Settle an x402 invoice against the local demo shim. Testnet only: in production, settlement is the Soroban settle transaction.",
+      steps: [
+        "Base64-encode { invoice, amount, network } as payment_token.",
+        "POST /api/x402/settle and require settled === true in the response.",
+      ],
+      failures: [
+        { when: "Amount below REQUIRED_AMOUNT or no invoice", outcome: "PAYMENT_INSUFFICIENT (401)." },
+        { when: "Shim disabled (X402_LOCAL_SHIM_ENABLED)", outcome: "SETTLEMENT_UNAVAILABLE (503)." },
+        { when: "Invalid body", outcome: "BAD_REQUEST (400)." },
+      ],
+    },
+    "forge-job-polling": {
+      title: "4. Forge job tracking",
+      summary:
+        "After settlement, poll the generation job by transaction hash until it finishes.",
+      steps: [
+        "GET /api/jobs/{txHash} every 3–5 s.",
+        "Stop on completed or failed; 404 means the job does not exist yet.",
+      ],
+      failures: [
+        { when: "Invalid txHash", outcome: "INVALID_TX_HASH (400), no retries." },
+        { when: "The pipeline fails", outcome: "JOB_FAILED with the job's error." },
+        { when: "Not finished before timeoutMs", outcome: "TIMEOUT." },
+      ],
+    },
+    "ownership-listing": {
+      title: "5. A wallet's NFTs",
+      summary:
+        "List a wallet's PHASE artifacts with metadata. The route answers 200 even when the index fails, so the recipe checks indexedVia.",
+      steps: [
+        "GET /api/wallet/phase-nfts?address=.",
+        "Use contractId from the response; never hardcode it.",
+      ],
+      failures: [
+        { when: "Invalid address", outcome: "INVALID_ADDRESS (400)." },
+        { when: "Every index path down and nothing cached", outcome: "INDEX_UNAVAILABLE with retryable: true." },
+        { when: "Index served from stale cache (phase-135)", outcome: "ok with stale: true." },
+      ],
+    },
+  },
+}
+
+const RECIPE_SECTION_TEXT: Record<LandingLang, { title: string; intro: string }> = {
+  es: {
+    title: "Recetas de integración",
+    intro:
+      "Código ejecutable para integrar PHASE desde tu app, en orden: trustline → fondeo → pago → job → NFTs. Cada fragmento se ejecuta en CI contra las rutas reales, incluidas sus ramas de error. Todo apunta a testnet.",
+  },
+  en: {
+    title: "Integration recipes",
+    intro:
+      "Runnable code for integrating PHASE from your app, in order: trustline → funding → payment → job → NFTs. Every snippet runs in CI against the real routes, failure branches included. Everything targets testnet.",
+  },
+}
+
+export const INTEGRATION_RECIPE_IDS = Object.keys(RECIPE_CODE) as IntegrationRecipeId[]
+
+function recipesSection(lang: LandingLang): DocsSection {
+  return {
+    id: "recipes",
+    title: RECIPE_SECTION_TEXT[lang].title,
+    blocks: [
+      { type: "p", text: RECIPE_SECTION_TEXT[lang].intro },
+      ...INTEGRATION_RECIPE_IDS.map(
+        (id): DocsBlock => ({
+          type: "recipe",
+          recipe: { id, entry: RECIPE_ENTRY[id], code: RECIPE_CODE[id], ...RECIPE_TEXT[lang][id] },
+        }),
+      ),
+    ],
+  }
+}
+
+export function pickProjectDocs(lang: LandingLang, opts: { recipes?: boolean } = {}): ProjectDocsPage {
+  const page = projectDocs[lang]
+  if (!opts.recipes) return page
+  // Recipes go just before the external links section.
+  const linksAt = page.sections.findIndex((s) => s.id === "links")
+  const sections = [...page.sections]
+  sections.splice(linksAt === -1 ? sections.length : linksAt, 0, recipesSection(lang))
+  return { ...page, sections }
+}

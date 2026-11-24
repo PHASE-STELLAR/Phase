@@ -7,10 +7,15 @@
  * (lib/og-design-tokens) — routes should never hardcode a color/geometry.
  */
 import path from "node:path"
+import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
+import { readFile } from "node:fs/promises"
 import sharp from "sharp"
+import { isFeatureEnabled } from "@/lib/feature-flags"
 import {
+  computeOgThemeDigest,
   escapeMarkup,
+  getOgTheme,
   sanitizeForSharp,
   type OgTheme,
 } from "@/lib/og-design-tokens"
@@ -178,4 +183,157 @@ export async function solidPng(
   background: { r: number; g: number; b: number; alpha: number },
 ): Promise<Buffer> {
   return sharp({ create: { width, height, channels: 4, background } }).png().toBuffer()
+}
+
+// ─── phase-260: deterministic digest cache, bounded timeout & static fallback ──
+
+export const OG_RENDER_TIMEOUT_MS = 4500
+const MAX_OG_CACHE_ENTRIES = 128
+const ogImageCache = new Map<string, Buffer>()
+
+export function isOgDesignTokensEnabled(): boolean {
+  return isFeatureEnabled("phase-260")
+}
+
+export function ogDesignTokensRollbackNote(): string {
+  return "Rollback phase-260: unset NEXT_PUBLIC_FEATURE_PHASE_260 / FEATURE_PHASE_260. Static OG template served."
+}
+
+function canonicalizeOgValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeOgValue)
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {}
+    for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+      const v = (value as Record<string, unknown>)[k]
+      if (v !== undefined) out[k] = canonicalizeOgValue(v)
+    }
+    return out
+  }
+  return value
+}
+
+export type OgSurfaceName = "chamber" | "profile"
+
+/**
+ * Compute a deterministic SHA-256 digest from surface, theme tokens, and
+ * canonicalized input parameters. Identical inputs + tokens yield identical digests.
+ */
+export function computeOgInputDigest(input: {
+  surface: OgSurfaceName
+  theme: OgTheme
+  params: Record<string, unknown>
+}): string {
+  const payload = JSON.stringify(
+    canonicalizeOgValue({
+      surface: input.surface,
+      themeDigest: computeOgThemeDigest(input.theme),
+      params: input.params,
+    }),
+  )
+  return createHash("sha256").update(payload).digest("hex")
+}
+
+export function getCachedOgImage(digest: string): Buffer | null {
+  return ogImageCache.get(digest) ?? null
+}
+
+export function setCachedOgImage(digest: string, buffer: Buffer): void {
+  if (ogImageCache.size >= MAX_OG_CACHE_ENTRIES) {
+    const oldestKey = ogImageCache.keys().next().value
+    if (oldestKey !== undefined) ogImageCache.delete(oldestKey)
+  }
+  ogImageCache.set(digest, buffer)
+}
+
+export function clearOgImageCache(): void {
+  ogImageCache.clear()
+}
+
+export function getOgCacheStats(): { size: number; maxEntries: number } {
+  return { size: ogImageCache.size, maxEntries: MAX_OG_CACHE_ENTRIES }
+}
+
+/**
+ * Render the static fallback template image sized to the active theme canvas.
+ * Used when `phase-260` is disabled or when dynamic generation times out/fails.
+ */
+export async function renderStaticFallbackTemplate(
+  theme: OgTheme = getOgTheme("monitor"),
+): Promise<Buffer> {
+  const { width, height } = theme.dimensions.canvas
+  try {
+    const templatePath = resolveOgTemplatePath()
+    if (existsSync(templatePath)) {
+      const raw = await readFile(templatePath)
+      return await sharp(raw)
+        .resize(width, height, { fit: "cover", position: "centre" })
+        .png()
+        .toBuffer()
+    }
+  } catch {
+    // Fall through to deterministic solid canvas if template file is unreadable
+  }
+  return solidPng(width, height, theme.canvasBackground)
+}
+
+export type OgRenderedResult = {
+  buffer: Buffer
+  digest: string
+  cacheHit: boolean
+  fallbackReason?: "flag_disabled" | "timeout" | "error"
+}
+
+/**
+ * Execute an OG render with:
+ * - `phase-260` flag check (flag off -> static template fallback)
+ * - canonical input digest + bounded in-memory cache
+ * - bounded generation timeout (timeout -> static template fallback)
+ */
+export async function renderOgWithTimeoutAndCache(opts: {
+  surface: OgSurfaceName
+  theme: OgTheme
+  params: Record<string, unknown>
+  timeoutMs?: number
+  force?: boolean
+  render: () => Promise<Buffer>
+}): Promise<OgRenderedResult> {
+  const digest = computeOgInputDigest({
+    surface: opts.surface,
+    theme: opts.theme,
+    params: opts.params,
+  })
+
+  if (!opts.force && !isOgDesignTokensEnabled()) {
+    const buffer = await renderStaticFallbackTemplate(opts.theme)
+    return { buffer, digest, cacheHit: false, fallbackReason: "flag_disabled" }
+  }
+
+  const cached = getCachedOgImage(digest)
+  if (cached) {
+    return { buffer: cached, digest, cacheHit: true }
+  }
+
+  const timeoutMs = Math.max(1, opts.timeoutMs ?? OG_RENDER_TIMEOUT_MS)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const rendered = await Promise.race([
+      opts.render(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("OG_RENDER_TIMEOUT")), timeoutMs)
+      }),
+    ])
+    setCachedOgImage(digest, rendered)
+    return { buffer: rendered, digest, cacheHit: false }
+  } catch (err) {
+    const isTimeout = err instanceof Error && err.message === "OG_RENDER_TIMEOUT"
+    const buffer = await renderStaticFallbackTemplate(opts.theme)
+    return {
+      buffer,
+      digest,
+      cacheHit: false,
+      fallbackReason: isTimeout ? "timeout" : "error",
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }

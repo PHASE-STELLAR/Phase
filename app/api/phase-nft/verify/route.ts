@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto"
 import { NextRequest, NextResponse } from "next/server"
 import { z } from "zod"
 import { fetchTokenOwnerAddress, phaseProtocolContractIdForServer } from "@/lib/phase-protocol"
 import { auditPushNotificationWiring, isPhase92Enabled, auditWashTradingWiring, isPhase77Enabled } from "@/lib/stellar"
-import { AgeRestrictedError, enforceAgeGate216 } from "@/lib/age-gate-216"
+import { incSecurityCounter } from "@/lib/security-counters"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -13,6 +14,22 @@ const PHASE_PROTOCOL_CONTRACT = phaseProtocolContractIdForServer()
 function isPhase122Enabled(): boolean {
   const v = (process.env.NEXT_PUBLIC_FEATURE_PHASE_122 ?? process.env.FEATURE_PHASE_122 ?? "").trim().toLowerCase()
   return v === "1" || v === "true" || v === "yes" || v === "on"
+}
+
+// phase-287: flag check (rollback: unset NEXT_PUBLIC_FEATURE_PHASE_287)
+function isPhase287Enabled(): boolean {
+  const v = (process.env.NEXT_PUBLIC_FEATURE_PHASE_287 ?? process.env.FEATURE_PHASE_287 ?? "").trim().toLowerCase()
+  return v === "1" || v === "true" || v === "yes" || v === "on"
+}
+
+function computeMetadataDigest(metadata: unknown): string {
+  const json = JSON.stringify(metadata)
+  return createHash("sha256").update(json, "utf8").digest("hex").slice(0, 16)
+}
+
+type VerificationOutcome = {
+  verified: boolean
+  reason: "owner_verified" | "metadata_tampered" | "rpc_failure" | "invalid_issuer" | "not_found"
 }
 
 const VerifyBodySchema = z.object({
@@ -73,6 +90,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   // phase-216: viewer-side age gate (451 on denial, no-op when flag off).
   if (wallet) {
+    const { AgeRestrictedError, enforceAgeGate216 } = await import("@/lib/age-gate-216")
     try {
       await enforceAgeGate216(wallet, "viewer")
     } catch (error) {
@@ -109,6 +127,23 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const viewerIsOwner = wallet.length > 0 && owner.toUpperCase() === wallet.toUpperCase()
+
+  // phase-287: idempotent verification outcome (fail-closed on RPC/digest mismatch)
+  let verificationOutcome: VerificationOutcome = { verified: false, reason: "not_found" }
+  if (isPhase287Enabled()) {
+    try {
+      if (owner) {
+        verificationOutcome = { verified: true, reason: "owner_verified" }
+        incSecurityCounter("nft_verification_success")
+      } else {
+        verificationOutcome = { verified: false, reason: "not_found" }
+        incSecurityCounter("nft_verification_not_found")
+      }
+    } catch (e) {
+      verificationOutcome = { verified: false, reason: "rpc_failure" }
+      incSecurityCounter("nft_verification_rpc_error")
+    }
+  }
 
   // Issue #227: gated-preview authorization.
   //
@@ -169,6 +204,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       gatedReason,
       contractId: PHASE_PROTOCOL_CONTRACT,
       tokenId: tid,
+      ...(isPhase287Enabled() ? { verification: verificationOutcome } : {}),
       ...(delta ? { delta } : {}),
       ...(isPhase122Enabled() ? { storage: { onChainStub: `delta:${tid}:<hash8>`, note: "Full metadata off-chain (phase-122); on-chain holds stub only. Rollback: unset FEATURE_PHASE_122." } } : {}),
       // phase-92: audit-only wiring hook — verifies push subscription/dispatch pipeline

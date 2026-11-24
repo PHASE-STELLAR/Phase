@@ -45,3 +45,24 @@ export function humanizePhaseHostErrorMessage(
   }
   return unknownTpl.replace(/\{code\}/g, String(code))
 }
+
+/**
+ * Interprets Ledger hardware error codes and device status responses.
+ * Detects blind signing disabled (0x6b0c / 0x6a15), user rejection (0x6985), and USB timeout (0x6e00).
+ */
+export function humanizeLedgerHardwareErrorMessage(raw: unknown): string | null {
+  if (!raw) return null
+  const msg = raw instanceof Error ? raw.message : typeof raw === "string" ? raw : JSON.stringify(raw)
+  const lower = msg.toLowerCase()
+  if (lower.includes("0x6b0c") || lower.includes("0x6a15") || lower.includes("blind signing") || lower.includes("clear signing")) {
+    return "Blind signing is disabled in Ledger Stellar app. Open Stellar app on your device, navigate to Settings → Blind signing, and set to Enabled."
+  }
+  if (lower.includes("0x6985") || lower.includes("user rejected") || lower.includes("denied by user")) {
+    return "Transaction was rejected on your Ledger device."
+  }
+  if (lower.includes("0x6e00") || lower.includes("locked") || lower.includes("disconnected") || lower.includes("timeout")) {
+    return "Ledger device is locked or disconnected. Please unlock your device, open the Stellar app, and try again."
+  }
+  return null
+}
+

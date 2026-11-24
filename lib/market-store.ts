@@ -1,13 +1,15 @@
-﻿// @ts-nocheck
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
+// @ts-nocheck
 import { createHash, randomUUID } from "node:crypto";
 import { StrKey } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import { isFeatureEnabled, flagRollbackNote } from "@/lib/feature-flags";
+import { readJsonFile, updateJsonFile } from "@/lib/json-store";
 import { serverDataJsonPath } from "@/lib/server-data-paths";
 import { getDb } from "@/lib/sqlite-db";
 import { incSecurityCounter } from "@/lib/security-counters";
+import { recordTaxEvent } from "@/lib/tax-report";
+import { bpsShare, isDecimalAmountParsingEnabled, numberToStroops, phaselqToStroopString, stroopsToNumber } from "@/lib/decimal-amount";
+import { phaseProtocolContractIdForServer } from "@/lib/phase-protocol";
 
 export type ListingStatus = "active" | "sold" | "cancelled";
 export type OfferStatus = "pending" | "accepted" | "rejected" | "expired";
@@ -15,6 +17,7 @@ export type OfferStatus = "pending" | "accepted" | "rejected" | "expired";
 export type Listing = {
   id: string;
   token_id: number;
+  contract_id?: string;
   collection_id: number;
   seller_wallet: string;
   price_phaselq: number;
@@ -28,6 +31,22 @@ export type Listing = {
   creator_wallet?: string;
   /** phase-140: basis points of the sale paid to `creator_wallet` (0-10000). */
   royalty_bps?: number;
+  /** Spike 673 (phase-editions): 1-based edition index within collection; edition_size = limited cap. */
+  edition_number?: number;
+  edition_size?: number;
+  /** Spike 673: artist-proof hold, excluded from public sale but still enumerable. */
+  is_artist_proof?: boolean;
+  /** Spike 673: 'limited' | 'open' — open editions are time-boxed, limited are supply-capped. */
+  supply_mode?: 'limited' | 'open';
+  /** Spike 672 (phase-timed-drops): ms epoch window; null = always live. */
+  drop_start_at?: number;
+  drop_end_at?: number;
+  /** Spike 675 (phase-dutch-auction): descending primary price; nulls = fixed price. */
+  dutch_start_price?: number;
+  dutch_floor_price?: number;
+  dutch_end_at?: number;
+  /** Spike 674 (phase-collab-splits): N-way payees, sum bps <= 10000. */
+  split_payees?: Array<{ wallet: string; bps: number }>;
 };
 
 export type Offer = {
@@ -100,19 +119,7 @@ export function phase100RollbackNote(): string {
 }
 
 async function readJson<T extends object>(filePath: string): Promise<T> {
-  try {
-    return JSON.parse(await readFile(filePath, "utf8")) as T;
-  } catch {
-    return {} as T;
-  }
-}
-
-async function writeJson<T extends object>(
-  filePath: string,
-  data: T,
-): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
+  return readJsonFile<T>(filePath, {} as T);
 }
 
 function viewerAnalyticsKey(viewerWallet?: string): string | null {
@@ -147,39 +154,45 @@ export async function recordCreatorProfileView(
 
   const event = parsed.data;
   const now = opts.now ?? Date.now();
-  const store = await readJson<ProfileViewAnalyticsStore>(
+
+  // The counters are derived from the snapshot read here, so this has to be one
+  // locked mutation: an unguarded read-then-write dropped concurrent views.
+  return updateJsonFile<ProfileViewAnalyticsStore, CreatorProfileViewAnalytics>(
     serverDataJsonPath("marketProfileViews"),
-  );
-  const current = store[event.creator_wallet] ?? {
-    creator_wallet: event.creator_wallet,
-    total_views: 0,
-    unique_viewers: 0,
-    last_viewed_at: 0,
-    sources: {},
-    viewer_hashes: [],
-  };
+    {
+      mutate: (store) => {
+        const current = store[event.creator_wallet] ?? {
+          creator_wallet: event.creator_wallet,
+          total_views: 0,
+          unique_viewers: 0,
+          last_viewed_at: 0,
+          sources: {},
+          viewer_hashes: [],
+        };
 
-  const viewerKey = viewerAnalyticsKey(event.viewer_wallet);
-  const viewerHashes =
-    viewerKey && !current.viewer_hashes.includes(viewerKey)
-      ? [...current.viewer_hashes, viewerKey]
-      : current.viewer_hashes;
+        const viewerKey = viewerAnalyticsKey(event.viewer_wallet);
+        const viewerHashes =
+          viewerKey && !current.viewer_hashes.includes(viewerKey)
+            ? [...current.viewer_hashes, viewerKey]
+            : current.viewer_hashes;
 
-  const next: CreatorProfileViewAnalytics = {
-    ...current,
-    total_views: current.total_views + 1,
-    unique_viewers: viewerHashes.length,
-    last_viewed_at: now,
-    sources: {
-      ...current.sources,
-      [event.source]: (current.sources[event.source] ?? 0) + 1,
+        const next: CreatorProfileViewAnalytics = {
+          ...current,
+          total_views: current.total_views + 1,
+          unique_viewers: viewerHashes.length,
+          last_viewed_at: now,
+          sources: {
+            ...current.sources,
+            [event.source]: (current.sources[event.source] ?? 0) + 1,
+          },
+          viewer_hashes: viewerHashes,
+        };
+
+        store[event.creator_wallet] = next;
+        return next;
+      },
     },
-    viewer_hashes: viewerHashes,
-  };
-
-  store[event.creator_wallet] = next;
-  await writeJson(serverDataJsonPath("marketProfileViews"), store);
-  return next;
+  );
 }
 
 export async function getCreatorProfileViewAnalytics(
@@ -191,7 +204,7 @@ export async function getCreatorProfileViewAnalytics(
   return store[creatorWallet] ?? null;
 }
 
-// â”€â”€ Listings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Listings ──────────────────────────────────────────────────────────────────
 // Issue #36: backed by SQLite (indexed on status/listed_at, collection_id,
 // seller_wallet) instead of parsing the full market-listings.json array on
 // every call.
@@ -199,6 +212,7 @@ export async function getCreatorProfileViewAnalytics(
 type ListingRow = {
   id: string;
   token_id: number;
+  contract_id: string | null;
   collection_id: number;
   seller_wallet: string;
   price_phaselq: number;
@@ -210,12 +224,23 @@ type ListingRow = {
   status: ListingStatus;
   creator_wallet: string | null;
   royalty_bps: number | null;
+  edition_number: number | null;
+  edition_size: number | null;
+  is_artist_proof: number | null;
+  supply_mode: string | null;
+  drop_start_at: number | null;
+  drop_end_at: number | null;
+  dutch_start_price: number | null;
+  dutch_floor_price: number | null;
+  dutch_end_at: number | null;
+  split_payees_json: string | null;
 };
 
 function rowToListing(row: ListingRow): Listing {
   return {
     id: row.id,
     token_id: row.token_id,
+    contract_id: row.contract_id ?? undefined,
     collection_id: row.collection_id,
     seller_wallet: row.seller_wallet,
     price_phaselq: row.price_phaselq,
@@ -227,7 +252,184 @@ function rowToListing(row: ListingRow): Listing {
     status: row.status,
     creator_wallet: row.creator_wallet ?? undefined,
     royalty_bps: row.royalty_bps ?? undefined,
+    edition_number: row.edition_number ?? undefined,
+    edition_size: row.edition_size ?? undefined,
+    is_artist_proof: row.is_artist_proof === 1 ? true : undefined,
+    supply_mode: row.supply_mode === 'limited' || row.supply_mode === 'open' ? row.supply_mode : undefined,
+    drop_start_at: row.drop_start_at ?? undefined,
+    drop_end_at: row.drop_end_at ?? undefined,
+    dutch_start_price: row.dutch_start_price ?? undefined,
+    dutch_floor_price: row.dutch_floor_price ?? undefined,
+    dutch_end_at: row.dutch_end_at ?? undefined,
+    split_payees: (() => { try { const v = row.split_payees_json ? JSON.parse(row.split_payees_json) : undefined; return Array.isArray(v) ? v : undefined; } catch { return undefined; } })(),
   };
+}
+
+export function isPhaseEditionsEnabled(): boolean { return isFeatureEnabled('phase-editions'); }
+export function isPhaseCollabSplitsEnabled(): boolean { return isFeatureEnabled('phase-collab-splits'); }
+export function isPhaseTimedDropsEnabled(): boolean { return isFeatureEnabled('phase-timed-drops'); }
+export function isPhaseDutchAuctionEnabled(): boolean { return isFeatureEnabled('phase-dutch-auction'); }
+export function phaseEditionsRollbackNote(): string { return flagRollbackNote('phase-editions'); }
+export function phaseCollabSplitsRollbackNote(): string { return flagRollbackNote('phase-collab-splits'); }
+export function phaseTimedDropsRollbackNote(): string { return flagRollbackNote('phase-timed-drops'); }
+export function phaseDutchAuctionRollbackNote(): string { return flagRollbackNote('phase-dutch-auction'); }
+
+// ── Spike 574 (issue #438, phase-182): pool-denominated price reference ──
+// Listings are priced in PHASELQ. Displaying an XLM equivalent needs the pool's
+// spot AND the execution price for a specific size: a thin testnet pool moves
+// double digits, so a spot-only number is misleading. This is read-only; the
+// write path (offers) never blocks on a pool outage.
+export function isPhase182Enabled(wallet?: string): boolean {
+  return isFeatureEnabled('phase-182', wallet ? { wallet } : undefined);
+}
+
+export function phase182RollbackNote(): string {
+  return flagRollbackNote('phase-182');
+}
+
+export type PoolDenominatedPrice = {
+  price_phaselq: number
+  amount_phaselq: number
+  amount_xlm_spot: number
+  amount_xlm_execution: number
+  spot_price_xlm: number
+  execution_price_xlm: number
+  price_impact_bps: number
+  quote_hash: string
+  /** True when the quote came from a cached reserve snapshot after an outage. */
+  stale: boolean
+}
+
+/** Convert a PHASELQ-denominated listing (or offer) into both XLM readings. */
+export function denoteListingInPool(
+  pricePhaselq: number,
+  quote: {
+    spotPrice: number
+    executionPrice: number
+    priceImpactBps: number
+    amountInStroops: bigint
+    quoteHash: string
+    stale: boolean
+  },
+  amountPhaselq: number = pricePhaselq,
+): PoolDenominatedPrice {
+  return {
+    price_phaselq: pricePhaselq,
+    amount_phaselq: amountPhaselq,
+    amount_xlm_spot: amountPhaselq * quote.spotPrice,
+    amount_xlm_execution: amountPhaselq * quote.executionPrice,
+    spot_price_xlm: quote.spotPrice,
+    execution_price_xlm: quote.executionPrice,
+    price_impact_bps: quote.priceImpactBps,
+    quote_hash: quote.quoteHash,
+    stale: quote.stale,
+  }
+}
+
+/** Spike 673: 'Edition X/Y' label, or 'Artist Proof' for AP holds. Pure. */
+export function editionBadge(listing: Pick<Listing, 'edition_number' | 'edition_size' | 'is_artist_proof'>): string | null {
+  if (listing.is_artist_proof) return 'Artist Proof';
+  if (listing.edition_number != null && listing.edition_size != null) return `Edition ${listing.edition_number}/${listing.edition_size}`;
+  if (listing.edition_number != null) return `Edition ${listing.edition_number}`;
+  return null;
+}
+
+/** Spike 673: validate edition fields. AP entries must carry edition_number; limited needs size. */
+export function validateEditionFields(l: Pick<Listing, 'edition_number' | 'edition_size' | 'is_artist_proof' | 'supply_mode'>): { valid: boolean; error?: string } {
+  if (l.edition_number == null && l.edition_size == null && !l.is_artist_proof && !l.supply_mode) return { valid: true };
+  if (!isPhaseEditionsEnabled()) return { valid: false, error: 'phase-editions flag disabled' };
+  if (l.edition_number != null && (!Number.isInteger(l.edition_number) || l.edition_number < 1)) return { valid: false, error: 'edition_number must be a positive integer' };
+  if (l.edition_size != null && (!Number.isInteger(l.edition_size) || l.edition_size < 1)) return { valid: false, error: 'edition_size must be a positive integer' };
+  if (l.edition_number != null && l.edition_size != null && l.edition_number > l.edition_size) return { valid: false, error: 'edition_number exceeds edition_size' };
+  if (l.is_artist_proof && l.edition_number == null) return { valid: false, error: 'artist proof requires edition_number' };
+  if (l.supply_mode && l.supply_mode !== 'limited' && l.supply_mode !== 'open') return { valid: false, error: 'supply_mode must be limited or open' };
+  return { valid: true };
+}
+
+/** Spike 672: drop-window state machine. NULL window = always live (legacy). Pure. */
+export type DropStatus = 'live' | 'upcoming' | 'ended';
+export function dropStatusForListing(l: Pick<Listing, 'drop_start_at' | 'drop_end_at'>, now = Date.now()): DropStatus {
+  if (l.drop_start_at != null && now < l.drop_start_at) return 'upcoming';
+  if (l.drop_end_at != null && now > l.drop_end_at) return 'ended';
+  return 'live';
+}
+
+/** Spike 675: deterministic descending price. NULL range = fixed price_phaselq. Pure. */
+export function currentDutchPrice(l: Pick<Listing, 'price_phaselq' | 'dutch_start_price' | 'dutch_floor_price' | 'dutch_end_at' | 'listed_at'>, now = Date.now()): number {
+  if (!isPhaseDutchAuctionEnabled()) return l.price_phaselq;
+  const start = l.dutch_start_price ?? l.price_phaselq;
+  const floor = l.dutch_floor_price ?? l.price_phaselq;
+  const end = l.dutch_end_at;
+  if (end == null || end <= l.listed_at) return l.price_phaselq;
+  if (now <= l.listed_at) return start;
+  if (now >= end) return floor;
+  const t = (now - l.listed_at) / (end - l.listed_at);
+  return Math.max(floor, start - (start - floor) * t);
+}
+
+/** Spike 674: N-way split math. Remainder (dust) goes to first payee. Pure. */
+export type CollabPayee = { wallet: string; bps: number };
+export function computeCollabSplits(sale_amount_phaselq: number, payees: CollabPayee[]): Array<CollabPayee & { amount_phaselq: number }> {
+  const total = payees.reduce((a, p) => a + p.bps, 0);
+  if (total > 10000) throw new MarketStoreValidationError('VALIDATION_FAILED', 'split bps exceed 10000');
+  if (isDecimalAmountParsingEnabled()) {
+    const saleUnits = numberToStroops(sale_amount_phaselq);
+    let assignedUnits = 0n;
+    const exact = payees.map((p, i) => {
+      const units = i < payees.length - 1 ? bpsShare(saleUnits, p.bps, "half-up") : saleUnits - assignedUnits;
+      assignedUnits += units;
+      return { ...p, amount_phaselq: stroopsToNumber(units) };
+    });
+    try { void incSecurityCounter('collab_split_dust_rounded'); } catch {}
+    return exact;
+  }
+  let assigned = 0;
+  const out = payees.map((p, i) => {
+    if (i < payees.length - 1) {
+      const amt = Math.round(sale_amount_phaselq * (p.bps / 10000) * 1e7) / 1e7;
+      assigned += amt;
+      return { ...p, amount_phaselq: amt };
+    }
+    return { ...p, amount_phaselq: Math.round((sale_amount_phaselq - assigned) * 1e7) / 1e7 };
+  });
+  try { void incSecurityCounter('collab_split_dust_rounded'); } catch {}
+  return out;
+}
+
+export type SaleSplitRow = { id: string; listing_id: string; offer_id: string; payee_wallet: string; bps: number; amount_phaselq: number; created_at: number };
+
+/** Spike 674: fan-out record at settle/accept time. Skips when flag off (caller guards). */
+export async function recordCollabSplits(listing_id: string, offer_id: string, splits: Array<CollabPayee & { amount_phaselq: number }>): Promise<SaleSplitRow[]> {
+  const now = Date.now();
+  const rows = splits.map((sp) => ({ id: randomUUID(), listing_id, offer_id, payee_wallet: sp.wallet, bps: sp.bps, amount_phaselq: sp.amount_phaselq, created_at: now }));
+  const db = getDb();
+  for (const r of rows) {
+    db.prepare('INSERT INTO sale_splits (id, listing_id, offer_id, payee_wallet, bps, amount_phaselq, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(r.id, r.listing_id, r.offer_id, r.payee_wallet, r.bps, r.amount_phaselq, r.created_at);
+  }
+  try { void incSecurityCounter('collab_split_recorded'); } catch {}
+  return rows;
+}
+
+export async function getSaleSplitsForListing(listing_id: string): Promise<SaleSplitRow[]> {
+  return getDb().prepare('SELECT * FROM sale_splits WHERE listing_id = ? ORDER BY created_at ASC').all(listing_id) as SaleSplitRow[];
+}
+
+/** Spike 672: ordered queue ticket (FIFO by position). Unique per (collection, wallet) — replay-safe. */
+export async function issueDropTicket(collection_id: number, wallet: string): Promise<{ id: string; position: number }> {
+  const db = getDb();
+  const existing = db.prepare('SELECT id, position FROM drop_tickets WHERE collection_id = ? AND wallet = ?').get(collection_id, wallet) as { id: string; position: number } | undefined;
+  if (existing) return existing;
+  const maxRow = db.prepare('SELECT COALESCE(MAX(position), 0) AS m FROM drop_tickets WHERE collection_id = ?').get(collection_id) as { m: number };
+  const position = (maxRow?.m ?? 0) + 1;
+  const id = randomUUID();
+  db.prepare('INSERT INTO drop_tickets (id, collection_id, wallet, position, created_at) VALUES (?, ?, ?, ?, ?)').run(id, collection_id, wallet, position, Date.now());
+  try { void incSecurityCounter('drop_queue_ticket_issued'); } catch {}
+  return { id, position };
+}
+
+export async function redeemDropTicket(collection_id: number, wallet: string): Promise<boolean> {
+  const r = getDb().prepare('UPDATE drop_tickets SET redeemed_at = ? WHERE collection_id = ? AND wallet = ? AND redeemed_at IS NULL').run(Date.now(), collection_id, wallet);
+  return r.changes === 1;
 }
 
 export async function getListing(id: string): Promise<Listing | null> {
@@ -240,8 +442,10 @@ export async function getListing(id: string): Promise<Listing | null> {
 export type ListingFilters = {
   collection_id?: number;
   seller_wallet?: string;
-  sort?: "price_asc" | "price_desc" | "newest";
+  sort?: "price_asc" | "price_desc" | "newest" | "edition_asc";
   status?: ListingStatus;
+  drop?: 'live' | 'upcoming' | 'ended';
+  exclude_artist_proof?: boolean;
 };
 
 export async function getListings(
@@ -260,13 +464,34 @@ export async function getListings(
     params.push(filters.seller_wallet);
   }
 
+  if (filters?.exclude_artist_proof) {
+    conditions.push("(is_artist_proof IS NULL OR is_artist_proof = 0)");
+  }
+  if (filters?.drop) {
+    const now = Date.now();
+    if (filters.drop === 'live') {
+      conditions.push('(drop_start_at IS NULL OR drop_start_at <= ?)');
+      params.push(now);
+      conditions.push('(drop_end_at IS NULL OR drop_end_at >= ?)');
+      params.push(now);
+    } else if (filters.drop === 'upcoming') {
+      conditions.push('drop_start_at IS NOT NULL AND drop_start_at > ?');
+      params.push(now);
+    } else {
+      conditions.push('drop_end_at IS NOT NULL AND drop_end_at < ?');
+      params.push(now);
+    }
+  }
+
   const sort = filters?.sort ?? "newest";
   const orderBy =
     sort === "price_asc"
       ? "price_phaselq ASC"
       : sort === "price_desc"
         ? "price_phaselq DESC"
-        : "listed_at DESC";
+        : sort === "edition_asc"
+          ? "edition_number ASC NULLS LAST, listed_at DESC"
+          : "listed_at DESC";
 
   const rows = getDb()
     .prepare(
@@ -282,17 +507,54 @@ export async function createListing(
 ): Promise<Listing> {
   const listing: Listing = {
     ...data,
+    contract_id: isFeatureEnabled("phase-177") ? phaseProtocolContractIdForServer() : undefined,
     id: randomUUID(),
     listed_at: Date.now(),
     status: "active",
   };
+  const editionCheck = validateEditionFields(listing);
+  if (!editionCheck.valid) {
+    throw new MarketStoreValidationError("VALIDATION_FAILED", editionCheck.error ?? "invalid edition fields");
+  }
+  if (listing.split_payees && listing.split_payees.length > 0) {
+    if (!isPhaseCollabSplitsEnabled()) {
+      throw new MarketStoreValidationError("FLAG_DISABLED", "phase-collab-splits flag disabled");
+    }
+    const total = listing.split_payees.reduce((a, p) => a + p.bps, 0);
+    if (total > 10000) throw new MarketStoreValidationError("VALIDATION_FAILED", "split bps exceed 10000");
+    if (listing.split_payees.length > 20) throw new MarketStoreValidationError("VALIDATION_FAILED", "too many payees (max 20)");
+  }
+  // phase-140: validate royalty fields when supplied
+  if (listing.creator_wallet != null || listing.royalty_bps != null) {
+    if (!isPhase140Enabled()) {
+      throw new MarketStoreValidationError("FLAG_DISABLED", "phase-140 flag disabled");
+    }
+    if (listing.creator_wallet != null && !StrKey.isValidEd25519PublicKey(listing.creator_wallet)) {
+      throw new MarketStoreValidationError("VALIDATION_FAILED", "creator_wallet must be a valid Stellar public key");
+    }
+    if (listing.royalty_bps != null) {
+      if (!Number.isInteger(listing.royalty_bps) || listing.royalty_bps < 0 || listing.royalty_bps > 10000) {
+        throw new MarketStoreValidationError("VALIDATION_FAILED", "royalty_bps must be an integer between 0 and 10000");
+      }
+    }
+    if (listing.creator_wallet == null && listing.royalty_bps != null) {
+      throw new MarketStoreValidationError("VALIDATION_FAILED", "royalty_bps requires creator_wallet");
+    }
+  }
+  if ((listing.drop_start_at != null || listing.drop_end_at != null) && !isPhaseTimedDropsEnabled()) {
+    throw new MarketStoreValidationError("FLAG_DISABLED", "phase-timed-drops flag disabled");
+  }
+  if ((listing.dutch_start_price != null || listing.dutch_floor_price != null || listing.dutch_end_at != null) && !isPhaseDutchAuctionEnabled()) {
+    throw new MarketStoreValidationError("FLAG_DISABLED", "phase-dutch-auction flag disabled");
+  }
   getDb()
     .prepare(
       `INSERT INTO listings
          (id, token_id, collection_id, seller_wallet, price_phaselq,
           accepts_offers, min_offer, image, name, listed_at, status,
-          creator_wallet, royalty_bps)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          creator_wallet, royalty_bps, edition_number, edition_size, is_artist_proof, supply_mode,
+          drop_start_at, drop_end_at, dutch_start_price, dutch_floor_price, dutch_end_at, split_payees_json, contract_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       listing.id,
@@ -308,6 +570,17 @@ export async function createListing(
       listing.status,
       listing.creator_wallet ?? null,
       listing.royalty_bps ?? null,
+      listing.edition_number ?? null,
+      listing.edition_size ?? null,
+      listing.is_artist_proof ? 1 : 0,
+      listing.supply_mode ?? null,
+      listing.drop_start_at ?? null,
+      listing.drop_end_at ?? null,
+      listing.dutch_start_price ?? null,
+      listing.dutch_floor_price ?? null,
+      listing.dutch_end_at ?? null,
+      listing.split_payees ? JSON.stringify(listing.split_payees) : null,
+      listing.contract_id ?? null,
     );
   return listing;
 }
@@ -328,6 +601,11 @@ async function setListingStatus(
 }
 
 export async function cancelListing(id: string): Promise<Listing | null> {
+  const listing = await getListing(id);
+  if (listing) {
+    const { assertNoLegalHold } = await import("@/lib/legal-hold");
+    await assertNoLegalHold("listing", id, "cancel_listing", listing.seller_wallet);
+  }
   return setListingStatus(id, "cancelled");
 }
 
@@ -347,7 +625,7 @@ export async function cancelListingsForCollection(collectionId: number): Promise
   return result.changes;
 }
 
-// â”€â”€ Offers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Offers ────────────────────────────────────────────────────────────────────
 // Issue #36: backed by SQLite (indexed on listing_id, buyer_wallet, and
 // status+expires_at for expiration scans) instead of a full-array scan.
 // Expiration remains computed lazily on read (matching prior behavior): a
@@ -457,13 +735,70 @@ export async function updateOfferStatus(
 ): Promise<Offer | null> {
   const db = getDb();
   const result = db
-    .prepare("UPDATE offers SET status = ? WHERE id = ?")
-    .run(status, offer_id);
+    .prepare("UPDATE offers SET status = ?, decided_at = ? WHERE id = ?")
+    .run(status, status === "accepted" || status === "rejected" ? Date.now() : null, offer_id);
   if (result.changes === 0) return null;
   const row = db
     .prepare("SELECT * FROM offers WHERE id = ?")
     .get(offer_id) as OfferRow;
   return rowToOffer(row, Date.now());
+}
+
+/** One SQLite transaction owns the decision and its reporting evidence. */
+export function decideOfferAtomic(listingId: string, offerId: string, wallet: string, action: "accept" | "reject") {
+  const db = getDb()
+  let taxRecords = 0
+  db.exec("BEGIN IMMEDIATE")
+  try {
+    const listingRow = db.prepare("SELECT * FROM listings WHERE id=?").get(listingId) as ListingRow | undefined
+    const offerRow = db.prepare("SELECT * FROM offers WHERE id=? AND listing_id=?").get(offerId, listingId) as OfferRow | undefined
+    if (!listingRow || !offerRow || listingRow.seller_wallet !== wallet) throw new Error("FORBIDDEN")
+    const now = Date.now()
+    if (listingRow.status !== "active" || offerRow.status !== "pending" || offerRow.expires_at <= now || offerRow.buyer_wallet === wallet) {
+      incSecurityCounter("market_accept_conflict")
+      throw Object.assign(new Error("OFFER_CONFLICT"), { current_status: offerRow.expires_at <= now ? "expired" : offerRow.status })
+    }
+    const status = action === "accept" ? "accepted" : "rejected"
+    db.prepare("UPDATE offers SET status=?, decided_at=? WHERE id=? AND status='pending'").run(status, now, offerId)
+    if (action === "accept") {
+      db.prepare("UPDATE listings SET status='sold' WHERE id=? AND status='active'").run(listingId)
+      db.prepare("UPDATE offers SET status='rejected', decided_at=? WHERE listing_id=? AND id<>? AND status='pending'").run(now, listingId, offerId)
+      if (isFeatureEnabled("phase-177")) {
+        const listing = rowToListing(listingRow)
+        const split = isPhase140Enabled() ? computeRoyaltySplit(listing, offerRow.amount_phaselq) : { seller_amount_phaselq: offerRow.amount_phaselq, royalty_amount_phaselq: 0 }
+        const asset = `${listing.contract_id ?? `unknown-contract:${listing.id}`}:${listing.token_id}`
+        // Offer acceptance is an agreement, not a chain receipt. Never report it as verified proceeds.
+        const common = { asset, occurredAt: now, verified: false, washFlagged: !!offerRow.wash_flagged }
+        taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:seller`, wallet, kind: "disposal", amountStroops: phaselqToStroopString(split.seller_amount_phaselq) }, false))
+        taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:buyer`, wallet: offerRow.buyer_wallet, kind: "acquisition", amountStroops: phaselqToStroopString(offerRow.amount_phaselq) }, false))
+        if (listing.creator_wallet && split.royalty_amount_phaselq > 0) {
+          taxRecords += Number(recordTaxEvent({ ...common, eventKey: `offer:${offerId}:royalty`, wallet: listing.creator_wallet, kind: "royalty", amountStroops: phaselqToStroopString(split.royalty_amount_phaselq) }, false))
+          // phase-140: append-only payout ledger row within the same transaction
+          db.prepare(
+            `INSERT INTO royalty_payouts
+               (id, listing_id, offer_id, creator_wallet, seller_wallet,
+                sale_amount_phaselq, royalty_bps, royalty_amount_phaselq,
+                seller_amount_phaselq, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            randomUUID(),
+            listingId,
+            offerId,
+            listing.creator_wallet,
+            listing.seller_wallet,
+            offerRow.amount_phaselq,
+            split.royalty_bps,
+            split.royalty_amount_phaselq,
+            split.seller_amount_phaselq,
+            now,
+          )
+        }
+      }
+    }
+    db.exec("COMMIT")
+    if (taxRecords) incSecurityCounter("tax_event_recorded", taxRecords)
+    return rowToOffer({ ...offerRow, status }, now)
+  } catch (error) { db.exec("ROLLBACK"); throw error }
 }
 
 export async function getOffersByBuyer(
@@ -481,7 +816,7 @@ export async function getOffersByBuyer(
   return rows.map((row) => rowToOffer(row, now));
 }
 
-// â”€â”€ Issue #88 (phase-139): collection-level offer books â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Issue #88 (phase-139): collection-level offer books ────────────────────
 //
 // Buyers previously had to open each token's listing individually to see
 // what it was being offered, and to make a bulk bid across a collection had
@@ -492,7 +827,7 @@ export async function getOffersByBuyer(
 // unchanged, so accept/reject/expiry behave exactly as before).
 //
 // Feature flag: phase-139 (NEXT_PUBLIC_FEATURE_PHASE_139 / FEATURE_PHASE_139)
-// Rollback: unset the flag â†’ the offer-book route returns 404 and bulk bids
+// Rollback: unset the flag → the offer-book route returns 404 and bulk bids
 //           are rejected; per-listing offers (`/api/market/[id]/offers`) are
 //           untouched either way. No data migration to undo.
 
@@ -644,10 +979,10 @@ export async function createBulkOffer(
   return { created, skipped };
 }
 
-// â”€â”€ Issue #89 (phase-140): royalty enforcement on secondary sales â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Issue #89 (phase-140): royalty enforcement on secondary sales ──────────
 //
 // Accepting an offer marked the listing sold but moved no value to the
-// original creator on a resale â€” only the current seller and buyer were
+// original creator on a resale — only the current seller and buyer were
 // party to the transaction. This module computes the creator/seller split
 // for a listing's `royalty_bps` (set at listing time, see `createListing`)
 // and records it as a settlement-ready ledger line at accept time. It is a
@@ -656,7 +991,7 @@ export async function createBulkOffer(
 // creator are the same wallet.
 //
 // Feature flag: phase-140 (NEXT_PUBLIC_FEATURE_PHASE_140 / FEATURE_PHASE_140)
-// Rollback: unset the flag â†’ `createListing`/`app/api/market` stop accepting
+// Rollback: unset the flag → `createListing`/`app/api/market` stop accepting
 //           `creator_wallet`/`royalty_bps`, and offer-accept stops computing
 //           a split (money continues to move 100% to the seller, pre-140
 //           behavior). Existing `royalty_payouts` rows are historical record
@@ -685,6 +1020,16 @@ export function computeRoyaltySplit(
   const isSecondary =
     !!listing.creator_wallet && listing.creator_wallet !== listing.seller_wallet;
   const royaltyBps = isSecondary ? (listing.royalty_bps ?? 0) : 0;
+  if (isDecimalAmountParsingEnabled()) {
+    const saleUnits = numberToStroops(sale_amount_phaselq);
+    const royaltyUnits = bpsShare(saleUnits, royaltyBps, "half-up");
+    return {
+      is_secondary_sale: isSecondary,
+      royalty_bps: royaltyBps,
+      royalty_amount_phaselq: stroopsToNumber(royaltyUnits),
+      seller_amount_phaselq: stroopsToNumber(saleUnits - royaltyUnits),
+    };
+  }
   const royaltyAmount = Math.round(sale_amount_phaselq * (royaltyBps / 10_000) * 1e7) / 1e7;
   return {
     is_secondary_sale: isSecondary,
@@ -733,7 +1078,7 @@ function rowToRoyaltyPayout(row: RoyaltyPayoutRow): RoyaltyPayout {
   };
 }
 
-/** Records a non-zero royalty split for an accepted offer. Callers only invoke this for a secondary sale with `royalty_bps > 0` â€” a primary sale has nothing to record. */
+/** Records a non-zero royalty split for an accepted offer. Callers only invoke this for a secondary sale with `royalty_bps > 0` — a primary sale has nothing to record. */
 export async function recordRoyaltyPayout(
   listing: Pick<Listing, "id" | "seller_wallet" | "creator_wallet">,
   offer_id: string,
@@ -784,7 +1129,7 @@ export async function getRoyaltyPayoutsForCreator(
   return rows.map(rowToRoyaltyPayout);
 }
 
-// â”€â”€ Issue #103: Mute and Block Primitives (phase-85) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Issue #103: Mute and Block Primitives (phase-85) ─────────────────────────
 
 type BlockedWallet = { wallet: string; blocked_at: number; reason?: string };
 type MutedWallet = { wallet: string; muted_at: number; expires_at?: number };
@@ -807,13 +1152,15 @@ export async function blockWallet(
   reason?: string,
 ): Promise<void> {
   if (!isPhase85Enabled()) throw new Error("phase-85 disabled");
-  const store = await readJson<BlockListStore>(serverDataJsonPath("blockList"));
-  const list = store[blocker] ?? { blocked: [], muted: [] };
-  if (!list.blocked.some((b) => b.wallet === target)) {
-    list.blocked.push({ wallet: target, blocked_at: Date.now(), reason });
-  }
-  store[blocker] = list;
-  await writeJson(serverDataJsonPath("blockList"), store);
+  await updateJsonFile<BlockListStore>(serverDataJsonPath("blockList"), {
+    mutate: (store) => {
+      const list = store[blocker] ?? { blocked: [], muted: [] };
+      if (!list.blocked.some((b) => b.wallet === target)) {
+        list.blocked.push({ wallet: target, blocked_at: Date.now(), reason });
+      }
+      store[blocker] = list;
+    },
+  });
 }
 
 export async function unblockWallet(
@@ -821,11 +1168,13 @@ export async function unblockWallet(
   target: string,
 ): Promise<void> {
   if (!isPhase85Enabled()) throw new Error("phase-85 disabled");
-  const store = await readJson<BlockListStore>(serverDataJsonPath("blockList"));
-  const list = store[blocker] ?? { blocked: [], muted: [] };
-  list.blocked = list.blocked.filter((b) => b.wallet !== target);
-  store[blocker] = list;
-  await writeJson(serverDataJsonPath("blockList"), store);
+  await updateJsonFile<BlockListStore>(serverDataJsonPath("blockList"), {
+    mutate: (store) => {
+      const list = store[blocker] ?? { blocked: [], muted: [] };
+      list.blocked = list.blocked.filter((b) => b.wallet !== target);
+      store[blocker] = list;
+    },
+  });
 }
 
 export async function muteWallet(
@@ -834,16 +1183,18 @@ export async function muteWallet(
   durationMs?: number,
 ): Promise<void> {
   if (!isPhase85Enabled()) throw new Error("phase-85 disabled");
-  const store = await readJson<BlockListStore>(serverDataJsonPath("blockList"));
-  const list = store[muter] ?? { blocked: [], muted: [] };
-  list.muted = list.muted.filter((m) => m.wallet !== target);
-  list.muted.push({
-    wallet: target,
-    muted_at: Date.now(),
-    expires_at: durationMs ? Date.now() + durationMs : undefined,
+  await updateJsonFile<BlockListStore>(serverDataJsonPath("blockList"), {
+    mutate: (store) => {
+      const list = store[muter] ?? { blocked: [], muted: [] };
+      list.muted = list.muted.filter((m) => m.wallet !== target);
+      list.muted.push({
+        wallet: target,
+        muted_at: Date.now(),
+        expires_at: durationMs ? Date.now() + durationMs : undefined,
+      });
+      store[muter] = list;
+    },
   });
-  store[muter] = list;
-  await writeJson(serverDataJsonPath("blockList"), store);
 }
 
 export async function unmuteWallet(
@@ -851,11 +1202,13 @@ export async function unmuteWallet(
   target: string,
 ): Promise<void> {
   if (!isPhase85Enabled()) throw new Error("phase-85 disabled");
-  const store = await readJson<BlockListStore>(serverDataJsonPath("blockList"));
-  const list = store[muter] ?? { blocked: [], muted: [] };
-  list.muted = list.muted.filter((m) => m.wallet !== target);
-  store[muter] = list;
-  await writeJson(serverDataJsonPath("blockList"), store);
+  await updateJsonFile<BlockListStore>(serverDataJsonPath("blockList"), {
+    mutate: (store) => {
+      const list = store[muter] ?? { blocked: [], muted: [] };
+      list.muted = list.muted.filter((m) => m.wallet !== target);
+      store[muter] = list;
+    },
+  });
 }
 
 export async function isWalletBlocked(
@@ -887,5 +1240,127 @@ export async function filterBlockedOffers(
   const list = await getBlockList(viewer_wallet);
   const blocked = new Set(list.blocked.map((b) => b.wallet));
   return offers.filter((o) => !blocked.has(o.buyer_wallet));
+}
+
+
+// ── phase-142 / phase-143: sale comps ─────────────────────────────────────────
+//
+// A "sale" in this market is an accepted offer: that is the only row recording
+// a price two parties agreed on. royalty_payouts is keyed by offer_id and holds
+// the same sale again (split into creator/seller parts), so comps are read from
+// offers only and joined to royalty_payouts by offer_id where the split matters
+// — summing both tables would count every secondary sale twice.
+//
+// Pending offers are bids, not sales. Expiry is lazy (rowToOffer reports a
+// stale pending row as expired without writing it), so every bid query filters
+// `expires_at > now` itself rather than trusting `status = 'pending'`.
+
+export type SaleComp = {
+  offer_id: string;
+  listing_id: string;
+  token_id: number;
+  collection_id: number;
+  seller_wallet: string;
+  buyer_wallet: string;
+  amount_phaselq: number;
+  sold_at: number;
+  wash_flagged: boolean;
+  wash_reason: string | null;
+};
+
+type SaleCompRow = Omit<SaleComp, "wash_flagged"> & { wash_flagged: number };
+
+const SALE_COMP_LIMIT = 500;
+
+export function getSaleComps(
+  scope: { collection_id?: number; token_id?: number },
+  opts: { since?: number; limit?: number } = {},
+): SaleComp[] {
+  const conditions = ["o.status = 'accepted'", "COALESCE(o.decided_at, o.created_at) >= ?"];
+  const params: unknown[] = [opts.since ?? 0];
+  if (scope.collection_id !== undefined) {
+    conditions.push("l.collection_id = ?");
+    params.push(scope.collection_id);
+  }
+  if (scope.token_id !== undefined) {
+    conditions.push("l.token_id = ?");
+    params.push(scope.token_id);
+  }
+  const limit = Math.min(SALE_COMP_LIMIT, Math.max(1, Math.floor(opts.limit ?? SALE_COMP_LIMIT)));
+  const rows = getDb()
+    .prepare(
+      `SELECT o.id AS offer_id, o.listing_id, l.token_id, l.collection_id, l.seller_wallet,
+              o.buyer_wallet, o.amount_phaselq,
+              COALESCE(o.decided_at, o.created_at) AS sold_at,
+              o.wash_flagged, o.wash_reason
+         FROM offers o
+         JOIN listings l ON l.id = o.listing_id
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY sold_at DESC
+        LIMIT ?`,
+    )
+    .all(...params, limit) as SaleCompRow[];
+  return rows.map((row) => ({ ...row, wash_flagged: row.wash_flagged === 1 }));
+}
+
+/** Active asks in a collection, cheapest first. */
+export function getActiveAsks(
+  collection_id: number,
+  limit = 200,
+): Array<{ listing_id: string; token_id: number; seller_wallet: string; price_phaselq: number }> {
+  return getDb()
+    .prepare(
+      `SELECT id AS listing_id, token_id, seller_wallet, price_phaselq
+         FROM listings WHERE status = 'active' AND collection_id = ?
+        ORDER BY price_phaselq ASC LIMIT ?`,
+    )
+    .all(collection_id, Math.min(500, Math.max(1, limit))) as Array<{
+    listing_id: string;
+    token_id: number;
+    seller_wallet: string;
+    price_phaselq: number;
+  }>;
+}
+
+/** Live (not lazily-expired), non-wash bids on a collection's active listings. */
+export function getLiveBids(
+  collection_id: number,
+  now: number = Date.now(),
+): Array<{ offer_id: string; amount_phaselq: number }> {
+  return getDb()
+    .prepare(
+      `SELECT o.id AS offer_id, o.amount_phaselq
+         FROM offers o JOIN listings l ON l.id = o.listing_id
+        WHERE l.collection_id = ? AND l.status = 'active'
+          AND o.status = 'pending' AND o.expires_at > ? AND o.wash_flagged = 0
+        ORDER BY o.amount_phaselq DESC LIMIT 200`,
+    )
+    .all(collection_id, now) as Array<{ offer_id: string; amount_phaselq: number }>;
+}
+
+/** Tokens with a wash-flagged accepted sale since `since` — kept off curated walls. */
+export function getWashFlaggedTokenIds(tokenIds: readonly number[], since: number): Set<number> {
+  if (tokenIds.length === 0) return new Set();
+  const placeholders = tokenIds.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(
+      `SELECT DISTINCT l.token_id FROM offers o JOIN listings l ON l.id = o.listing_id
+        WHERE o.status = 'accepted' AND o.wash_flagged = 1
+          AND COALESCE(o.decided_at, o.created_at) >= ?
+          AND l.token_id IN (${placeholders})`,
+    )
+    .all(since, ...tokenIds) as Array<{ token_id: number }>;
+  return new Set(rows.map((r) => r.token_id));
+}
+
+/**
+ * phase-167 / Spike 634: Export marketplace listings and offers for GDPR Article 20 data portability.
+ */
+export async function exportMarketForWallet(
+  wallet: string,
+): Promise<{ listings: Listing[]; offers_as_buyer: Offer[] }> {
+  const listings = await getListings({ seller_wallet: wallet });
+  const offers_as_buyer = await getOffersByBuyer(wallet);
+  return { listings, offers_as_buyer };
 }
 

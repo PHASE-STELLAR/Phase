@@ -1,3 +1,6 @@
+import { complianceGate } from "@/lib/compliance"
+import { Transaction, TransactionBuilder } from "@stellar/stellar-sdk"
+import { resolveStellarNetwork } from "@/lib/stellar-network"
 import { NextRequest, NextResponse } from "next/server"
 import { z } from "zod"
 import { logHorizonSubmitError } from "@/lib/stellar"
@@ -68,6 +71,22 @@ export async function POST(req: NextRequest) {
   const isBatch = (parsed.data.signedXdrs?.length ?? 0) > 0
   const signedXdrs = isBatch ? parsed.data.signedXdrs!.map((x) => x.trim()) : [parsed.data.signedXdr!.trim()]
 
+  if (isFeatureEnabled("phase-176")) {
+    for (const signedXdr of signedXdrs) {
+      let transaction
+      try { transaction = TransactionBuilder.fromXDR(signedXdr, resolveStellarNetwork().passphrase) }
+      catch { return NextResponse.json({ code: "INVALID_XDR" }, { status: 400 }) }
+      if (!(transaction instanceof Transaction) || transaction.operations.some(op => op.type !== "changeTrust")) {
+        return NextResponse.json({ code: "TRUSTLINE_OPERATIONS_ONLY" }, { status: 400 })
+      }
+      const wallets = new Set([transaction.source, ...transaction.operations.map(op => op.source ?? transaction.source)])
+      for (const wallet of wallets) {
+        const block = await complianceGate(wallet, "0", "trustline")
+        if (block) return block
+      }
+    }
+  }
+
   // phase-119: optional CID integrity verification (additive, does not block legacy callers).
   // Only applies to the single-XDR legacy path.
   if (!isBatch && isPhase119Enabled() && parsed.data.cid) {
@@ -123,7 +142,7 @@ export async function POST(req: NextRequest) {
   }
   // Drop internal `cause` before returning to the client.
   const publicResults = results.map((r) =>
-    r.ok ? r : { signedXdr: r.signedXdr, ok: r.ok, error: r.error, attempts: r.attempts },
+    r.ok ? r : { signedXdr: r.signedXdr, ok: r.ok, error: r.error, code: r.resultCode, attempts: r.attempts },
   )
 
   // phase-119 observability headers (legacy single-XDR path only)
@@ -141,7 +160,7 @@ export async function POST(req: NextRequest) {
   // Legacy single-XDR response shape — unchanged for existing callers.
   const single = results[0]!
   if (!single.ok) {
-    return NextResponse.json({ error: single.error }, { status: 502, headers })
+    return NextResponse.json({ error: single.error, code: single.resultCode }, { status: 502, headers })
   }
   return NextResponse.json({ ok: true, hash: single.hash }, { headers })
 }

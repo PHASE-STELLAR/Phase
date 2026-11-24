@@ -9,6 +9,8 @@ import {
 } from "@/lib/market-store"
 import { createNotification } from "@/lib/notification-store"
 import { createApiRequestContext } from "@/lib/api-observability"
+import { getSaleComps } from "@/lib/market-store"
+import { PRICING, getCollectionPriceBand, isPricingOracleEnabled } from "@/lib/pricing-oracle"
 import { z } from "zod"
 
 export const runtime = "nodejs"
@@ -37,8 +39,13 @@ export async function GET(
 
   try {
     const book = await getCollectionOfferBook(collection_id)
+    // phase-143: bids alone say what buyers hope to pay; the band says what
+    // recent non-wash sales actually cleared at. Null on a thin market.
+    const priceBand = isPricingOracleEnabled()
+      ? getCollectionPriceBand(getSaleComps({ collection_id }, { since: Date.now() - PRICING.LOOKBACK_MS }))
+      : undefined
     return api.json(
-      { offerBook: book },
+      { offerBook: book, ...(priceBand !== undefined ? { priceBand } : {}) },
       { event: "market.offer_book.loaded", metadata: { collection_id } },
     )
   } catch (error) {
@@ -122,3 +129,7 @@ export async function POST(
     return api.errorJson(error, 500, "market.bulk_offer.create_failed")
   }
 }
+
+// ── Spike 673/675: book levels stay price-keyed; edition/dutch-aware sorting is a
+// presentation concern (see GET /api/market?sort=edition_asc + currentDutchPrice).
+// No aggregation change when flags off.

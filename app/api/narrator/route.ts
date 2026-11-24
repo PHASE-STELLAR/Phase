@@ -14,6 +14,20 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
 
+const NARRATOR_TIMEOUT_MS = Number(process.env.NARRATOR_TIMEOUT_MS ?? 25_000)
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, rej) => {
+    timer = setTimeout(() => rej(new Error(`${label}_TIMEOUT: exceeded ${ms}ms`)), ms)
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 const SAFETY_SETTINGS = (
   [
     HarmCategory.HARM_CATEGORY_HATE_SPEECH,
@@ -36,6 +50,31 @@ function narratorModelId(): string {
   // Avoid gemini-1.5-* — many accounts return 404 in v1beta
   if (fromEnv && fromEnv.length > 0 && !fromEnv.startsWith("gemini-1.5")) return fromEnv
   return "gemini-2.0-flash"
+}
+
+function narratorModelCandidates(): string[] {
+  const FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.0-pro"] as const
+  const primary = narratorModelId()
+  const seen = new Set<string>()
+  const models: string[] = []
+
+  const add = (id: string) => {
+    const cleaned = id.trim().replace(/^models\//i, "").trim()
+    if (!cleaned || seen.has(cleaned)) return
+    seen.add(cleaned)
+    models.push(cleaned)
+  }
+
+  add(primary)
+  for (const m of FALLBACK_MODELS) add(m)
+  return models
+}
+
+function isNonRetryableGeminiError(error: unknown): boolean {
+  const e = error as { status?: number; message?: string }
+  const msg = (typeof e?.message === "string" ? e.message : String(error ?? "")).toLowerCase()
+  if (typeof e?.status === "number" && (e.status === 401 || e.status === 403)) return true
+  return /api key not valid|invalid api key|permission denied|unauthenticated|forbidden\b/i.test(msg)
 }
 
 type NarratorBody = {
@@ -107,25 +146,62 @@ export async function POST(request: NextRequest) {
     `${tone} No headers or markdown.`
 
   const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel(
-    {
-      model: narratorModelId(),
-      safetySettings: SAFETY_SETTINGS,
-    },
-    { apiVersion: "v1beta" },
-  )
+  const modelCandidates = narratorModelCandidates()
 
-  let narrative: string
-  try {
-    const result = await model.generateContent(systemPrompt)
-    narrative = result.response.text().trim()
-    if (!narrative) {
-      return NextResponse.json({ error: "Gemini no devolvió texto" }, { status: 500 })
+  let narrative: string = ""
+  let lastError: unknown
+
+  // Try each model candidate in sequence until one succeeds
+  for (let i = 0; i < modelCandidates.length; i++) {
+    const modelId = modelCandidates[i]!
+    try {
+      const model = genAI.getGenerativeModel(
+        {
+          model: modelId,
+          safetySettings: SAFETY_SETTINGS,
+        },
+        { apiVersion: "v1beta" },
+      )
+
+      const result = await withTimeout(
+        model.generateContent(systemPrompt),
+        NARRATOR_TIMEOUT_MS,
+        "NARRATOR"
+      )
+      narrative = result.response.text().trim()
+
+      if (!narrative) {
+        throw new Error("Gemini no devolvió texto")
+      }
+
+      // Success - break out of retry loop
+      break
+    } catch (e) {
+      lastError = e
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error(`[narrator] Model ${modelId} failed (attempt ${i + 1}/${modelCandidates.length})`, {
+        tokenId,
+        collectionId,
+        msg
+      })
+
+      // If this is a non-retryable error (auth/permission), stop trying other models
+      if (isNonRetryableGeminiError(e)) {
+        return NextResponse.json({ error: `Gemini error: ${msg}` }, { status: 500 })
+      }
+
+      // If this was the last model, return error
+      if (i === modelCandidates.length - 1) {
+        return NextResponse.json({ error: `Gemini error: ${msg}` }, { status: 500 })
+      }
+
+      // Otherwise, continue to next model
     }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    console.error("[narrator] Gemini failed", { tokenId, collectionId, msg })
-    return NextResponse.json({ error: `Gemini error: ${msg}` }, { status: 500 })
+  }
+
+  if (!narrative) {
+    const msg = lastError instanceof Error ? lastError.message : String(lastError)
+    return NextResponse.json({ error: `All models failed: ${msg}` }, { status: 500 })
   }
 
   const continuity = await checkNarrativeContinuity(

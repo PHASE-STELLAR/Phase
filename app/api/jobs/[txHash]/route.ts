@@ -17,6 +17,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getGenerationJobByTxHash } from "@/lib/generation-job-store"
+import { isAnalyticsWarehouseEnabled, recordWarehouseEvent } from "@/lib/analytics-warehouse"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -43,6 +44,15 @@ export async function GET(
         { found: false },
         { status: 404, headers: { "Cache-Control": "no-store" } },
       )
+    }
+
+    if (isAnalyticsWarehouseEnabled(job.payerAddress)) {
+      void recordWarehouseEvent({
+        surface: "forge",
+        stage: "forge_polling",
+        wallet: job.payerAddress ?? null,
+        metadata: { jobId: job.id, txHash: job.txHash, status: job.status },
+      }).catch(() => {})
     }
 
     return NextResponse.json(

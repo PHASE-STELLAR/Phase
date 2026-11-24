@@ -12,76 +12,98 @@
  * (falls back to /tmp on Vercel where project dir is read-only).
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import path from "node:path"
-import { randomUUID } from "node:crypto"
-import { serverDataJsonPath } from "@/lib/server-data-paths"
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { serverDataJsonPath } from "@/lib/server-data-paths";
+import {
+  isAnalyticsWarehouseEnabled,
+  recordWarehouseEvent,
+} from "@/lib/analytics-warehouse";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type GenerationJobStatus =
-  | "pending"          // job created, NanoBanana task submitted
-  | "processing"       // NanoBanana is working (webhook not yet received)
+  | "pending" // job created, NanoBanana task submitted
+  | "processing" // NanoBanana is working (webhook not yet received)
   | "webhook_received" // webhook delivered — pipeline continuing (IPFS, mint)
-  | "completed"        // full pipeline succeeded
-  | "failed"           // terminal failure
+  | "completed" // full pipeline succeeded
+  | "failed"; // terminal failure
 
 export type GenerationJob = {
   /** Unique job id (UUID) */
-  id: string
+  id: string;
   /** NanoBanana taskId returned at submission */
-  taskId: string
+  taskId: string;
   /** Settlement tx hash — primary lookup key */
-  txHash: string
+  txHash: string;
   /** Payer wallet address */
-  payerAddress?: string
+  payerAddress?: string;
   /** User prompt */
-  prompt: string
+  prompt: string;
   /** Image style mode forwarded from forge UI */
-  imageStyleMode?: string
+  imageStyleMode?: string;
   /** Collection id (optional) */
-  collectionId?: number
+  collectionId?: number;
   /** Output language */
-  lang?: string
-  status: GenerationJobStatus
+  lang?: string;
+  status: GenerationJobStatus;
   /** Resolved image URL (NanoBanana CDN URL) */
-  imageUrl?: string
+  imageUrl?: string;
   /** Full pipeline result (available when status === 'completed') */
   result?: {
-    imageUrl: string
-    image_url: string
-    lore: string
-    metadataStandard: string
-    image_source: string
-    metadataUri?: string
-    cid?: string | null
-  }
+    imageUrl: string;
+    image_url: string;
+    lore: string;
+    metadataStandard: string;
+    image_source: string;
+    metadataUri?: string;
+    cid?: string | null;
+  };
   /** Human-readable error detail */
-  error?: string
+  error?: string;
   /** ISO timestamp of last webhook delivery attempt */
-  lastWebhookAt?: number
+  lastWebhookAt?: number;
   /** Number of webhook callback deliveries received */
-  webhookDeliveries: number
-  createdAt: number
-  updatedAt: number
-}
+  webhookDeliveries: number;
+  /**
+   * Optimistic-concurrency version (#732).
+   * Incremented on every write; callers that supply an `expectedVersion` guard
+   * will only proceed if this value still matches, preventing two workers from
+   * completing the same job or overwriting each other's status update.
+   */
+  version: number;
+  /**
+   * Worker lease (#732).
+   * Set to `Date.now() + LEASE_TTL_MS` when a worker claims the job.
+   * A second worker must not claim a job whose lease has not expired.
+   * A reaper can reclaim stale leases after `LEASE_TTL_MS` milliseconds.
+   */
+  leaseExpiresAt?: number;
+  createdAt: number;
+  updatedAt: number;
+};
 
 export type GenerationDlqEntry = {
-  id: string
-  jobId?: string
-  txHash?: string
-  taskId?: string
-  source: string
-  receivedAt: number
-  errorType: "webhook_sig_invalid" | "webhook_parse_error" | "pipeline_failed" | "unknown"
-  errorMessage: string
-  rawPayload?: unknown
-}
+  id: string;
+  jobId?: string;
+  txHash?: string;
+  taskId?: string;
+  source: string;
+  receivedAt: number;
+  errorType:
+    | "webhook_sig_invalid"
+    | "webhook_parse_error"
+    | "pipeline_failed"
+    | "unknown";
+  errorMessage: string;
+  rawPayload?: unknown;
+};
 
 // ─── Store I/O ────────────────────────────────────────────────────────────────
 
-type JobStore = Record<string, GenerationJob>
-type DlqStore = Record<string, GenerationDlqEntry>
+type JobStore = Record<string, GenerationJob>;
+type DlqStore = Record<string, GenerationDlqEntry>;
 
 /**
  * Serialises every read→modify→write cycle on the JSON sidecars.
@@ -91,98 +113,107 @@ type DlqStore = Record<string, GenerationDlqEntry>
  * TOCTOU that loses jobs under concurrent webhook/traffic bursts (#243). The
  * queue is drained in FIFO order, so callers still observe the stored value.
  */
-let writeQueue: Promise<unknown> = Promise.resolve()
+let writeQueue: Promise<unknown> = Promise.resolve();
 
 function withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
-  const run = writeQueue.then(fn, fn)
-  writeQueue = run.catch(() => {})
-  return run
+  const run = writeQueue.then(fn, fn);
+  writeQueue = run.catch(() => {});
+  return run;
 }
 
 async function readJobStore(): Promise<JobStore> {
   try {
-    const raw = await readFile(serverDataJsonPath("generationJobs"), "utf8")
-    const parsed = JSON.parse(raw) as JobStore
-    return parsed && typeof parsed === "object" ? parsed : {}
+    const raw = await readFile(serverDataJsonPath("generationJobs"), "utf8");
+    const parsed = JSON.parse(raw) as JobStore;
+    return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
-    return {}
+    return {};
   }
 }
 
 async function writeJobStore(data: JobStore): Promise<void> {
-  const filePath = serverDataJsonPath("generationJobs")
-  await mkdir(path.dirname(filePath), { recursive: true })
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8")
+  const filePath = serverDataJsonPath("generationJobs");
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
 }
 
 async function readDlqStore(): Promise<DlqStore> {
   try {
-    const raw = await readFile(serverDataJsonPath("generationDlq"), "utf8")
-    const parsed = JSON.parse(raw) as DlqStore
-    return parsed && typeof parsed === "object" ? parsed : {}
+    const raw = await readFile(serverDataJsonPath("generationDlq"), "utf8");
+    const parsed = JSON.parse(raw) as DlqStore;
+    return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
-    return {}
+    return {};
   }
 }
 
 async function writeDlqStore(data: DlqStore): Promise<void> {
-  const filePath = serverDataJsonPath("generationDlq")
-  await mkdir(path.dirname(filePath), { recursive: true })
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8")
+  const filePath = serverDataJsonPath("generationDlq");
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
 }
 
 // ─── Pruning ──────────────────────────────────────────────────────────────────
 
 /** TTL for completed/failed jobs: 4 hours. Pending jobs kept longer (24h). */
-const COMPLETED_TTL_MS = 4 * 60 * 60 * 1000
-const PENDING_TTL_MS = 24 * 60 * 60 * 1000
-const DLQ_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+const COMPLETED_TTL_MS = 4 * 60 * 60 * 1000;
+const PENDING_TTL_MS = 24 * 60 * 60 * 1000;
+const DLQ_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 function pruneJobs(store: JobStore): JobStore {
-  const now = Date.now()
-  const out: JobStore = {}
+  const now = Date.now();
+  const out: JobStore = {};
   for (const [k, job] of Object.entries(store)) {
     const ttl =
       job.status === "completed" || job.status === "failed"
         ? COMPLETED_TTL_MS
-        : PENDING_TTL_MS
-    if (now - job.updatedAt < ttl) out[k] = job
+        : PENDING_TTL_MS;
+    if (now - job.updatedAt < ttl) out[k] = job;
   }
-  return out
+  return out;
 }
 
 function pruneDlq(store: DlqStore): DlqStore {
-  const now = Date.now()
-  const out: DlqStore = {}
+  const now = Date.now();
+  const out: DlqStore = {};
   for (const [k, entry] of Object.entries(store)) {
-    if (now - entry.receivedAt < DLQ_TTL_MS) out[k] = entry
+    if (now - entry.receivedAt < DLQ_TTL_MS) out[k] = entry;
   }
-  return out
+  return out;
 }
+
+// ─── Lease / version constants ────────────────────────────────────────────────
+
+/** How long a worker holds exclusive claim on a job before the lease can be reclaimed. */
+const LEASE_TTL_MS = 60_000; // 60 seconds
 
 // ─── Job CRUD ─────────────────────────────────────────────────────────────────
 
 export type CreateJobInput = {
-  taskId: string
-  txHash: string
-  prompt: string
-  payerAddress?: string
-  imageStyleMode?: string
-  collectionId?: number
-  lang?: string
-}
+  taskId: string;
+  txHash: string;
+  prompt: string;
+  payerAddress?: string;
+  imageStyleMode?: string;
+  collectionId?: number;
+  lang?: string;
+};
 
 /**
  * Creates a new generation job keyed by txHash.
  * If a job for txHash already exists, returns it without creating a duplicate.
  */
-export async function createGenerationJob(input: CreateJobInput): Promise<GenerationJob> {
+export async function createGenerationJob(
+  input: CreateJobInput,
+): Promise<GenerationJob> {
   return withStoreLock(async () => {
-    const store = pruneJobs(await readJobStore())
+    const store = pruneJobs(await readJobStore());
 
     // Idempotent: if already tracked, return existing
-    const existing = Object.values(store).find((j) => j.txHash === input.txHash)
-    if (existing) return existing
+    const existing = Object.values(store).find(
+      (j) => j.txHash === input.txHash,
+    );
+    if (existing) return existing;
 
     const job: GenerationJob = {
       id: randomUUID(),
@@ -195,37 +226,127 @@ export async function createGenerationJob(input: CreateJobInput): Promise<Genera
       lang: input.lang,
       status: "pending",
       webhookDeliveries: 0,
+      version: 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+    };
+    store[job.id] = job;
+    await writeJobStore(store);
+
+    if (isAnalyticsWarehouseEnabled(job.payerAddress)) {
+      void recordWarehouseEvent({
+        surface: "forge",
+        stage: "forge_started",
+        wallet: job.payerAddress ?? null,
+        metadata: { jobId: job.id, txHash: job.txHash, taskId: job.taskId },
+      }).catch(() => {});
     }
-    store[job.id] = job
-    await writeJobStore(store)
-    return job
-  })
+
+    return job;
+  });
 }
 
 /**
  * Returns the generation job for a given txHash, or null if not found.
  */
-export async function getGenerationJobByTxHash(txHash: string): Promise<GenerationJob | null> {
-  const store = pruneJobs(await readJobStore())
-  return Object.values(store).find((j) => j.txHash === txHash) ?? null
+export async function getGenerationJobByTxHash(
+  txHash: string,
+): Promise<GenerationJob | null> {
+  const store = pruneJobs(await readJobStore());
+  return Object.values(store).find((j) => j.txHash === txHash) ?? null;
 }
 
 /**
  * Returns the generation job for a given NanoBanana taskId, or null.
  */
-export async function getGenerationJobByTaskId(taskId: string): Promise<GenerationJob | null> {
-  const store = pruneJobs(await readJobStore())
-  return Object.values(store).find((j) => j.taskId === taskId) ?? null
+export async function getGenerationJobByTaskId(
+  taskId: string,
+): Promise<GenerationJob | null> {
+  const store = pruneJobs(await readJobStore());
+  return Object.values(store).find((j) => j.taskId === taskId) ?? null;
 }
 
 /**
  * Returns a job by its UUID id.
  */
-export async function getGenerationJobById(id: string): Promise<GenerationJob | null> {
-  const store = pruneJobs(await readJobStore())
-  return store[id] ?? null
+export async function getGenerationJobById(
+  id: string,
+): Promise<GenerationJob | null> {
+  const store = pruneJobs(await readJobStore());
+  return store[id] ?? null;
+}
+
+/**
+ * Atomically claims a pending job for processing (#732).
+ *
+ * Uses a version guard + lease so two concurrent workers cannot both
+ * claim the same job:
+ * - The job must be in `pending` status.
+ * - The job must have no active lease (or the lease must have expired).
+ * - The write bumps `version` and sets `leaseExpiresAt`.
+ *
+ * Returns the claimed job on success, or `null` if the job was not found,
+ * is already claimed, or was modified by another writer since it was read.
+ */
+export async function claimGenerationJob(
+  id: string,
+  expectedVersion: number,
+): Promise<GenerationJob | null> {
+  return withStoreLock(async () => {
+    const store = pruneJobs(await readJobStore());
+    const job = store[id];
+    if (!job) return null;
+    if (job.status !== "pending") return null;
+
+    // Reject stale reads — another worker already claimed or updated this job.
+    if (job.version !== expectedVersion) return null;
+
+    // Reject if an active (non-expired) lease is held by another worker.
+    if (job.leaseExpiresAt && job.leaseExpiresAt > Date.now()) return null;
+
+    const claimed: GenerationJob = {
+      ...job,
+      status: "processing",
+      version: job.version + 1,
+      leaseExpiresAt: Date.now() + LEASE_TTL_MS,
+      updatedAt: Date.now(),
+    };
+    store[id] = claimed;
+    await writeJobStore(store);
+    return claimed;
+  });
+}
+
+/**
+ * Reaps stale leases so a crashed worker's job re-enters the claimable pool (#732).
+ * Returns the number of leases reclaimed.
+ */
+export async function reclaimStaleLeases(): Promise<number> {
+  return withStoreLock(async () => {
+    const store = pruneJobs(await readJobStore());
+    const now = Date.now();
+    let reclaimed = 0;
+
+    for (const [id, job] of Object.entries(store)) {
+      if (
+        job.status === "processing" &&
+        job.leaseExpiresAt &&
+        job.leaseExpiresAt < now
+      ) {
+        store[id] = {
+          ...job,
+          status: "pending",
+          leaseExpiresAt: undefined,
+          version: job.version + 1,
+          updatedAt: now,
+        };
+        reclaimed++;
+      }
+    }
+
+    if (reclaimed > 0) await writeJobStore(store);
+    return reclaimed;
+  });
 }
 
 export type UpdateJobInput = Partial<
@@ -239,7 +360,7 @@ export type UpdateJobInput = Partial<
     | "webhookDeliveries"
     | "taskId"
   >
->
+>;
 
 /**
  * Applies a partial update to a job (found by UUID id). Returns the updated job.
@@ -249,14 +370,34 @@ export async function updateGenerationJob(
   patch: UpdateJobInput,
 ): Promise<GenerationJob | null> {
   return withStoreLock(async () => {
-    const store = pruneJobs(await readJobStore())
-    const job = store[id]
-    if (!job) return null
-    const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() }
-    store[id] = updated
-    await writeJobStore(store)
-    return updated
-  })
+    const store = pruneJobs(await readJobStore());
+    const job = store[id];
+    if (!job) return null;
+    const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() };
+    store[id] = updated;
+    await writeJobStore(store);
+
+    if (patch.status && isAnalyticsWarehouseEnabled(updated.payerAddress)) {
+      const stageMap: Record<string, string> = {
+        completed: "forge_completed",
+        failed: "forge_failed",
+        webhook_received: "webhook_received",
+        processing: "forge_polling",
+      };
+      const stage = stageMap[patch.status];
+      if (stage) {
+        void recordWarehouseEvent({
+          surface: "forge",
+          stage,
+          wallet: updated.payerAddress ?? null,
+          reason: patch.error ?? null,
+          metadata: { jobId: updated.id, txHash: updated.txHash },
+        }).catch(() => {});
+      }
+    }
+
+    return updated;
+  });
 }
 
 /**
@@ -267,15 +408,35 @@ export async function updateGenerationJobByTxHash(
   patch: UpdateJobInput,
 ): Promise<GenerationJob | null> {
   return withStoreLock(async () => {
-    const store = pruneJobs(await readJobStore())
-    const entry = Object.entries(store).find(([, j]) => j.txHash === txHash)
-    if (!entry) return null
-    const [id, job] = entry
-    const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() }
-    store[id] = updated
-    await writeJobStore(store)
-    return updated
-  })
+    const store = pruneJobs(await readJobStore());
+    const entry = Object.entries(store).find(([, j]) => j.txHash === txHash);
+    if (!entry) return null;
+    const [id, job] = entry;
+    const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() };
+    store[id] = updated;
+    await writeJobStore(store);
+
+    if (patch.status && isAnalyticsWarehouseEnabled(updated.payerAddress)) {
+      const stageMap: Record<string, string> = {
+        completed: "forge_completed",
+        failed: "forge_failed",
+        webhook_received: "webhook_received",
+        processing: "forge_polling",
+      };
+      const stage = stageMap[patch.status];
+      if (stage) {
+        void recordWarehouseEvent({
+          surface: "forge",
+          stage,
+          wallet: updated.payerAddress ?? null,
+          reason: patch.error ?? null,
+          metadata: { jobId: updated.id, txHash: updated.txHash },
+        }).catch(() => {});
+      }
+    }
+
+    return updated;
+  });
 }
 
 /**
@@ -286,48 +447,72 @@ export async function updateGenerationJobByTaskId(
   patch: UpdateJobInput,
 ): Promise<GenerationJob | null> {
   return withStoreLock(async () => {
-    const store = pruneJobs(await readJobStore())
-    const entry = Object.entries(store).find(([, j]) => j.taskId === taskId)
-    if (!entry) return null
-    const [id, job] = entry
-    const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() }
-    store[id] = updated
-    await writeJobStore(store)
-    return updated
-  })
+    const store = pruneJobs(await readJobStore());
+    const entry = Object.entries(store).find(([, j]) => j.taskId === taskId);
+    if (!entry) return null;
+    const [id, job] = entry;
+    const updated: GenerationJob = { ...job, ...patch, updatedAt: Date.now() };
+    store[id] = updated;
+    await writeJobStore(store);
+
+    if (patch.status && isAnalyticsWarehouseEnabled(updated.payerAddress)) {
+      const stageMap: Record<string, string> = {
+        completed: "forge_completed",
+        failed: "forge_failed",
+        webhook_received: "webhook_received",
+        processing: "forge_polling",
+      };
+      const stage = stageMap[patch.status];
+      if (stage) {
+        void recordWarehouseEvent({
+          surface: "forge",
+          stage,
+          wallet: updated.payerAddress ?? null,
+          reason: patch.error ?? null,
+          metadata: { jobId: updated.id, txHash: updated.txHash },
+        }).catch(() => {});
+      }
+    }
+
+    return updated;
+  });
 }
 
 /**
  * Lists all active generation jobs, sorted newest first.
  */
-export async function listGenerationJobs(opts: { limit?: number } = {}): Promise<GenerationJob[]> {
-  const store = pruneJobs(await readJobStore())
-  const items = Object.values(store).sort((a, b) => b.createdAt - a.createdAt)
-  return typeof opts.limit === "number" ? items.slice(0, opts.limit) : items
+export async function listGenerationJobs(
+  opts: { limit?: number } = {},
+): Promise<GenerationJob[]> {
+  const store = pruneJobs(await readJobStore());
+  const items = Object.values(store).sort((a, b) => b.createdAt - a.createdAt);
+  return typeof opts.limit === "number" ? items.slice(0, opts.limit) : items;
 }
 
 // ─── Dead-Letter Queue ────────────────────────────────────────────────────────
 
 export type AppendDlqInput = {
-  jobId?: string
-  txHash?: string
-  taskId?: string
-  source: string
-  errorType: GenerationDlqEntry["errorType"]
-  errorMessage: string
-  rawPayload?: unknown
-}
+  jobId?: string;
+  txHash?: string;
+  taskId?: string;
+  source: string;
+  errorType: GenerationDlqEntry["errorType"];
+  errorMessage: string;
+  rawPayload?: unknown;
+};
 
 /**
  * Appends a failed callback or pipeline error to the dead-letter queue.
  * Never throws — caller can fire-and-forget.
  */
-export async function appendGenerationDlq(input: AppendDlqInput): Promise<GenerationDlqEntry> {
-  let store: DlqStore
+export async function appendGenerationDlq(
+  input: AppendDlqInput,
+): Promise<GenerationDlqEntry> {
+  let store: DlqStore;
   try {
-    store = pruneDlq(await readDlqStore())
+    store = pruneDlq(await readDlqStore());
   } catch {
-    store = {}
+    store = {};
   }
 
   const entry: GenerationDlqEntry = {
@@ -340,46 +525,55 @@ export async function appendGenerationDlq(input: AppendDlqInput): Promise<Genera
     errorType: input.errorType,
     errorMessage: String(input.errorMessage).slice(0, 2000),
     rawPayload: sanitizeDlqPayload(input.rawPayload),
-  }
-  store[entry.id] = entry
+  };
+  store[entry.id] = entry;
 
   try {
-    await writeDlqStore(store)
+    await writeDlqStore(store);
   } catch {
     // best-effort — do not propagate write errors to callers
   }
-  return entry
+  return entry;
 }
 
 /**
  * Returns all DLQ entries sorted newest first.
  */
-export async function listGenerationDlq(opts: { limit?: number } = {}): Promise<GenerationDlqEntry[]> {
-  const store = pruneDlq(await readDlqStore())
-  const items = Object.values(store).sort((a, b) => b.receivedAt - a.receivedAt)
-  return typeof opts.limit === "number" ? items.slice(0, opts.limit) : items
+export async function listGenerationDlq(
+  opts: { limit?: number } = {},
+): Promise<GenerationDlqEntry[]> {
+  const store = pruneDlq(await readDlqStore());
+  const items = Object.values(store).sort(
+    (a, b) => b.receivedAt - a.receivedAt,
+  );
+  return typeof opts.limit === "number" ? items.slice(0, opts.limit) : items;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const SECRET_KEY_RE = /(secret|seed|priv|passphrase|password|token|jwt|mnemonic|api[_-]?key)/i
+const SECRET_KEY_RE =
+  /(secret|seed|priv|passphrase|password|token|jwt|mnemonic|api[_-]?key)/i;
 
 function sanitizeDlqPayload(value: unknown, depth = 0): unknown {
-  if (depth > 5) return "[truncated]"
-  if (Array.isArray(value)) return value.slice(0, 20).map((v) => sanitizeDlqPayload(v, depth + 1))
+  if (depth > 5) return "[truncated]";
+  if (Array.isArray(value))
+    return value.slice(0, 20).map((v) => sanitizeDlqPayload(v, depth + 1));
   if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {}
+    const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = SECRET_KEY_RE.test(k) ? "[redacted]" : sanitizeDlqPayload(v, depth + 1)
+      out[k] = SECRET_KEY_RE.test(k)
+        ? "[redacted]"
+        : sanitizeDlqPayload(v, depth + 1);
     }
-    return out
+    return out;
   }
-  if (typeof value === "string" && value.length > 1024) return `${value.slice(0, 1024)}…[truncated]`
-  return value
+  if (typeof value === "string" && value.length > 1024)
+    return `${value.slice(0, 1024)}…[truncated]`;
+  return value;
 }
 
 /** Test helper */
 export async function _resetGenerationJobStore(): Promise<void> {
-  await writeJobStore({})
-  await writeDlqStore({})
+  await writeJobStore({});
+  await writeDlqStore({});
 }

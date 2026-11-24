@@ -7,8 +7,9 @@
  *
  * Run: npx tsx --test lib/__tests__/world-export-stream.test.ts
  */
-import { describe, it, before, after } from "node:test"
+import { describe, it, beforeAll as before, afterAll as after } from "vitest"
 import * as assert from "node:assert/strict"
+import { NextRequest } from "next/server"
 import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -21,12 +22,17 @@ process.env.PHASE_SERVER_DATA_DIR = dataDir
 import {
   getWorldNarrativesPage,
   countWorldNarratives,
+  buildWorldExportSnapshot,
+  renderWorldExportMarkdown,
   streamWorldExportNdjson,
   WORLD_EXPORT_PAGE_SIZE,
 } from "@/lib/narrative-world-store"
+import { GET as getWorldExport } from "@/app/api/world/[collection_id]/export/route"
 
 const COLLECTION_ID = 7
 const TOTAL = 120
+const savedExportFlag = process.env.FEATURE_PHASE_112
+process.env.FEATURE_PHASE_112 = "1"
 
 async function seed(): Promise<void> {
   const narratives: Record<string, unknown> = {}
@@ -128,4 +134,67 @@ describe("world export cursor pagination (#239)", () => {
     for await (const line of streamWorldExportNdjson(4242)) lines.push(line)
     assert.equal(lines.length, 0)
   })
+
+  it("builds stable canonical snapshots and renders localized Markdown", async () => {
+    const snapshot = await buildWorldExportSnapshot(COLLECTION_ID)
+    assert.ok(snapshot)
+    assert.equal(snapshot.narratives.length, TOTAL)
+    assert.deepEqual(
+      snapshot.narratives.map(({ token_id }) => token_id),
+      Array.from({ length: TOTAL }, (_, index) => index + 1),
+    )
+    const markdown = renderWorldExportMarkdown(snapshot, {
+      worldId: "World ID",
+      worldPrompt: "World Prompt",
+      narratorTone: "Narrator Tone",
+      createdAt: "Created",
+      narratives: "Narratives",
+      artifact: "Artifact",
+      loreInput: "Lore Input",
+      narrative: "Narrative",
+      generated: "Generated",
+    })
+    assert.match(markdown, /\*\*World ID:\*\* 7/)
+    assert.match(markdown, /\*\*World Prompt:\*\*/)
+  })
+
+  it("downloads deterministic JSON pages with cursor headers and hides the route when disabled", async () => {
+    const first = await getWorldExport(
+      new NextRequest("https://phase.test/api/world/7/export?format=json"),
+      { params: Promise.resolve({ collection_id: String(COLLECTION_ID) }) },
+    )
+    assert.equal(first.status, 200)
+    assert.equal(first.headers.get("content-disposition"), 'attachment; filename="world-7.json"')
+    assert.equal(first.headers.get("x-phase-next-cursor"), "50")
+    const firstSnapshot = await first.json()
+    assert.equal(firstSnapshot.narratives.length, 50)
+    assert.equal(firstSnapshot.narratives[0].token_id, 1)
+
+    const second = await getWorldExport(
+      new NextRequest("https://phase.test/api/world/7/export?format=json&cursor=50"),
+      { params: Promise.resolve({ collection_id: String(COLLECTION_ID) }) },
+    )
+    const secondSnapshot = await second.json()
+    assert.equal(secondSnapshot.narratives[0].token_id, 51)
+    assert.equal(second.headers.get("x-phase-next-cursor"), "100")
+
+    const markdown = await getWorldExport(
+      new NextRequest("https://phase.test/api/world/7/export?format=markdown&lang=en"),
+      { params: Promise.resolve({ collection_id: String(COLLECTION_ID) }) },
+    )
+    assert.equal(markdown.headers.get("content-disposition"), 'attachment; filename="world-7.md"')
+    assert.match(await markdown.text(), /\*\*World ID:\*\* 7/)
+
+    delete process.env.FEATURE_PHASE_112
+    const disabled = await getWorldExport(
+      new NextRequest("https://phase.test/api/world/7/export"),
+      { params: Promise.resolve({ collection_id: String(COLLECTION_ID) }) },
+    )
+    assert.equal(disabled.status, 404)
+  })
+})
+
+after(() => {
+  if (savedExportFlag === undefined) delete process.env.FEATURE_PHASE_112
+  else process.env.FEATURE_PHASE_112 = savedExportFlag
 })

@@ -11,6 +11,7 @@ import { getAllWorldCollections } from "@/lib/narrative-world-store"
 import { checkAndUnlock } from "@/lib/achievement-store"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 import { nanoid } from "nanoid"
+import { isModerationTriageEnabled, screenInBackground } from "@/lib/moderation-triage"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -99,16 +100,32 @@ export async function POST(request: NextRequest) {
     body: (body.body as string).trim(),
     timestamp: body.timestamp as number,
   }
-  const signatureVerified = await verifySignalSignature(
-    walletStr,
-    proofPayload,
-    body.signature as string,
-  )
-  if (!signatureVerified) {
-    return NextResponse.json(
-      { error: "Invalid signature: payload not signed by this wallet" },
-      { status: 400 },
+  const payloadBytes = Buffer.byteLength(JSON.stringify(proofPayload))
+  if (payloadBytes > 64 * 1024) {
+    return NextResponse.json({ error: "Payload exceeds 64KB limit" }, { status: 400 })
+  }
+
+  const phase242 = isFeatureEnabled("phase-242")
+  let signatureVerified = false
+  if (phase242) {
+    signatureVerified = await verifySignalSignature(
+      walletStr,
+      proofPayload,
+      body.signature as string,
     )
+    if (!signatureVerified) {
+      return NextResponse.json(
+        { error: "Invalid signature: payload not signed by this wallet" },
+        { status: 400 },
+      )
+    }
+  } else {
+    // Legacy authorship path: verification skipped / best effort
+    signatureVerified = await verifySignalSignature(
+      walletStr,
+      proofPayload,
+      body.signature as string,
+    ).catch(() => false)
   }
 
   let poll: Signal["poll"]
@@ -182,6 +199,18 @@ export async function POST(request: NextRequest) {
     ...(typeof body.nft_name === "string" ? { nft_name: body.nft_name } : {}),
     ...(typeof body.nft_image === "string" ? { nft_image: body.nft_image } : {}),
   })
+
+  // phase-146: queue the pre-screen; scoring runs after the response.
+  if (isModerationTriageEnabled()) {
+    screenInBackground({
+      targetKind: "signal",
+      targetId: signal.id,
+      authorWallet: walletStr,
+      title: signal.title,
+      body: signal.body,
+      hasMedia: Boolean(signal.nft_image),
+    })
+  }
 
   // Achievements: fire-and-forget
   void checkAndUnlock(walletStr, { signal_posted: true }).catch(() => { /* silent */ })

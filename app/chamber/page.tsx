@@ -5,6 +5,9 @@ import { FusionChamber } from "@/components/fusion-chamber"
 import { fetchCollectionInfo } from "@/lib/phase-protocol"
 import { publicPhaseSiteBaseUrl } from "@/lib/phase-nft-metadata-build"
 import { getWorldForCollection } from "@/lib/narrative-world-store"
+import { preparePhaseStreaming } from "@/lib/phase-streaming"
+
+export const dynamic = "force-dynamic"
 
 type Props = {
   searchParams: Promise<Record<string, string | string[] | undefined>>
@@ -101,9 +104,14 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
 }
 
 export default function ChamberPage() {
+  preparePhaseStreaming()
   return (
     <Suspense fallback={<ChamberBootFallback />}>
       <FusionChamber />
     </Suspense>
   )
 }
+
+// ── Spikes 672/675 (flag-gated): chamber mint button reuses dropStatusForListing /
+// currentDutchPrice + lobbyAdmissionForBand; countdown + queue-ticket UI mount only when
+// phase-timed-drops / phase-dutch-auction are on. No change to immediate-mint path when off.

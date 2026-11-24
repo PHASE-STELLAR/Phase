@@ -1,6 +1,5 @@
-﻿// @ts-nocheck
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import path from "node:path"
+// @ts-nocheck
+import { readJsonFile, updateJsonFile } from "@/lib/json-store"
 import { serverDataJsonPath } from "@/lib/server-data-paths"
 import { incrementVectorClock, type VectorClock } from "@/lib/world-conflict"
 
@@ -27,17 +26,20 @@ type WorldCollectionsStore = Record<string, WorldCollectionData>
 type WorldNarrativesStore = Record<string, WorldNarrativeData>
 
 async function readJsonStore<T extends object>(filePath: string): Promise<T> {
-  try {
-    const raw = await readFile(filePath, "utf8")
-    return JSON.parse(raw) as T
-  } catch {
-    return {} as T
-  }
+  return readJsonFile<T>(filePath, {} as T)
 }
 
-async function writeJsonStore<T extends object>(filePath: string, data: T): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true })
-  await writeFile(filePath, JSON.stringify(data, null, 2), "utf8")
+/**
+ * Locked read-modify-write. Required for every mutation here: these stores
+ * compute counters, versions and vector clocks from the snapshot they read, so
+ * an unguarded read-then-write silently loses a concurrent writer's contribution
+ * and can hand two writers the same vector clock.
+ */
+async function updateJsonStore<T extends object, R>(
+  filePath: string,
+  mutate: (store: T) => R | Promise<R>,
+): Promise<R> {
+  return updateJsonFile<T, R>(filePath, { mutate })
 }
 
 export async function getWorldForCollection(collectionId: number): Promise<WorldCollectionData | null> {
@@ -53,22 +55,24 @@ export async function saveWorldForCollection(
     creator_wallet?: string
   },
 ): Promise<WorldCollectionData> {
-  const filePath = serverDataJsonPath("worldCollections")
-  const store = await readJsonStore<WorldCollectionsStore>(filePath)
-  const existing = store[String(collectionId)]
-  const saved: WorldCollectionData = {
-    ...existing,
-    world_name: data.world_name,
-    world_prompt: data.world_prompt,
-    ...(data.narrator_tone !== undefined ? { narrator_tone: data.narrator_tone } : {}),
-    ...(data.creator_wallet !== undefined ? { creator_wallet: data.creator_wallet } : {}),
-    created_at: existing?.created_at ?? Date.now(),
-    version: (existing?.version ?? 0) + 1,
-    vector_clock: incrementVectorClock(existing?.vector_clock, data.creator_wallet ?? "anonymous"),
-  }
-  store[String(collectionId)] = saved
-  await writeJsonStore(filePath, store)
-  return saved
+  return updateJsonStore<WorldCollectionsStore, WorldCollectionData>(
+    serverDataJsonPath("worldCollections"),
+    (store) => {
+      const existing = store[String(collectionId)]
+      const saved: WorldCollectionData = {
+        ...existing,
+        world_name: data.world_name,
+        world_prompt: data.world_prompt,
+        ...(data.narrator_tone !== undefined ? { narrator_tone: data.narrator_tone } : {}),
+        ...(data.creator_wallet !== undefined ? { creator_wallet: data.creator_wallet } : {}),
+        created_at: existing?.created_at ?? Date.now(),
+        version: (existing?.version ?? 0) + 1,
+        vector_clock: incrementVectorClock(existing?.vector_clock, data.creator_wallet ?? "anonymous"),
+      }
+      store[String(collectionId)] = saved
+      return saved
+    },
+  )
 }
 
 export async function getAllWorldCollections(): Promise<WorldCollectionsStore> {
@@ -86,10 +90,12 @@ export async function saveNarrativeForToken(
   tokenId: number,
   data: Omit<WorldNarrativeData, "generated_at">,
 ): Promise<void> {
-  const filePath = serverDataJsonPath("worldNarratives")
-  const store = await readJsonStore<WorldNarrativesStore>(filePath)
-  store[String(tokenId)] = { ...data, generated_at: Date.now() }
-  await writeJsonStore(filePath, store)
+  await updateJsonStore<WorldNarrativesStore>(
+    serverDataJsonPath("worldNarratives"),
+    (store) => {
+      store[String(tokenId)] = { ...data, generated_at: Date.now() }
+    },
+  )
   invalidateLocalizedNarrativeCache(tokenId)
 }
 
@@ -152,7 +158,7 @@ export async function getRecentNarrativesForCollection(
     .slice(0, limit)
 }
 
-// â”€â”€â”€ phase-111: localized narrative caching per language pack â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── phase-111: localized narrative caching per language pack ──────────────
 // Isolated, flag-gated. Every locale re-fetched the same lore from disk on
 // every request. When enabled, reads are cached per (tokenId, lang) with a
 // short TTL, avoiding redundant JSON-store reads across language packs.
@@ -186,7 +192,7 @@ export function invalidateLocalizedNarrativeCache(tokenId: number): void {
 
 /**
  * Reads a token's narrative through a per-(tokenId, lang) cache with a short TTL.
- * The underlying narrative text is not translated by this cache â€” it only avoids
+ * The underlying narrative text is not translated by this cache — it only avoids
  * redundant store reads when the same locale re-fetches the same lore.
  * When phase-111 is disabled, bypasses the cache entirely.
  */
@@ -205,7 +211,7 @@ export async function getNarrativeForTokenCached(
   return value
 }
 
-// â”€â”€â”€ phase-108: reader progression tracking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── phase-108: reader progression tracking ──────────────────────────────
 
 type ReaderProgressEntry = {
   wallet: string
@@ -221,25 +227,27 @@ function readerProgressKey(wallet: string, collectionId: number): string {
 }
 
 export async function getReaderProgress(wallet: string, collectionId: number): Promise<number[]> {
-  const store = await readJsonStore<ReaderProgressStore>(serverDataJsonPath("readerProgress"))
+  const store = await readJsonStore<ReaderProgressStore>(serverDataJsonPath("worldReaderProgress"))
   const key = readerProgressKey(wallet, collectionId)
   return store[key]?.read_token_ids ?? []
 }
 
 export async function markNarrativeRead(wallet: string, collectionId: number, tokenId: number): Promise<void> {
-  const filePath = serverDataJsonPath("readerProgress")
-  const store = await readJsonStore<ReaderProgressStore>(filePath)
-  const key = readerProgressKey(wallet, collectionId)
-  const existing = store[key] ?? { wallet, collection_id: collectionId, read_token_ids: [], last_read_at: 0 }
-  if (!existing.read_token_ids.includes(tokenId)) {
-    existing.read_token_ids.push(tokenId)
-  }
-  existing.last_read_at = Date.now()
-  store[key] = existing
-  await writeJsonStore(filePath, store)
+  await updateJsonStore<ReaderProgressStore>(
+    serverDataJsonPath("worldReaderProgress"),
+    (store) => {
+      const key = readerProgressKey(wallet, collectionId)
+      const existing = store[key] ?? { wallet, collection_id: collectionId, read_token_ids: [], last_read_at: 0 }
+      if (!existing.read_token_ids.includes(tokenId)) {
+        existing.read_token_ids.push(tokenId)
+      }
+      existing.last_read_at = Date.now()
+      store[key] = existing
+    },
+  )
 }
 
-// â”€â”€â”€ phase-109: collaborative world permissions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── phase-109: collaborative world permissions ──────────────────────────
 
 export type WorldRole = "editor" | "viewer"
 
@@ -257,13 +265,12 @@ export async function getWorldRoles(collectionId: number): Promise<Record<string
 }
 
 export async function ensureWorldOwner(collectionId: number, ownerWallet: string): Promise<void> {
-  const filePath = serverDataJsonPath("worldRoles")
-  const store = await readJsonStore<WorldRolesStore>(filePath)
-  const key = String(collectionId)
-  if (!store[key]) {
-    store[key] = { collection_id: collectionId, owner: ownerWallet, roles: {} }
-    await writeJsonStore(filePath, store)
-  }
+  await updateJsonStore<WorldRolesStore>(serverDataJsonPath("worldRoles"), (store) => {
+    const key = String(collectionId)
+    if (!store[key]) {
+      store[key] = { collection_id: collectionId, owner: ownerWallet, roles: {} }
+    }
+  })
 }
 
 export async function setWorldRole(
@@ -272,19 +279,21 @@ export async function setWorldRole(
   targetWallet: string,
   role: WorldRole,
 ): Promise<Record<string, WorldRole>> {
-  const filePath = serverDataJsonPath("worldRoles")
-  const store = await readJsonStore<WorldRolesStore>(filePath)
-  const key = String(collectionId)
-  const entry = store[key]
-  if (!entry || entry.owner !== actingWallet) {
-    throw new Error("Solo el propietario del mundo puede asignar roles")
-  }
-  entry.roles[targetWallet] = role
-  await writeJsonStore(filePath, store)
-  return entry.roles
+  return updateJsonStore<WorldRolesStore, Record<string, WorldRole>>(
+    serverDataJsonPath("worldRoles"),
+    (store) => {
+      const key = String(collectionId)
+      const entry = store[key]
+      if (!entry || entry.owner !== actingWallet) {
+        throw new Error("Solo el propietario del mundo puede asignar roles")
+      }
+      entry.roles[targetWallet] = role
+      return entry.roles
+    },
+  )
 }
 
-// â”€â”€â”€ phase-112: world export to portable markdown/JSON â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── phase-112: world export to portable markdown/JSON ───────────────────
 
 export type WorldExportSnapshot = {
   collection_id: number
@@ -300,20 +309,16 @@ export type WorldExportSnapshot = {
   }>
 }
 
-export async function buildWorldExportSnapshot(collectionId: number): Promise<WorldExportSnapshot | null> {
+export async function buildWorldExportSnapshot(
+  collectionId: number,
+  options: { cursor?: number | null; limit?: number; maxBytes?: number } = {},
+): Promise<WorldExportSnapshot | null> {
   const world = await getWorldForCollection(collectionId)
   if (!world) return null
 
-  const narrativesStore = await readJsonStore<WorldNarrativesStore>(serverDataJsonPath("worldNarratives"))
-  const narratives = Object.entries(narrativesStore)
-    .filter(([_, data]) => data.collection_id === collectionId)
-    .map(([tokenId, data]) => ({
-      token_id: Number(tokenId),
-      narrative: data.narrative,
-      lore_input: data.lore_input,
-      generated_at: data.generated_at,
-    }))
-    .sort((a, b) => a.token_id - b.token_id)
+  const { narratives } = options.limit === undefined
+    ? await readAllWorldExportNarratives(collectionId)
+    : await getWorldNarrativesPage(collectionId, options)
 
   return {
     collection_id: collectionId,
@@ -323,6 +328,22 @@ export async function buildWorldExportSnapshot(collectionId: number): Promise<Wo
     created_at: world.created_at,
     narratives,
   }
+}
+
+async function readAllWorldExportNarratives(
+  collectionId: number,
+): Promise<{ narratives: WorldExportNarrative[] }> {
+  const narrativesStore = await readJsonStore<WorldNarrativesStore>(serverDataJsonPath("worldNarratives"))
+  const narratives = Object.entries(narrativesStore)
+    .filter(([, data]) => data.collection_id === collectionId)
+    .map(([tokenId, data]) => ({
+      token_id: Number(tokenId),
+      narrative: data.narrative,
+      lore_input: data.lore_input,
+      generated_at: data.generated_at,
+    }))
+    .sort((a, b) => a.token_id - b.token_id)
+  return { narratives }
 }
 
 export type WorldExportNarrative = {
@@ -339,6 +360,7 @@ export type WorldExportNarrativePage = {
   items: WorldExportNarrative[]
   /** token_id to resume from, or null when the collection is exhausted. */
   nextCursor: number | null
+  oversized: boolean
 }
 
 /**
@@ -348,7 +370,7 @@ export type WorldExportNarrativePage = {
  */
 export async function getWorldNarrativesPage(
   collectionId: number,
-  opts: { cursor?: number | null; limit?: number } = {},
+  opts: { cursor?: number | null; limit?: number; maxBytes?: number } = {},
 ): Promise<WorldExportNarrativePage> {
   const store = await readJsonStore<WorldNarrativesStore>(serverDataJsonPath("worldNarratives"))
   const limit = Math.min(Math.max(opts.limit ?? WORLD_EXPORT_PAGE_SIZE, 1), WORLD_EXPORT_PAGE_SIZE)
@@ -365,9 +387,26 @@ export async function getWorldNarrativesPage(
     .filter((n) => cursor === null || n.token_id > cursor)
     .sort((a, b) => a.token_id - b.token_id)
 
-  const items = matching.slice(0, limit)
+  const items: WorldExportNarrative[] = []
+  let encodedSize = 2
+  let oversized = false
+  const encoder = new TextEncoder()
+  for (const narrative of matching) {
+    if (items.length >= limit) break
+    const recordSize = encoder.encode(JSON.stringify(narrative)).byteLength
+    if (opts.maxBytes !== undefined && encodedSize + recordSize + (items.length ? 1 : 0) > opts.maxBytes) {
+      oversized = items.length === 0
+      break
+    }
+    items.push(narrative)
+    encodedSize += recordSize + (items.length > 1 ? 1 : 0)
+  }
   const last = items[items.length - 1]
-  return { items, nextCursor: matching.length > items.length && last ? last.token_id : null }
+  return {
+    items,
+    nextCursor: matching.length > items.length && last ? last.token_id : null,
+    oversized,
+  }
 }
 
 /** Total narratives in a collection — counted without holding them in memory. */
@@ -415,18 +454,41 @@ export async function* streamWorldExportNdjson(
   }
 }
 
-export function renderWorldExportMarkdown(snapshot: WorldExportSnapshot): string {
+export function renderWorldExportMarkdown(
+  snapshot: WorldExportSnapshot,
+  labels: {
+    worldId: string
+    worldPrompt: string
+    narratorTone: string
+    createdAt: string
+    narratives: string
+    artifact: string
+    loreInput: string
+    narrative: string
+    generated: string
+  } = {
+    worldId: "Mundo ID",
+    worldPrompt: "Prompt del Mundo",
+    narratorTone: "Tono del Narrador",
+    createdAt: "Creado",
+    narratives: "Narrativas",
+    artifact: "Artefacto",
+    loreInput: "Entrada de Lore",
+    narrative: "Narrativa",
+    generated: "Generado",
+  },
+): string {
   let md = `# ${snapshot.world_name}\n\n`
-  md += `**Mundo ID:** ${snapshot.collection_id}\n\n`
-  md += `**Prompt del Mundo:**\n${snapshot.world_prompt}\n\n`
-  if (snapshot.narrator_tone) md += `**Tono del Narrador:** ${snapshot.narrator_tone}\n\n`
-  md += `**Creado:** ${new Date(snapshot.created_at).toISOString()}\n\n`
-  md += `---\n\n## Narrativas (${snapshot.narratives.length})\n\n`
+  md += `**${labels.worldId}:** ${snapshot.collection_id}\n\n`
+  md += `**${labels.worldPrompt}:**\n${snapshot.world_prompt}\n\n`
+  if (snapshot.narrator_tone) md += `**${labels.narratorTone}:** ${snapshot.narrator_tone}\n\n`
+  md += `**${labels.createdAt}:** ${new Date(snapshot.created_at).toISOString()}\n\n`
+  md += `---\n\n## ${labels.narratives} (${snapshot.narratives.length})\n\n`
   for (const n of snapshot.narratives) {
-    md += `### Artefacto #${n.token_id}\n\n`
-    md += `**Entrada de Lore:** ${n.lore_input}\n\n`
-    md += `**Narrativa:**\n${n.narrative}\n\n`
-    md += `*Generado: ${new Date(n.generated_at).toISOString()}*\n\n`
+    md += `### ${labels.artifact} #${n.token_id}\n\n`
+    md += `**${labels.loreInput}:** ${n.lore_input}\n\n`
+    md += `**${labels.narrative}:**\n${n.narrative}\n\n`
+    md += `*${labels.generated}: ${new Date(n.generated_at).toISOString()}*\n\n`
     md += `---\n\n`
   }
   return md
@@ -435,7 +497,7 @@ export function renderWorldExportMarkdown(snapshot: WorldExportSnapshot): string
 /**
  * Serialises a world export snapshot as Newline-Delimited JSON (NDJSON).
  *
- * One JSON object per line â€” the metadata header on the first line, then one
+ * One JSON object per line — the metadata header on the first line, then one
  * narrative record per subsequent line. Consumers can stream the response and
  * process records incrementally without buffering the whole file.
  *
@@ -457,7 +519,7 @@ export function renderWorldExportNdjson(snapshot: WorldExportSnapshot): string {
   return lines.join("\n") + "\n"
 }
 
-// â”€â”€â”€ phase-115: cross-artifact lore linking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── phase-115: cross-artifact lore linking ──────────────────────────────
 
 export type LoreLink = {
   from_token_id: number
@@ -475,26 +537,50 @@ export async function getLoreLinksForToken(tokenId: number): Promise<{ outgoing:
   return { outgoing, incoming }
 }
 
-export async function addLoreLink(fromTokenId: number, toTokenId: number, note?: string): Promise<LoreLink> {
-  const filePath = serverDataJsonPath("loreLinks")
-  const store = await readJsonStore<LoreLinkStore>(filePath)
-  const existingIndex = store.findIndex((l) => l.from_token_id === fromTokenId && l.to_token_id === toTokenId)
-  const link: LoreLink = {
-    from_token_id: fromTokenId,
-    to_token_id: toTokenId,
-    note,
-    created_at: Date.now(),
+const MAX_LORE_LINKS_PER_TOKEN = 50
+
+export class LoreLinkError extends Error {
+  code: "SELF_LINK" | "DEGREE_EXCEEDED"
+
+  constructor(code: LoreLinkError["code"], message: string) {
+    super(message)
+    this.name = "LoreLinkError"
+    this.code = code
   }
-  if (existingIndex >= 0) {
-    store[existingIndex] = link
-  } else {
-    store.push(link)
-  }
-  await writeJsonStore(filePath, store)
-  return link
 }
 
-// â”€â”€â”€ phase-110: narrative search helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+export async function addLoreLink(fromTokenId: number, toTokenId: number, note?: string): Promise<LoreLink> {
+  if (fromTokenId === toTokenId) {
+    throw new LoreLinkError("SELF_LINK", "A token cannot link to itself")
+  }
+
+  return updateJsonStore<LoreLinkStore, LoreLink>(
+    serverDataJsonPath("loreLinks"),
+    (store) => {
+      const outgoingCount = store.filter((l) => l.from_token_id === fromTokenId).length
+      const existingIndex = store.findIndex((l) => l.from_token_id === fromTokenId && l.to_token_id === toTokenId)
+
+      if (existingIndex < 0 && outgoingCount >= MAX_LORE_LINKS_PER_TOKEN) {
+        throw new LoreLinkError("DEGREE_EXCEEDED", `Token already has ${MAX_LORE_LINKS_PER_TOKEN} outgoing links`)
+      }
+
+      const link: LoreLink = {
+        from_token_id: fromTokenId,
+        to_token_id: toTokenId,
+        note,
+        created_at: Date.now(),
+      }
+      if (existingIndex >= 0) {
+        store[existingIndex] = link
+      } else {
+        store.push(link)
+      }
+      return link
+    },
+  )
+}
+
+// ─── phase-110: narrative search helpers ──────────────────────────────────
 
 export async function getAllNarrativesWithTokenIds(): Promise<
   Array<{ tokenId: number; narrative: string; collection_id: number; generated_at: number }>
@@ -508,3 +594,31 @@ export async function getAllNarrativesWithTokenIds(): Promise<
   }))
 }
 
+
+// ─── phase-142: bounded lore corpus for the curator ─────────────────────────
+// The curator selects from lore, not from the on-chain token scan: a token
+// without a narrative has nothing to theme on, so scanning owner_of for every
+// token (what /api/explore does) would cost RPC for documents that can never be
+// hung. This reads the sidecar once and returns at most `limit` documents,
+// newest first, optionally restricted to a set of collections.
+
+export const CURATOR_CORPUS_MAX = 2000
+
+export async function getNarrativeCorpus(
+  opts: { limit?: number; collectionIds?: number[] } = {},
+): Promise<Array<{ tokenId: number; narrative: string; collectionId: number; generatedAt: number }>> {
+  const limit = Math.min(CURATOR_CORPUS_MAX, Math.max(1, Math.floor(opts.limit ?? CURATOR_CORPUS_MAX)))
+  const only = opts.collectionIds && opts.collectionIds.length > 0 ? new Set(opts.collectionIds) : null
+  const store = await readJsonStore<WorldNarrativesStore>(serverDataJsonPath("worldNarratives"))
+  return Object.entries(store)
+    .filter(([, data]) => typeof data?.narrative === "string" && data.narrative.trim().length > 0)
+    .filter(([, data]) => !only || only.has(data.collection_id))
+    .map(([tokenId, data]) => ({
+      tokenId: Number(tokenId),
+      narrative: data.narrative,
+      collectionId: data.collection_id,
+      generatedAt: data.generated_at,
+    }))
+    .sort((a, b) => b.generatedAt - a.generatedAt || a.tokenId - b.tokenId)
+    .slice(0, limit)
+}

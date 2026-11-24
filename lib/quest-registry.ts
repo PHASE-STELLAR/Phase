@@ -9,6 +9,9 @@ import {
   userOwnsAnyPhaseToken,
 } from "./phase-protocol"
 import { getAllWorldCollections } from "./narrative-world-store"
+import { getAchievements } from "./achievement-store"
+import { getStreakInfo } from "./quest-streak"
+import { isAnalyticsWarehouseEnabled, recordWarehouseEvent } from "./analytics-warehouse"
 
 // ============================================================================
 // Quest Registry Types
@@ -21,6 +24,9 @@ export type QuestConditionType =
   | "settlement_completed"
   | "world_created"
   | "collection_count"
+  // phase-147: achievement-backed conditions, usable by static quests and arcs.
+  | "daily_streak"
+  | "signal_posted"
 
 export interface QuestCondition {
   type: QuestConditionType
@@ -143,7 +149,7 @@ async function saveQuestRegistry(registry: QuestRegistry): Promise<void> {
 const QUEST_COLLECTION_PHASE_SCAN_CAP = 256
 const QUEST_OWNER_SCAN_WINDOW = 2000
 
-interface EvaluationContext {
+export interface EvaluationContext {
   wallet: string | null
   creatorCollectionId: number | null
   defaultPhase: { phased: boolean }
@@ -152,7 +158,7 @@ interface EvaluationContext {
   worldCollections: Record<string, unknown>
 }
 
-async function buildEvaluationContext(wallet: string | null): Promise<EvaluationContext | null> {
+export async function buildEvaluationContext(wallet: string | null): Promise<EvaluationContext | null> {
   if (!wallet) return null
 
   try {
@@ -324,6 +330,34 @@ async function evaluateCollectionCount(
   }
 }
 
+async function evaluateDailyStreak(
+  wallet: string | null,
+  _ctx: EvaluationContext | null,
+  params?: Record<string, unknown>
+): Promise<QuestEvaluationResult> {
+  const minDays = Math.max(1, Number(params?.minDays ?? 3))
+  const requirementText = `Claim the daily reward ${minDays} days in a row.`
+  if (!wallet) return { completed: false, progressPct: 0, requirementText }
+  // The live streak (reset after a missed day), not the stored counter.
+  const { currentStreak } = await getStreakInfo(wallet)
+  return {
+    completed: currentStreak >= minDays,
+    progressPct: Math.min(100, Math.round((currentStreak / minDays) * 100)),
+    requirementText,
+  }
+}
+
+async function evaluateSignalPosted(
+  wallet: string | null,
+  _ctx: EvaluationContext | null,
+  _params?: Record<string, unknown>
+): Promise<QuestEvaluationResult> {
+  const requirementText = "Post a signal."
+  if (!wallet) return { completed: false, progressPct: 0, requirementText }
+  const posted = (await getAchievements(wallet)).some((a) => a.id === "signal_pioneer")
+  return { completed: posted, progressPct: posted ? 100 : 0, requirementText }
+}
+
 const CONDITION_EVALUATORS: Record<
   QuestConditionType,
   (
@@ -338,6 +372,41 @@ const CONDITION_EVALUATORS: Record<
   settlement_completed: evaluateSettlementCompleted,
   world_created: evaluateWorldCreated,
   collection_count: evaluateCollectionCount,
+  daily_streak: evaluateDailyStreak,
+  signal_posted: evaluateSignalPosted,
+}
+
+/**
+ * phase-147: evaluate one condition with a context the caller built once.
+ * Quest arcs use this so a generated step is judged by exactly the evaluator a
+ * static quest with the same condition would be — there is no second
+ * implementation of "has this wallet minted" to drift.
+ */
+export async function evaluateQuestCondition(
+  condition: QuestCondition,
+  wallet: string,
+  ctx: EvaluationContext | null,
+): Promise<QuestEvaluationResult> {
+  const evaluator = CONDITION_EVALUATORS[condition.type]
+  if (!evaluator) return { completed: false, progressPct: 0, requirementText: "" }
+  return evaluator(wallet, ctx, condition.params)
+}
+
+/** Condition types an enabled static quest already pays for (phase-147 double-reward guard). */
+export async function staticQuestConditionKeys(): Promise<Set<string>> {
+  const registry = await loadQuestRegistry()
+  const keys = new Set<string>()
+  for (const quest of registry.quests) {
+    if (!quest.enabled) continue
+    for (const cond of quest.conditions) keys.add(questConditionKey(cond))
+  }
+  return keys
+}
+
+export function questConditionKey(cond: QuestCondition): string {
+  const p = cond.params ?? {}
+  const target = p.minCount ?? p.minDays
+  return target === undefined ? cond.type : `${cond.type}:${String(target)}`
 }
 
 // ============================================================================
@@ -402,6 +471,20 @@ export async function evaluateAllQuests(
 
   for (const quest of enabledQuests) {
     results[quest.id] = await evaluateQuestConditions(quest, wallet, ctx)
+  }
+
+  if (isAnalyticsWarehouseEnabled(wallet)) {
+    const completedQuests = Object.keys(results).filter((id) => results[id]?.completed)
+    void recordWarehouseEvent({
+      surface: "quests",
+      stage: "quest_evaluated",
+      wallet,
+      metadata: {
+        completedCount: completedQuests.length,
+        totalQuests: enabledQuests.length,
+        completedQuests,
+      },
+    }).catch(() => {})
   }
 
   return results
@@ -487,3 +570,9 @@ export function getQuestRewardAmount(registry: QuestRegistry, questId: string): 
 export function isValidQuestId(registry: QuestRegistry, questId: string): boolean {
   return registry.quests.some((q) => q.id === questId && q.enabled)
 }
+
+/** Spike 611: Export quest definitions for retention cohort grouping. */
+export function getQuestCohortKeys(registry: QuestRegistry): string[] {
+  return registry.quests.map((q) => q.id)
+}
+

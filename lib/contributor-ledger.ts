@@ -262,3 +262,12 @@ export async function seedContributorForSignal(
 ): Promise<SignalContributors> {
   return addSignalContributor(signalId, { wallet, displayName, role, shareBps, addedBy: null, signature: null })
 }
+
+// ── Spike 674 (flag-gated): contributor shareBps → on-chain split payees binding ──
+// Off-chain contributor-ledger stays the source of truth; this pure helper converts entries
+// to settle-time payees (sum <= 10000 enforced by caller). No store change when flag off.
+export function contributorEntriesToSplitPayees(entries: Array<{ wallet: string; shareBps: number }>): Array<{ wallet: string; bps: number }> {
+  const total = entries.reduce((a, e) => a + e.shareBps, 0);
+  if (total > 10000) throw new Error("SHARE_OVERFLOW: contributor shareBps exceed 10000");
+  return entries.map((e) => ({ wallet: e.wallet, bps: e.shareBps }));
+}

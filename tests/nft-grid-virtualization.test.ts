@@ -2,10 +2,12 @@
  * Module #57 (Issue #79) — NFT grid virtualization windowing math.
  * Run: npx tsx tests/nft-grid-virtualization.test.ts
  */
-import { describe, it } from "node:test"
+import {
+  isPhase235Enabled, describe, it } from "node:test"
 import * as assert from "node:assert/strict"
 
 import {
+  isPhase235Enabled,
   computeGridWindow,
   computeColumnCount,
   clampScrollTop,

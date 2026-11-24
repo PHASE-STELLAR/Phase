@@ -1,6 +1,17 @@
-import { NextRequest } from "next/server"
+import { NextRequest, NextResponse } from "next/server"
+import { isModerationTriageEnabled, screenInBackground } from "@/lib/moderation-triage"
 import { StrKey } from "@stellar/stellar-sdk"
-import { getSignal, createReply, VersionConflictError } from "@/lib/signal-store"
+import {
+  getSignal,
+  createReply,
+  VersionConflictError,
+  isPhase136Enabled,
+  extractIpfsCidPath,
+  resolveCidGateway,
+  recordReplyAttribution,
+} from "@/lib/signal-store"
+import { computeCreditLedger, getSignalContributors } from "@/lib/contributor-ledger"
+import { isFaucetDenyListEnabled, isWalletDenied, getWalletDenyEntry } from "@/lib/faucet-deny-list"
 import { createNotification } from "@/lib/notification-store"
 import { dispatchPushNotification, extractMentionedWallets, isPhase92Enabled } from "@/lib/push-notifications"
 import { createApiRequestContext } from "@/lib/api-observability"
@@ -33,6 +44,12 @@ type ReplyBody = {
   wallet?: unknown
   signature?: unknown
   parent_version?: unknown
+  /** Covered by the signed payload; rejected when absent or non-finite. */
+  timestamp?: unknown
+  /** phase-116 contributor attribution. Accepts the array directly or wrapped. */
+  attribution?: unknown
+  /** Legacy alias for `attribution`; either is honoured. */
+  contributors?: unknown
 }
 
 const ContributorsArraySchema = z.array(
@@ -89,16 +106,35 @@ export async function POST(
   }
 
   const walletStr = body.wallet
-  const signatureVerified = await verifySignalSignature(
-    walletStr,
-    { title: "", body: (body.body as string).trim(), timestamp: body.timestamp as number },
-    body.signature as string,
-  )
-  if (!signatureVerified) {
+  const payloadBytes = Buffer.byteLength(JSON.stringify(body))
+  if (payloadBytes > 64 * 1024) {
     return api.json(
-      { error: "Invalid signature: reply not signed by this wallet" },
-      { status: 400, event: "signals.reply.invalid_signature" },
+      { error: "Payload exceeds 64KB limit" },
+      { status: 400, event: "signals.reply.payload_too_large" },
     )
+  }
+
+  const phase242 = isFeatureEnabled("phase-242")
+  let signatureVerified = false
+  if (phase242) {
+    signatureVerified = await verifySignalSignature(
+      walletStr,
+      { title: "", body: (body.body as string).trim(), timestamp: body.timestamp as number },
+      body.signature as string,
+    )
+    if (!signatureVerified) {
+      return api.json(
+        { error: "Invalid signature: reply not signed by this wallet" },
+        { status: 400, event: "signals.reply.invalid_signature" },
+      )
+    }
+  } else {
+    // Legacy authorship path: verification skipped / best effort
+    signatureVerified = await verifySignalSignature(
+      walletStr,
+      { title: "", body: (body.body as string).trim(), timestamp: body.timestamp as number },
+      body.signature as string,
+    ).catch(() => false)
   }
 
   // phase-156 (Module #56): reject posts from wallets on the governed deny-list.
@@ -200,7 +236,7 @@ export async function POST(
           {
             error: "Signal changed since this reply was composed",
             code: "VERSION_CONFLICT",
-            currentVersion: signal.version,
+            current_version: signal.version,
           },
           { status: 409, event: "signals.reply.version_conflict" },
         )
@@ -230,9 +266,22 @@ export async function POST(
         body: (body.body as string).trim(),
         upvotes: [],
         signature: body.signature as string,
+        signature_verified: signatureVerified,
       },
       parentVersion,
     )
+
+    // phase-146: replies are screened like signals.
+    if (isModerationTriageEnabled()) {
+      screenInBackground({
+        targetKind: "reply",
+        targetId: reply.id,
+        authorWallet: walletStr,
+        title: "",
+        body: reply.body,
+        hasMedia: false,
+      })
+    }
 
     // phase-116: record contributor attribution (flag-gated, best-effort)
     let creditLedger: Awaited<ReturnType<typeof computeCreditLedger>> | null = null

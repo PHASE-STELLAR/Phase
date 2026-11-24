@@ -71,3 +71,13 @@ export async function markSettlementUsedIfUnused(txHash: string): Promise<boolea
     return true
   })
 }
+
+// ── Spikes 672-675 (flag-gated): namespaced idempotency keys ──
+// Base txHash dedup (markSettlementUsedIfUnused) is unchanged; these pure key builders let
+// drop-ticket redemption and dutch quotes reuse the same replay-safe pattern.
+export function dropTicketIdempotencyKey(collectionId: number, wallet: string): string {
+  return `drop:${collectionId}:${wallet.toUpperCase()}`;
+}
+export function dutchQuoteIdempotencyKey(listingId: string, quotedAt: number): string {
+  return `dutch:${listingId}:${quotedAt}`;
+}

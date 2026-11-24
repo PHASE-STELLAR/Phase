@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react"
 import { nftGridOverscanPx } from "@/lib/nft-grid-virtualization"
+import { IpfsDisplayImg } from "@/components/ipfs-display-img"
 
 // ??? phase-117: multi-gateway fallback client wiring ????????????????????????
 // Preserves original lazy-load + initials fallback. When an image fails,
@@ -69,6 +70,7 @@ type WalletAvatarProps = {
   displayName?: string
   size?: number
   className?: string
+  showBadge?: boolean
 }
 
 export function WalletAvatar({
@@ -76,6 +78,7 @@ export function WalletAvatar({
   displayName,
   size = 32,
   className = "",
+  showBadge = false,
 }: WalletAvatarProps) {
   const [avatar, setAvatar] = useState<AvatarData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -177,13 +180,15 @@ export function WalletAvatar({
         style={{ width: size, height: size }}
         title={avatar?.locale ? `${avatar.name} (${avatar.locale})` : avatar?.name}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={avatar.image}
+        <IpfsDisplayImg
+          uri={avatar.image}
           alt={avatar.name}
           className="w-full h-full object-cover"
-          onError={handleImgError}
+          onExhausted={handleImgError}
           loading="lazy"
+          width={size}
+          height={size}
+          sizes={`${size}px`}
         />
       </div>
     )

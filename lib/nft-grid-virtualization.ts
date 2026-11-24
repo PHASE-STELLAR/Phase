@@ -1,3 +1,4 @@
+import { incSecurityCounter } from "@/lib/security-counters"
 /**
  * Module #57 (Issue #79) — Virtualize the Chamber NFT grid so 10k+ owned tokens
  * render without jank on low-end devices.
@@ -27,6 +28,11 @@
 
 import { z } from "zod"
 
+export function isPhase235Enabled(): boolean {
+  const v = (process.env.NEXT_PUBLIC_FEATURE_PHASE_235 ?? process.env.FEATURE_PHASE_235 ?? "").trim().toLowerCase()
+  return v === "1" || v === "true" || v === "yes" || v === "on"
+}
+
 export function isNftGridVirtualizationEnabled(): boolean {
   const v = (
     process.env.NEXT_PUBLIC_FEATURE_PHASE_157 ??
@@ -35,7 +41,7 @@ export function isNftGridVirtualizationEnabled(): boolean {
   )
     .trim()
     .toLowerCase()
-  return v === "1" || v === "true" || v === "yes" || v === "on"
+  return isPhase235Enabled() || v === "1" || v === "true" || v === "yes" || v === "on"
 }
 
 export function flag157RollbackNote(): string {

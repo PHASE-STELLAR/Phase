@@ -4,7 +4,7 @@
  * Validates performance of follow relationship queries and graph traversal
  */
 
-import { describe, it, expect } from "@jest/globals"
+import { describe, it, expect } from "vitest"
 
 describe("Follow Graph Indexer Performance (#46)", () => {
   it("should calculate follower counts without parsing entire file", async () => {

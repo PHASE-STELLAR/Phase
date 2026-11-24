@@ -50,7 +50,7 @@ export async function GET(
     // the 1-year shared cache.
     const { verifyCID, cacheControlForCid } = await import("@/lib/cid-verification")
     const requestedCid = parsed.data[0] ?? ""
-    const verification = verifyCID(requestedCid, result.bytes)
+    const verification = verifyCID(requestedCid, new Uint8Array(result.bytes))
     const gated = request.headers.get("x-phase-gated") === "1"
 
     if (!verification.ok && verification.code === "CID_MISMATCH") {
@@ -58,6 +58,24 @@ export async function GET(
         { error: "CID Mismatch", detail: verification.reason, cid: requestedCid },
         { status: 400, headers: { ...CORS, "Cache-Control": "private, no-store" } },
       )
+    }
+
+    const { isFeatureEnabled } = await import("@/lib/feature-flags")
+    let variantHeaders: Record<string, string> = {}
+
+    if (isFeatureEnabled("phase-142")) {
+      const { parseTransformParams, calculateFocalCrop, STANDARD_IMAGE_VARIANTS } = await import("@/lib/focal-crop")
+      const transform = parseTransformParams(request.nextUrl.searchParams)
+      if (transform.variant || (transform.width && transform.height)) {
+        const aspect = (transform.width && transform.height)
+          ? transform.width / transform.height
+          : (transform.variant ? STANDARD_IMAGE_VARIANTS[transform.variant].aspect : 1.0)
+        const crop = calculateFocalCrop({ width: 2048, height: 2048 }, aspect, transform.focal)
+        variantHeaders = {
+          "X-Phase-Image-Variant": transform.variant ?? "custom",
+          "X-Phase-Focal-Crop": `${crop.x},${crop.y},${crop.width},${crop.height}`,
+        }
+      }
     }
 
     return new NextResponse(result.bytes, {
@@ -69,6 +87,7 @@ export async function GET(
         Vary: "Authorization",
         "X-Phase-Cid-Verified": verification.ok ? "1" : "0",
         ...(isPhase123Enabled() ? { "X-Phase-Gateway": result.gateway, "X-Phase-Latency-Ms": String(result.latencyMs) } : {}),
+        ...variantHeaders,
       },
     })
   }

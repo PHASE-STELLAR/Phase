@@ -18,6 +18,8 @@ export interface HealthCheckRecord {
   status: "healthy" | "warning" | "critical" | "error"
   message: string
   checkedAt: number
+  killSwitchActive?: boolean
+  flagOpsStatus?: "normal" | "killed" | "stale_cache"
 }
 
 export interface HealthHistory {

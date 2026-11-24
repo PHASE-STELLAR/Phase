@@ -419,3 +419,11 @@ export function auditFractionalOwnershipWiring(): { ok: boolean; note: string } 
     }
   }
 }
+
+// ── Spike 673/674 (flag-gated): edition-aware share math passthrough ──
+// Fractional shares remain share-scoped; when phase-editions is on, callers may attach an
+// edition label for display. Pure, no persistence change (rollback = flag off).
+export function fractionalEditionLabel(tokenId: number, editionNumber?: number, editionSize?: number): string {
+  if (editionNumber != null && editionSize != null) return `Token #${tokenId} · Edition ${editionNumber}/${editionSize}`;
+  return `Token #${tokenId}`;
+}

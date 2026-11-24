@@ -1,4 +1,4 @@
-import { describe, it, before, after } from "node:test"
+import { describe, it, beforeAll as before, afterAll as after } from "vitest"
 import * as assert from "node:assert/strict"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"

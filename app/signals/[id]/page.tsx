@@ -1,8 +1,11 @@
 import { notFound } from "next/navigation"
 import Link from "next/link"
 import { WalletAvatar } from "@/components/wallet-avatar"
-import { getSignal, getReplies, getSignalContributors, computeCreditLedger, isPhase116Enabled, isPhase136Enabled, resolveCidGateway, extractIpfsCidPath } from "@/lib/signal-store"
+import { getSignal, getReplies, getSignalContributors, computeCreditLedger, isPhase116Enabled, isPhase136Enabled, resolveCidGateway, extractIpfsCidPath, withModerationView } from "@/lib/signal-store"
+import { ModerationHoldNotice } from "@/components/moderation-hold-notice"
+import { isFaucetDenyListEnabled, isWalletDenied } from "@/lib/faucet-deny-list"
 import { SignalDetailClient } from "./signal-detail-client"
+import { IpfsDisplayImg } from "@/components/ipfs-display-img"
 
 export const dynamic = "force-dynamic"
 
@@ -12,8 +15,10 @@ type Props = {
 
 export async function generateMetadata({ params }: Props) {
   const { id } = await params
-  const signal = await getSignal(id)
-  if (!signal) return { title: "Signal not found — PHASE" }
+  const raw = await getSignal(id)
+  if (!raw) return { title: "Signal not found — PHASE" }
+  // phase-146: held content must not leak through link previews either.
+  const signal = withModerationView(raw)
   return {
     title: `${signal.title} — PHASE SIGNAL_BOARD`,
     description: signal.body.slice(0, 160),
@@ -32,8 +37,9 @@ function timeAgo(ts: number): string {
 
 export default async function SignalDetailPage({ params }: Props) {
   const { id } = await params
-  const signal = await getSignal(id)
-  if (!signal) notFound()
+  const raw = await getSignal(id)
+  if (!raw) notFound()
+  const signal = withModerationView(raw)
 
   const replies = await getReplies(id)
   const shortWallet = `${signal.author_wallet.slice(0, 4)}…${signal.author_wallet.slice(-4)}`
@@ -135,7 +141,7 @@ export default async function SignalDetailPage({ params }: Props) {
             <div className="flex items-center gap-3 border border-[var(--color-border-tertiary)] p-2">
               {nftImageSrc && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={nftImageSrc} alt={signal.nft_name} className="h-10 w-10 object-cover" />
+                <IpfsDisplayImg uri={nftImageSrc} alt={signal.nft_name} className="h-10 w-10 object-cover" width={40} height={40} sizes="40px" />
               )}
               <div className="flex flex-col">
                 <span className="font-mono text-[10px] text-foreground/80">{signal.nft_name}</span>
@@ -154,9 +160,17 @@ export default async function SignalDetailPage({ params }: Props) {
             </div>
           )}
 
-          <p className="font-mono text-[12px] text-muted-foreground leading-relaxed whitespace-pre-wrap">
-            {signal.body}
-          </p>
+          {signal.moderation_hold ? (
+            <ModerationHoldNotice
+              queueId={signal.moderation_hold.queue_id}
+              appealable={signal.moderation_hold.appealable}
+              authorWallet={signal.author_wallet}
+            />
+          ) : (
+            <p className="font-mono text-[12px] text-muted-foreground leading-relaxed whitespace-pre-wrap">
+              {signal.body}
+            </p>
+          )}
 
           <div className="flex items-center gap-4 pt-1 border-t border-[var(--color-border-tertiary)]">
             <span className="font-mono text-[10px] text-muted-foreground">
