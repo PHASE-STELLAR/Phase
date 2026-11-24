@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { NextRequest, NextResponse } from "next/server"
 import {
   getQuestRegistry,
@@ -28,7 +29,7 @@ function validateAdminAuth(req: NextRequest): boolean {
   const adminToken = process.env.ADMIN_API_TOKEN?.trim()
   
   if (!adminToken) {
-    console.warn("[admin/quests] ADMIN_API_TOKEN not configured - admin API disabled")
+    serverLog.warn("[admin/quests] ADMIN_API_TOKEN not configured - admin API disabled")
     return false
   }
   

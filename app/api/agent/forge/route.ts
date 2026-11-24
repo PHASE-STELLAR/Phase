@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 /**
  * POST /api/agent/forge
  *
@@ -354,6 +355,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<AgentForg
       },
       { status: 429, headers: { "Retry-After": String(forgeBillingRetryAfterSeconds(quota)) } },
     )
+  }
   if (isAnalyticsWarehouseEnabled(payerAddress)) {
     void recordWarehouseEvent({
       surface: "forge",
@@ -369,7 +371,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<AgentForg
     challenge = await fetchX402Challenge(origin, prompt, outputLang)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    console.error("[agent/forge] Failed to fetch x402 challenge:", msg)
+    serverLog.error("[agent/forge] Failed to fetch x402 challenge:", msg)
     return NextResponse.json(
       { success: false, error: "Failed to obtain x402 challenge.", detail: msg },
       { status: 502 },
@@ -393,14 +395,14 @@ export async function POST(request: NextRequest): Promise<NextResponse<AgentForg
     settlementTxHash = result.txHash
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    console.error("[agent/forge] settle transaction failed:", msg)
+    serverLog.error("[agent/forge] settle transaction failed:", msg)
     return NextResponse.json(
       { success: false, error: "Agent payment (settle) failed.", detail: msg },
       { status: 502 },
     )
   }
 
-  console.log(
+  serverLog.log(
     `[agent/forge] Payment confirmed. payer=${agentPublicKey} txHash=${settlementTxHash}`,
   )
 
@@ -410,7 +412,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<AgentForg
     forgeResult = await callForgeAgentWithProof(origin, prompt, settlementTxHash, payerAddress, outputLang)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    console.error("[agent/forge] forge-agent generation failed after payment:", msg)
+    serverLog.error("[agent/forge] forge-agent generation failed after payment:", msg)
     return NextResponse.json(
       {
         success: false,

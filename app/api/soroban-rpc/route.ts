@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { NextRequest, NextResponse } from "next/server"
 
 /** Upstream Soroban JSON-RPC (solo servidor; el navegador llama a esta ruta en el mismo origen). */
@@ -318,7 +319,7 @@ export async function POST(req: NextRequest) {
 
     if (process.env.NODE_ENV === "development") {
       // eslint-disable-next-line no-console
-      console.error("[soroban-rpc] all upstream attempts failed", {
+      serverLog.error("[soroban-rpc] all upstream attempts failed", {
         lastFailure,
         timeoutMs: fetchTimeoutMs,
         urlsTried: urls.length,

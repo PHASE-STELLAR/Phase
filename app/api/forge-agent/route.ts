@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { NextRequest, NextResponse } from "next/server"
 import { randomUUID } from "node:crypto"
 import { warnPhaserLiqSacMismatchOnce } from "@/lib/phaser-liq-sac-warn"
@@ -278,7 +279,7 @@ export async function POST(request: NextRequest) {
       const msg = e instanceof Error ? e.message : String(e)
       if (msg === "NANO_BANANA_CORE_OVERLOAD") {
         // Fall through to synchronous pipeline
-        console.warn("[forge-agent] NanaBanana overloaded during async submit, falling back to sync")
+        serverLog.warn("[forge-agent] NanaBanana overloaded during async submit, falling back to sync")
       } else {
         return NextResponse.json(
           { success: false, error: "Fallo al enviar tarea a NanaBanana.", detail: process.env.NODE_ENV === "development" ? msg : undefined },

@@ -15,6 +15,7 @@ import { getWashFlaggedTokenIds } from "@/lib/market-store"
 import { lookupCachedOwners } from "@/lib/explore-owners-cache"
 import { mapConcurrent } from "@/lib/explore-domain"
 import { fetchTokenOwnerAddress, phaseProtocolContractIdForServer } from "@/lib/phase-protocol"
+import { createOwnerReadBatcher, isOwnerReadBatchingEnabled } from "@/lib/owner-read-batcher"
 import { buildPhaseTokenMetadataJson } from "@/lib/phase-nft-metadata-build"
 
 export const runtime = "nodejs"
@@ -58,6 +59,26 @@ const DraftBodySchema = z.object({
 const OWNER_FETCH_CONCURRENCY = 5
 
 async function resolveOwners(tokenIds: number[]): Promise<Map<number, string>> {
+  if (isOwnerReadBatchingEnabled()) {
+    const contractId = phaseProtocolContractIdForServer()
+    const batcher = createOwnerReadBatcher({
+      loadOne: (id) => fetchTokenOwnerAddress(contractId, id),
+      loadOwnerBatch: (ids) =>
+        mapConcurrent(ids, OWNER_FETCH_CONCURRENCY, async (id) => {
+          try {
+            return await fetchTokenOwnerAddress(contractId, id)
+          } catch {
+            return null
+          }
+        }),
+    })
+    const results = await batcher.loadMany(tokenIds)
+    const owners = new Map<number, string>()
+    results.forEach((owner, i) => {
+      if (typeof owner === "string" && owner) owners.set(tokenIds[i], owner)
+    })
+    return owners
+  }
   const owners = lookupCachedOwners(tokenIds)
   const missing = tokenIds.filter((id) => !owners.has(id))
   if (missing.length > 0) {

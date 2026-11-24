@@ -18,6 +18,8 @@ import {
   xdr,
 } from "@stellar/stellar-sdk"
 import { validatePhaseEnv, formatEnvValidationErrors } from "@/lib/env-validation"
+import { buildReadKey } from "@/lib/soroban-read-coalescer"
+import { isRpcBatchingEnabled, readThroughSharedCache } from "@/lib/rpc-batch"
 import {
   DEFAULT_LIQUIDITY_ASSET_CODE,
   DEFAULT_LIQUIDITY_ISSUER,
@@ -557,6 +559,26 @@ async function rpcGetUserSourceAccount(
  * y pide simulación al RPC (sin reutilizar footprint ni resultado de peticiones anteriores).
  */
 async function simulateContractCall(
+  contractId: string,
+  method: string,
+  args: xdr.ScVal[],
+  feeSourceGAddress: string,
+): Promise<unknown> {
+  if (isRpcBatchingEnabled()) {
+    // phase-209: identical reads share one value (and one in-flight request)
+    // across instances. Keys use the base64 XDR of each argument, so two
+    // callers with the same logical args converge on one cache entry.
+    const key = buildReadKey(contractId, method, args.map((arg) => arg.toString()))
+    return readThroughSharedCache(
+      key,
+      () => simulateOnce(contractId, method, args, feeSourceGAddress),
+      { staleOnError: true },
+    )
+  }
+  return simulateOnce(contractId, method, args, feeSourceGAddress)
+}
+
+async function simulateOnce(
   contractId: string,
   method: string,
   args: xdr.ScVal[],

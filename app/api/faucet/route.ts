@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { recordTaxEvent } from "@/lib/tax-report"
 import { complianceGate } from "@/lib/compliance"
 import { NextRequest, NextResponse } from "next/server"
@@ -466,7 +467,7 @@ function faucetMintLedgerFailedResponse(
   failed: rpc.Api.GetFailedTransactionResponse,
 ): NextResponse {
   const sorobanSummary = summarizeSorobanFailedMint(failed)
-  console.error("[faucet] Soroban mint/transfer FAILED (trustline ya verificada en esta petición)", {
+  serverLog.error("[faucet] Soroban mint/transfer FAILED (trustline ya verificada en esta petición)", {
     hash,
     sorobanSummary,
     ledger: failed.ledger,
@@ -536,12 +537,12 @@ async function preflightClassicTrustlineForMint(userAddress: string): Promise<Ne
       const nativeBalance = userData.balances?.find(b => b.asset_type === "native")?.balance
       const xlmAmount = nativeBalance ? parseFloat(nativeBalance) : 0
       if (xlmAmount < 1) {
-        console.warn(`[faucet] Warning: user ${userAddress.slice(0, 8)}... has only ${xlmAmount} XLM. Consider funding more.`)
+        serverLog.warn(`[faucet] Warning: user ${userAddress.slice(0, 8)}... has only ${xlmAmount} XLM. Consider funding more.`)
       }
     }
   } catch (e) {
     // Horizon intermitente: loggear pero no bloqueamos el mint
-    console.warn("[faucet] Horizon check failed, proceeding anyway:", e instanceof Error ? e.message : String(e))
+    serverLog.warn("[faucet] Horizon check failed, proceeding anyway:", e instanceof Error ? e.message : String(e))
     return null
   }
   return null
@@ -831,7 +832,7 @@ export async function POST(req: NextRequest) {
 
     // Validación adicional: verificar que el tokenId coincida con el SAC esperado
     if (tokenId !== sacExpected) {
-      console.warn("[faucet] Warning: PHASE_LIQ_TOKEN_CONTRACT no coincide con el SAC derivado del asset clásico", {
+      serverLog.warn("[faucet] Warning: PHASE_LIQ_TOKEN_CONTRACT no coincide con el SAC derivado del asset clásico", {
         configured: tokenId,
         expectedFromClassic: sacExpected,
       })
@@ -892,7 +893,7 @@ export async function POST(req: NextRequest) {
     if (isDistributorTopupEnabled(source) && useTransfer) {
       void prepareTopup(source).then((topup) => {
         if (topup.shouldTopup) {
-          console.log(`[faucet] phase-133 distributor auto-top-up: ${topup.reason}`)
+          serverLog.log(`[faucet] phase-133 distributor auto-top-up: ${topup.reason}`)
         }
       }).catch(() => {})
     }

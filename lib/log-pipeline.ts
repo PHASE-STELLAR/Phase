@@ -61,6 +61,17 @@ const REDACTED = "[REDACTED]"
 const MAX_STRING = 1000
 const MAX_DEPTH = 6
 
+/** phase-211: identifiers must never appear in a log line, in any field. */
+const WALLET_ID_RE = /G[A-Z2-7]{55}/g
+const CID_RE = /\b(?:Qm[1-9A-HJ-NP-Za-km-z]{44}|bafy[a-z0-9]{20,}|bafk[a-z0-9]{20,}|bafb[a-z0-9]{20,})\b/g
+
+/** Masks raw Stellar secrets, wallets and CIDs inside a free-text value. */
+export function redactLogIdentifiers(text: string): string {
+  return text
+    .replace(WALLET_ID_RE, "[REDACTED_WALLET]")
+    .replace(CID_RE, "[REDACTED_CID]")
+}
+
 /** Keys whose values are never shipped, whatever they contain. */
 const SENSITIVE_KEY_RE =
   /secret|seed|private|passphrase|password|authorization|api[_-]?key|token(?!_?id)|rawpayload|errorresult|signature(?!_?verified)/i
@@ -76,7 +87,7 @@ export function logPipelineRollbackNote(): string {
 /** Deep-masks secret-bearing keys and Stellar `S...` seeds; cycle- and depth-safe. */
 export function redactLogValue(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
   if (typeof value === "string") {
-    const masked = redactSecretKeys(value)
+    const masked = redactLogIdentifiers(redactSecretKeys(value))
     return masked.length > MAX_STRING ? `${masked.slice(0, MAX_STRING)}…[truncated]` : masked
   }
   if (typeof value === "bigint") return value.toString()

@@ -89,7 +89,6 @@ export function assertGatewayAllowed(url: string): void {
     throw new GatewayNotAllowedError(url)
   }
 }
-}
 
 // ─── schemas ─────────────────────────────────────────────────────────────────
 

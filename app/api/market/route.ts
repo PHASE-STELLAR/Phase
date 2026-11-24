@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { NextRequest, NextResponse } from "next/server"
 import { StrKey } from "@stellar/stellar-sdk"
 import { getListings, createListing, isPhase140Enabled, denoteListingInPool } from "@/lib/market-store"
@@ -184,7 +185,7 @@ export async function POST(request: NextRequest) {
       const band = getSuggestionBand(suggestionId)
       if (band) price_warning = priceWarningFor(price_phaselq, band, body.lang === "es" ? "es" : "en")
     } catch (error) {
-      console.warn("[phase-143] suggestion outcome not recorded:", error)
+      serverLog.warn("[phase-143] suggestion outcome not recorded:", error)
     }
   }
 

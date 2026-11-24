@@ -68,6 +68,12 @@ function checkSessionRateLimit(sessionId: string, now: number): { allowed: boole
   return { allowed: true, retryAfterMs: 0 }
 }
 
+export async function GET(request: NextRequest) {
+  const q = request.nextUrl.searchParams.get("q")?.trim().toLowerCase() ?? ""
+  const filter = request.nextUrl.searchParams.get("filter") ?? "all"
+  const viewer = request.nextUrl.searchParams.get("viewer")?.trim() ?? ""
+  const cursor = request.nextUrl.searchParams.get("cursor") ?? ""
+
   const now = Date.now()
   const sessionId = request.nextUrl.searchParams.get("sid")?.trim() || "anonymous"
 

@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 /**
  * POST /api/webhooks/nanobanana
  *
@@ -50,7 +51,7 @@ function verifyWebhookSignature(rawBody: string, signatureHeader: string | null)
   const secret = getWebhookSecret()
   if (!secret) {
     // No secret configured — skip signature check (development / initial setup)
-    console.warn("[nanobanana-webhook] NANOBANANA_WEBHOOK_SECRET not set; skipping signature check")
+    serverLog.warn("[nanobanana-webhook] NANOBANANA_WEBHOOK_SECRET not set; skipping signature check")
     return true
   }
   if (!signatureHeader) return false
@@ -187,7 +188,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   // Verify signature
   if (!verifyWebhookSignature(rawBody, signatureHeader)) {
-    console.error("[nanobanana-webhook] Invalid webhook signature", {
+    serverLog.error("[nanobanana-webhook] Invalid webhook signature", {
       signatureHeader,
       bodyPrefix: rawBody.slice(0, 120),
     })
@@ -241,7 +242,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   if (!job) {
     // No matching job — may have already been cleaned up or was from a different instance
-    console.warn("[nanobanana-webhook] No generation job found for taskId:", taskId)
+    serverLog.warn("[nanobanana-webhook] No generation job found for taskId:", taskId)
     return new NextResponse(null, { status: 200 })
   }
 
@@ -265,7 +266,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   // Handle failure from NanoBanana
   if (successFlag === 2 || successFlag === 3) {
     const errMsg = errorMessage || `NanoBanana task failed (successFlag=${successFlag ?? "unknown"})`
-    console.error("[nanobanana-webhook] Task failed:", { taskId, errMsg })
+    serverLog.error("[nanobanana-webhook] Task failed:", { taskId, errMsg })
     await updateGenerationJob(job.id, { status: "failed", error: errMsg }).catch(() => {})
     await appendGenerationDlq({
       jobId: job.id,
@@ -295,13 +296,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       payerAddress: job.payerAddress,
       collectionId: job.collectionId,
     }).catch((err) => {
-      console.error("[nanobanana-webhook] continueForgeAfterWebhook unhandled", err)
+      serverLog.error("[nanobanana-webhook] continueForgeAfterWebhook unhandled", err)
     })
 
     return new NextResponse(null, { status: 200 })
   }
 
   // successFlag === 0 or undefined — still processing, NanoBanana is pinging for progress
-  console.log("[nanobanana-webhook] Task still processing:", { taskId, successFlag })
+  serverLog.log("[nanobanana-webhook] Task still processing:", { taskId, successFlag })
   return new NextResponse(null, { status: 200 })
 }

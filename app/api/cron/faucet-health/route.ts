@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { NextRequest, NextResponse } from "next/server"
 import { Keypair, StrKey } from "@stellar/stellar-sdk"
 import { fetchDistributorBalance, distributorNeedsTopup } from "@/lib/distributor-topup"
@@ -55,7 +56,7 @@ function validateCronAuth(req: NextRequest): boolean {
   }
   
   if (!cronSecret) {
-    console.warn("[cron/faucet-health] CRON_SECRET not configured")
+    serverLog.warn("[cron/faucet-health] CRON_SECRET not configured")
     return false
   }
   

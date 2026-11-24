@@ -8,6 +8,8 @@ import { buildPhaseTokenMetadataJson } from "@/lib/phase-nft-metadata-build"
 import { extractBaseAddress } from "@stellar/stellar-sdk"
 import { getAllWorldCollections } from "@/lib/narrative-world-store"
 import { isFeatureEnabled } from "@/lib/feature-flags"
+import { updateStore } from "@/lib/json-store"
+import { createOwnerReadBatcher, isOwnerReadBatchingEnabled } from "@/lib/owner-read-batcher"
 import {
   dedupeExploreItems,
   isQuestExpiryEnabled,
@@ -78,17 +80,48 @@ export async function GET(request: NextRequest) {
       found = cachedOwners.owners
     } else {
       const scanIds = Array.from({ length: total }, (_, i) => i + 1)
-      const runScan = () =>
-        // Keep the caller pool aligned with the shared Horizon bulkhead. The
-        // bulkhead also protects concurrent requests and other owner scans.
-        mapConcurrent(scanIds, 5, async (id) => {
-          try {
-            const owner = await fetchTokenOwnerAddress(contractId, id)
-            return owner ? { id, owner } : null
-          } catch {
-            return null
-          }
-        }).then((owners) => owners.filter((x): x is ExploreOwner => x !== null))
+      const runScan = async () => {
+        let owners: Array<string | null | Error>
+        if (isOwnerReadBatchingEnabled()) {
+          // phase-210: index/sidecar answers first; only genuinely unknown ids
+          // reach a chunked owner batch. A failed chunk degrades to the same
+          // null-per-id shape as the original per-token scan.
+          const batcher = createOwnerReadBatcher({
+            loadOne: (id) => fetchTokenOwnerAddress(contractId, id),
+            loadOwnerBatch: (ids) =>
+              mapConcurrent(ids, 5, async (id) => {
+                try {
+                  return await fetchTokenOwnerAddress(contractId, id)
+                } catch {
+                  return null
+                }
+              }),
+            maxBatchSize: 50,
+            useIndex: false,
+          })
+          owners = await batcher.loadMany(scanIds)
+        } else {
+          // Keep the caller pool aligned with the shared Horizon bulkhead. The
+          // bulkhead also protects concurrent requests and other owner scans.
+          owners = await mapConcurrent(scanIds, 5, async (id) => {
+            try {
+              return await fetchTokenOwnerAddress(contractId, id)
+            } catch {
+              return null
+            }
+          })
+        }
+        const resolved = owners
+          .map((owner, i) => ({ id: scanIds[i], owner }))
+          .filter((x): x is ExploreOwner => typeof x.owner === "string" && x.owner.length > 0)
+        if (isOwnerReadBatchingEnabled() && resolved.length > 0) {
+          // Persist the scan so the next request is answered by sidecar mget.
+          await updateStore<Record<string, string>>("ownerIndex", (store) => {
+            for (const { id, owner } of resolved) store[String(id)] = owner
+          }).catch(() => {})
+        }
+        return resolved
+      }
 
       if (!ownersCacheOn) {
         found = await runScan()

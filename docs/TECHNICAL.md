@@ -778,7 +778,22 @@ Flag: `phase-172` (`NEXT_PUBLIC_FEATURE_PHASE_172` / `FEATURE_PHASE_172`). Defau
 - `PHASE_DATABASE_URL` + flag → `dual`; otherwise `primary-only`.
 - Check two databases with `npm run db:parity -- <left> <right>`.
 - Counters: `db_parity_checked`, `db_parity_mismatch`, `db_dual_write_ok|drift|shed`.
-- Not covered: a `pg` driver, async re-plumbing of the `MAX_CAS_ATTEMPTS` loops, advisory locks replacing `fileQueues`, pool storm testing.
+- Not covered here (see phase-212 below): advisory locks replacing `fileQueues`.
+
+### 22.1 phase-212 — Postgres driver, async CAS, live parity, pool storm
+
+Flag: `phase-212` plus `PHASE_DATABASE_URL`. Default off.
+
+- `lib/postgres-driver.ts`: lazily imports `pg` only in dual mode (no new hard dependency); `PgPoolLike` is injectable so tests use a fake pool. `translateSql` qualifies tables into an isolated schema and rewrites `?` → `$n`; `INSERT OR REPLACE` is rejected in favour of an explicit conflict target. `createPostgresParitySource` reads tables/columns/primary keys through `information_schema`.
+- `lib/async-cas.ts`: `SyncCasGate` keeps the authoritative primary read+write atomic in one event-loop turn (preserving the 50-writer CAS contract); a successful CAS is shadowed to Postgres through a `DualWriter` whose in-flight cap sheds with `PoolShedError` instead of queueing. `signal-store`'s `upvoteSignal`/`voteOnPoll` use this path. `setMode("primary-only")` / unset flag is rollback.
+- `compareSourcesAsync` in `lib/db-parity.ts` awaits either side, so the existing typed parity suite runs against a real Postgres. The live suite is skipped unless `PHASE_DATABASE_URL` is set and uses `perTestSchemaName` + `DROP SCHEMA … CASCADE`.
+- Counters: `db_postgres_driver_opened|schema_created|schema_dropped`, `db_pool_shed`, `db_cas_applied|conflict`.
+
+### 22.2 phase-209/210/211 — RPC batching, owner batching, server logging
+
+- `lib/rpc-batch.ts` (phase-209): `createBatchingRpcTransport` groups same-tick JSON-RPC calls into one array and isolates sub-call errors; `SharedRpcCache` has an in-memory fallback and a KV adapter; `readThroughSharedCache` shares one in-flight promise locally and one TTL value across instances, with stale-on-error. Wired into `simulateContractCall`.
+- `lib/owner-read-batcher.ts` (phase-210) + `mgetStoreRecords`/`mgetStores` in `lib/json-store.ts`: explore/exhibitions/world-page owner reads go index → sidecar mget → chunked batch. `benchmarkOwnerReads` reports `unbatchedRpcCalls` vs `batchedRpcCalls`. New sidecar: `owner-index.json`.
+- `lib/server-logger.ts` (phase-211): `serverLog` routes all `app/api/**` calls through `emitLog`, masks wallets/CIDs/seeds, emits one structured line via `writeConsoleLine`, and `after()` flushes the batch on serverless freeze. Flag off is an identity emitter. Closed counter list: `LOG_PIPELINE_COUNTERS`.
 
 ## 23. Preview environment isolation (spike 603)
 

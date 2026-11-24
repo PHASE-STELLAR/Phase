@@ -1,8 +1,9 @@
 import { redactSecrets } from "@/lib/x402-dead-letter"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 import { randomUUID } from "node:crypto"
-import { NextRequest, NextResponse } from "next/server"
-import { emitLog } from "@/lib/log-pipeline"
+import { after, NextRequest, NextResponse } from "next/server"
+import { emitLog, flushLogPipeline, isLogPipelineEnabled } from "@/lib/log-pipeline"
+import { isServerLogRoutingEnabled, writeConsoleLine } from "@/lib/server-logger"
 import { isAnalyticsWarehouseEnabled, recordWarehouseEvent } from "@/lib/analytics-warehouse"
 
 type ApiLogLevel = "info" | "warn" | "error"
@@ -66,9 +67,7 @@ export function createApiRequestContext(request: NextRequest, route: string) {
     })
     const line = JSON.stringify(payload)
 
-    if (level === "error") console.error(line)
-    else if (level === "warn") console.warn(line)
-    else console.info(line)
+    writeConsoleLine(level, line)
   }
 
   function json<T>(body: T, init: ApiJsonInit = {}) {
@@ -98,6 +97,12 @@ export function createApiRequestContext(request: NextRequest, route: string) {
           ...boundedMetadata,
         },
       }).catch(() => {})
+    }
+
+    // phase-211: Next's `after` is the platform waitUntil — it keeps the
+    // pipeline alive until the pending batch is flushed on serverless freeze.
+    if (isServerLogRoutingEnabled() && isLogPipelineEnabled()) {
+      after(() => flushLogPipeline())
     }
 
     return response

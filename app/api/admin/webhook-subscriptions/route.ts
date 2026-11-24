@@ -1,3 +1,4 @@
+import { serverLog } from "@/lib/server-logger"
 import { NextRequest, NextResponse } from "next/server"
 import { isFeatureEnabled } from "@/lib/feature-flags"
 import {
@@ -25,7 +26,7 @@ function validateAdminAuth(req: NextRequest): boolean {
   const adminToken = process.env.ADMIN_API_TOKEN?.trim()
 
   if (!adminToken) {
-    console.warn("[admin/webhook-subscriptions] ADMIN_API_TOKEN not configured")
+    serverLog.warn("[admin/webhook-subscriptions] ADMIN_API_TOKEN not configured")
     return false
   }
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
