@@ -11,14 +11,25 @@
  * Rollback: unset the flag and restart. Subscription rows stay on disk,
  * inert — no migration to undo.
  *
- * SCOPE NOTE (see PR description "Scope and residual risk"): this is a
- * partial slice of issue #527. Endpoint verification handshake, SSRF
- * fencing, durable cross-instance delivery ordering, and a redelivery UI
- * are explicitly NOT implemented here.
+ * phase-215 completes the SSRF fence, per-endpoint circuit breaker, delivery
+ * log and redelivery path (see lib/webhook-ssrf.ts, lib/webhook-delivery.ts).
+ * Cross-instance delivery ordering remains a known limitation of the JSON
+ * sidecar substrate.
  */
 
 import { randomBytes, randomUUID } from "node:crypto"
 import { readStore, updateStore } from "@/lib/json-store"
+import { isFeatureEnabled, flagRollbackNote } from "@/lib/feature-flags"
+import { validateWebhookUrl } from "@/lib/webhook-ssrf"
+
+/** phase-215 is the rollout flag for the completed subscription system. */
+export function isPhase215Enabled(): boolean {
+  return isFeatureEnabled("phase-215")
+}
+
+export function webhook215RollbackNote(): string {
+  return flagRollbackNote("phase-215")
+}
 
 export type WebhookEventType =
   | "settle.verified"
@@ -60,16 +71,9 @@ export type CreateSubscriptionInput = {
   events: WebhookEventType[]
 }
 
+/** phase-215: https-only + private-range denial at registration time. */
 function assertValidUrl(url: string): void {
-  let parsed: URL
-  try {
-    parsed = new URL(url)
-  } catch {
-    throw new Error("Invalid subscription url")
-  }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    throw new Error("Subscription url must be http(s)")
-  }
+  validateWebhookUrl(url)
 }
 
 /**

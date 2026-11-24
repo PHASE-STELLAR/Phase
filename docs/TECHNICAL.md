@@ -72,7 +72,7 @@ flowchart TB
 | `lib/phase-copy.ts` | Centralized i18n dictionary (EN/ES) |
 | `lib/server-data-paths.ts` | Writable data location abstraction |
 | `lib/json-store.ts` | Serialized read-modify-write + atomic write for the JSON sidecar stores (§5.4) |
-| `lib/feature-flags.ts` | Flag registry (phase-107,111,113,114 + 116,117,119,120 + 121..124, env resolution, rollback notes) |
+| `lib/feature-flags.ts` | Flag registry (phase-107,111,113,114 + 116,117,119,120 + 121..124 + 154,160,161,164,165,213..216, env resolution, rollback notes) |
 | `lib/world-conflict.ts` | World save conflict detection (phase-105): version check + per-author vector clock normalization (object / `Map` / entries array) and ordering |
 | `lib/story-arc-continuity.ts` | AI story-arc continuity check against recent world narratives (phase-107) |
 | `lib/narrative-world-store.ts` | World/narrative JSON store + localized per-(tokenId,lang) narrative cache (phase-111) + world export snapshot builder and markdown renderer (phase-112) + collaborative role store with ownership enforcement (phase-109) + lore link store with back-reference index (phase-115) |
@@ -190,6 +190,10 @@ settlement verifier and must not accept unsigned base64 payloads.
 | `phase-143` | `GET/POST /api/notifications/winback` | AI-driven churn and winback: dormancy tier classification, tailored return hooks, randomized experiment cohorts, and 7-day fatigue caps | `404` disabled |
 | `phase-144` | `GET/POST /api/governance/ve-lock` | ve-PHASELQ time-locked governance escrow: decaying lock weight (`1-208` weeks), pro-rata treasury fee-share distribution, and claims | `404` disabled |
 | `phase-145` | `GET/POST /api/governance/gauge` | Gauge voting for emissions: ve-weight-proportional votes directing weekly quest budget allocations across collections | `404` disabled |
+| `phase-213` | `POST /api/rum/ingest`, `components/web-vitals-reporter.tsx`, `.github/workflows/web-vitals-budget.yml` | Closed-label RUM: five whitelisted fields only (normalized route, `LCP|INP|CLS`, value, SHA-256 session hash, ts). CI evaluates p75 against the per-route budget table and comments deltas on the PR | `404` disabled; no observers registered; workflow skips; no evaluation |
+| `phase-214` | Callers of `lib/phase-error-presentation.ts` + `app/api/soroban-rpc/route.ts` | Typed transport errors (429/5xx/timeout/network) with `Retry-After` parsing, bounded jittered backoff and retryable descriptors (1001..1004) | Legacy `humanizePhaseHostErrorMessage` and fixed 1s/2s/4s proxy backoff |
+| `phase-215` | `/api/admin/webhook-subscriptions/*`, `/api/admin/webhook-deliveries`, `app/admin/webhook-subscriptions` | Signed `settle.verified` / `market.offer_accepted` / `faucet.claim_completed` emissions; https-only SSRF fence with DNS pinning; delivery log + redelivery UI; per-endpoint circuit breaker | All admin routes `404`; no emissions; rows inert |
+| `phase-216` | `POST /api/phase-nft/verify`, `POST /api/faucet`, `GET /api/market`, bulk CSV | Viewer/claim age gates return `451 AGE_RESTRICTED`; license revocation delists a collection in the same request; listings and CSV carry license metadata; decisions appended to an audit log | Gates are no-ops; no `license` field; CSV columns omitted |
 
 ### 5.3 Signal concurrency contract
 
@@ -379,6 +383,8 @@ Critical groups:
 - Classic asset configuration (`CLASSIC_LIQ_*`, `NEXT_PUBLIC_CLASSIC_*`)
 - Gemini runtime (`GEMINI_API_KEY`)
 - Writable server data directory (`PHASE_SERVER_DATA_DIR`)
+- Feature flags (`PHASE_FLAG_*`) and ops kill switch (`PHASE_OPS_KILL_SWITCH`) — see [`FLAGS.md`](FLAGS.md)
+- Flagged adapter configuration (`PHASE_SEP50_*`, `PHASE_BRIDGE_*`, `PHASE_NETWORK`) — see [`FLAGGED_ADAPTERS.md`](FLAGGED_ADAPTERS.md)
 
 ### 9.1 Feature flags (phase-82..149)
 
@@ -859,6 +865,8 @@ Flag: `phase-182` (`NEXT_PUBLIC_FEATURE_PHASE_182` / `FEATURE_PHASE_182`). Defau
 
 **Contract.** `phase-protocol` gains `set_pool_leg` / `get_pool_leg` / `clear_pool_leg` (admin-only, non-zero pool id) and a `PoolLegConfig` storage entry. `settle` is intentionally unchanged: a Soroban contract cannot emit classic DEX operations, so the pool leg is a treasury-signed path payment that reads this config off-chain.
 
+---
+
 ## 29. Amounts, env validation, security counters and edge runtime (issues #723–#726)
 
 **Amounts (phase-265).** `lib/decimal-amount.ts` is the one parser for user and stored amounts. `parseDecimalAmount` returns bigint minor units (7 decimals = stroops by default), rejects scientific notation, hex, blanks and values above `MAX_STELLAR_STROOPS` (int64), and by default rejects digits beyond the decimal places; callers that must accept them pick `floor`, `ceil`, `half-up` (half away from zero) or `half-even`. JS numbers are expanded from their shortest round-trip string, so `0.1` is exactly one tenth and `1e-7` is one stroop. Splits use `bpsShare` on stroops, so seller + royalty (or every collab/escrow payee) always sums to the sale. The market still stores numbers; `stroopsToNumber` gives the closest double to the exact amount, so there is no data migration. x402 amounts are compared as integer stroops with `meetsRequiredStroops`, which fails closed on a malformed requirement.
@@ -869,22 +877,40 @@ Flag: `phase-182` (`NEXT_PUBLIC_FEATURE_PHASE_182` / `FEATURE_PHASE_182`). Defau
 
 **Edge runtime (phase-268).** `middleware.ts` (and any `app/` file with `export const runtime = "edge"`) runs on the edge runtime, which has no filesystem, `Buffer`, `require` or Node builtins. `lib/edge-bundle.ts` bundles each edge entry and each module in `EDGE_SAFE_MODULES` with the `edge-light` conditions and `process.env.NEXT_RUNTIME = "edge"`, records every Node-only import with its import chain, and boots edge entries in `next/dist/compiled/edge-runtime` (with a Web-API stand-in for `next/server`). `npm run edge:check` runs it in CI, and an ESLint override forbids Node imports and globals in the same files. `lib/dependency-cadence-shared.ts` holds the toolchain constants so `lib/phase-protocol.ts` no longer imports `node:crypto`. `lib/edge-store.ts` reads and updates JSON sidecars through `lib/json-store.ts` on Node, with the import behind `process.env.NEXT_RUNTIME` so edge bundles never contain it; on edge with the flag on it degrades to a per-isolate memory copy (`degraded: true`, not durable, `edge_store_degraded`), and with it off it throws `EdgeStoreUnavailableError`. The flag does not move routes between runtimes: Next.js reads `export const runtime` statically at build time.
 
-### 29. Explorer links and Albedo sunset (phase-220 / phase-221)
+---
 
-- `lib/explorer-links.ts`: `buildExplorerUrl` emits only https://stellar.expert
-  testnet paths; mainnet requires an explicit `PHASE_EXPLORER_ALLOW_MAINNET=1`
-  opt-in and is otherwise counted as `explorer_mainnet_link_blocked`.
-  `sanitizeEnrichmentRequest` accepts only `kind` and `id`, rejecting any extra
-  field before a request leaves the browser. `fetchTxEnrichment` /
-  `fetchAssetEnrichment` use Horizon with a 3 s abort timeout and return
-  `{ ok:false, reason }` rather than throwing. The UI panel always shows the raw
-  hash and falls back to localized "metadata unavailable" copy.
-- `lib/albedo-sunset.ts`: call-site registry, `parity-freeze` (default) and
-  `retired` modes. Retirement fails closed at the intent client and the kit
-  signing guard; the status endpoint also reports the pinned dependency version.
-- Routes: `GET /api/explorer/enrichment?kind=tx&id=<hash>` and
-  `GET /api/albedo/status` both return 404 when their flag is off.
-- Verification: `npx tsx --test lib/__tests__/explorer-links.test.ts` and
-  `npx tsx --test lib/__tests__/albedo-sunset.test.ts`. Live pool proof:
-  `npx tsx scripts/phase-182-pool-proof.ts` (writes real tx hashes to
-  `.data/phase-182-pool-proof.json`; never fabricates them).
+## 30. Canonical flag registry (unique IDs)
+
+- Canonical registry: `lib/flags/registry.ts`; full table: [`FLAGS.md`](FLAGS.md).
+  It coexists with the build-time `NEXT_PUBLIC_FEATURE_PHASE_*` flags described
+  in §9.1; the `PHASE_FLAG_*` vars are the unique-ID registry added by the
+  refactor.
+- IDs are unique per feature. The historically reused `phase-170`…`phase-173`
+  tokens survive only as aliases in `FLAG_ENV_MAP`; the second features own
+  `phase-184`…`phase-187` (`phase-180`…`phase-182` were already taken by the
+  analytics warehouse, anomaly detection and liquidity pools).
+- Evaluation is a frozen snapshot taken at import time — flags are never read
+  from `process.env` per request.
+- `npm run flags:check` rejects duplicate IDs/env vars/aliases; CI enforces it.
+- `npm run drill:kill-switch` runs a non-destructive drill for distributor
+  auto-refill halt and `faucetPending` mid-poll idempotency.
+
+## 31. Flagged adapters
+
+| Adapter | Flag | Boundary | Failure mode |
+| --- | --- | --- | --- |
+| SEP-50 attestation | `phase-217` | Server verification, SEP-10 binding, hashed subjects | 503 + `Retry-After` on outage |
+| EVM bridge | `phase-218` | Client signs Stellar; server custody on EVM | 404 when off; 403 if not testnet |
+| Cross-chain verifier | `phase-219` | Read-only proof verification | `invalid` / `disabled`, never writes |
+
+Details and custody recovery procedure: [`FLAGGED_ADAPTERS.md`](FLAGGED_ADAPTERS.md).
+Root spikes: `SPIKE_645_SEP50_CONFORMANCE.md`, `SPIKE_646_EVM_BRIDGE.md`,
+`SPIKE_647_CROSS_CHAIN_VERIFICATION.md`.
+
+## 32. Flag/adapter verification commands
+
+```bash
+npm run flags:check
+npm run drill:kill-switch
+npm run test:adapters   # node:test adapter/flag checks (npm test runs vitest)
+```

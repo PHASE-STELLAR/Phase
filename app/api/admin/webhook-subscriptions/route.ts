@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { isFeatureEnabled } from "@/lib/feature-flags"
+import { isPhase215Enabled } from "@/lib/webhook-subscriptions"
 import {
   createSubscription,
   listSubscriptions,
@@ -14,7 +14,7 @@ import {
  * GET  /api/admin/webhook-subscriptions - List subscriptions (secrets masked)
  * POST /api/admin/webhook-subscriptions - Create a subscription
  *
- * Flag: phase-154. Disabled routes return 404, matching the convention used
+ * Flag: phase-215 (phase-154 precursor). Disabled routes return 404, matching the convention used
  * by every other flag-gated route in this repo (see PROJECT_ARCHITECTURE.md §10).
  */
 
@@ -36,7 +36,7 @@ function validateAdminAuth(req: NextRequest): boolean {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isFeatureEnabled("phase-154")) {
+  if (!isPhase215Enabled()) {
     return NextResponse.json({ error: "Not found" }, { status: 404 })
   }
   if (!validateAdminAuth(req)) {
@@ -54,7 +54,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  if (!isFeatureEnabled("phase-154")) {
+  if (!isPhase215Enabled()) {
     return NextResponse.json({ error: "Not found" }, { status: 404 })
   }
   if (!validateAdminAuth(req)) {

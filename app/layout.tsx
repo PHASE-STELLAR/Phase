@@ -146,6 +146,7 @@ export default function RootLayout({
             {children}
           </AppProviders>
         </SmoothScroll>
+        <WebVitalsReporter />
         <Analytics />
       </body>
     </html>

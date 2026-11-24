@@ -70,3 +70,17 @@ pub enum ProofStatus {
 - [ ] Replay protection spec finalized
 - [ ] API integration points documented
 - [ ] Test strategy outlined
+
+## Implementation note (flag `phase-219`)
+
+A read-only proof verifier was added behind `PHASE_FLAG_CROSSCHAIN_VERIFY` in
+`lib/adapters/crosschain/`:
+
+- light-client-style header + sibling-path verification against a configured
+  trust root;
+- wrong-network, wrong-chain, stale/future header and tampered-proof fences;
+- no write authority and private, monotonic counters;
+- flag off returns `disabled` without touching counters.
+
+Evidence: `tests/crosschain.test.ts`. Operations: `docs/FLAGGED_ADAPTERS.md`.
+Rollback: unset the flag — verification is skipped.

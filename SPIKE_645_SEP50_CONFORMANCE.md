@@ -36,3 +36,18 @@ SEP-50 specifies:
 - [ ] Contract passes conformance test suite
 - [ ] CI workflow enforces conformance
 - [ ] Metadata compliance documented in PROJECT_ARCHITECTURE.md
+
+## Attestation conformance (flag `phase-217`)
+
+This spike owns the Soroban NFT-interface checklist above. The separate
+regulated-asset / SEP-10-attestation scope is implemented behind
+`PHASE_FLAG_SEP50_ADAPTER` in `lib/adapters/sep50/`:
+
+- discovery → SEP-10 session binding → attestation verification;
+- hashed subjects only (`sha256(account|issuer)`), no PII persisted;
+- tampered/expired attestations rejected;
+- provider outage fails closed with `503` + `Retry-After`;
+- testnet mock provider fenced by a static network snapshot.
+
+Operational details: `docs/FLAGGED_ADAPTERS.md`. Evidence:
+`tests/sep50.test.ts`. Rollback: unset the flag — checks are skipped.

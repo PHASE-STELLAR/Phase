@@ -1,96 +1,137 @@
 "use client"
 
+/**
+ * phase-213 — live RUM collector.
+ *
+ * Registers performance observers only when the phase-213 flag is on. Emits
+ * LCP / INP / CLS to the closed-label `/api/rum/ingest` route using only:
+ *   - a normalized route template (no query, wallet address or CID),
+ *   - a SHA-256 hash of a per-session random UUID (never the UUID itself),
+ *   - a numeric metric value and a timestamp.
+ *
+ * The component returns null; no DOM, no dataLayer, no PII.
+ * Rollback: unset the flag → observers are never registered and nothing posts.
+ */
+
 import { useEffect } from "react"
+import {
+  createRumEvent,
+  isRumCollectorEnabled,
+  type VitalName,
+} from "@/lib/web-vitals-budgets"
 
-declare global {
-  interface Window {
-    dataLayer?: Record<string, unknown>[]
+const SESSION_KEY = "phase-rum-session-v1"
+const FLUSH_DELAY_MS = 15_000
+
+async function hashedSessionId(): Promise<string | null> {
+  if (typeof crypto === "undefined" || !crypto.subtle) return null
+  let raw: string | null = null
+  try {
+    raw = sessionStorage.getItem(SESSION_KEY)
+    if (!raw) {
+      raw = crypto.randomUUID()
+      sessionStorage.setItem(SESSION_KEY, raw)
+    }
+  } catch {
+    return null
   }
+  const bytes = new TextEncoder().encode(raw) as BufferSource
+  const digest = await crypto.subtle.digest("SHA-256", bytes)
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
 }
 
-export interface WebVitalsMetric {
-  name: "LCP" | "FID" | "CLS" | "TTFB" | "INP"
-  value: number
-  rating: "good" | "needs-improvement" | "poor"
-  delta: number
-  id: string
-}
-
-const Web_Vitals_Thresholds = {
-  LCP: { good: 2500, poor: 4000 },
-  FID: { good: 100, poor: 300 },
-  CLS: { good: 0.1, poor: 0.25 },
-  TTFB: { good: 600, poor: 1200 },
-  INP: { good: 200, poor: 500 },
-}
-
-function getRating(metric: string, value: number): "good" | "needs-improvement" | "poor" {
-  const thresholds = Web_Vitals_Thresholds[metric as keyof typeof Web_Vitals_Thresholds]
-  if (!thresholds) return "needs-improvement"
-  if (value <= thresholds.good) return "good"
-  if (value <= thresholds.poor) return "needs-improvement"
-  return "poor"
+function send(event: ReturnType<typeof createRumEvent>): void {
+  if (!event) return
+  const body = JSON.stringify({ events: [event] })
+  if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+    navigator.sendBeacon(
+      "/api/rum/ingest",
+      new Blob([body], { type: "application/json" }),
+    )
+    return
+  }
+  void fetch("/api/rum/ingest", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body,
+    keepalive: true,
+  }).catch(() => undefined)
 }
 
 export function WebVitalsReporter() {
   useEffect(() => {
     if (typeof window === "undefined") return
+    // Flag off: no observers, no timers, no network.
+    if (!isRumCollectorEnabled()) return
 
-    const metrics: Partial<Record<string, WebVitalsMetric>> = {}
+    let sessionHash: string | null = null
+    const pending = new Map<VitalName, number>()
+    let observer: PerformanceObserver | null = null
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+    let cancelled = false
 
-    const observeMetric = (name: string, value: number, delta: number, id: string) => {
-      if (!Number.isFinite(value)) return
-      const rating = getRating(name, value)
-      const metric: WebVitalsMetric = { name: name as any, value, rating, delta, id }
+    hashedSessionId()
+      .then((hash) => {
+        if (cancelled) return
+        sessionHash = hash
+      })
+      .catch(() => undefined)
 
-      metrics[name] = metric
+    const observe = (metric: VitalName, value: number) => {
+      if (!Number.isFinite(value) || value < 0) return
+      const previous = pending.get(metric)
+      // Worst reading per metric, matching the CI p75 evaluation.
+      if (previous === undefined || value > previous) pending.set(metric, value)
+    }
 
-      if (process.env.NODE_ENV === "development") {
-        console.log(`[Web Vitals] ${name}: ${value.toFixed(2)}ms - ${rating}`)
+    const flush = () => {
+      if (cancelled || !sessionHash || pending.size === 0) return
+      const route = window.location.pathname
+      const ts = Date.now()
+      for (const [metric, value] of pending) {
+        send(createRumEvent({ route, metric, value, sessionHash, ts }))
       }
-
-      if (typeof window.dataLayer !== "undefined") {
-        window.dataLayer.push({
-          event: "page_view",
-          event_category: "web_vitals",
-          event_label: name,
-          value: Math.round(value),
-          event_callback: () => {},
-        })
-      }
+      pending.clear()
     }
 
     try {
-      const po = new PerformanceObserver((entryList) => {
-        for (const entry of entryList.getEntries()) {
+      observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
           if (entry.entryType === "largest-contentful-paint") {
-            observeMetric("LCP", (entry as any).renderTime || (entry as any).loadTime, 0, entry.startTime as unknown as string)
-          }
-          if (entry.entryType === "first-input") {
-            const delay = (entry as PerformanceEventTiming).processingStart - entry.startTime
-            observeMetric("FID", delay, delay, String(entry.startTime))
-          }
-          if (entry.entryType === "layout-shift") {
-            if (!(entry as any).hadRecentInput) {
-              observeMetric("CLS", (entry as any).value * 100, (entry as any).value * 100, entry.startTime as unknown as string)
-            }
-          }
-          if (entry.entryType === "navigation") {
-            observeMetric("TTFB", (entry as any).responseStart - (entry as any).fetchStart, 0, entry.startTime as unknown as string)
-          }
-          if (entry.entryType === "interaction-to-next-paint") {
-            observeMetric("INP", (entry as any).duration, (entry as any).duration, entry.startTime as unknown as string)
+            const lcp = entry as PerformanceEntry & { renderTime?: number; loadTime?: number }
+            observe("LCP", lcp.renderTime || lcp.loadTime || entry.startTime)
+          } else if (entry.entryType === "layout-shift") {
+            const shift = entry as PerformanceEntry & { value?: number; hadRecentInput?: boolean }
+            if (!shift.hadRecentInput) observe("CLS", (shift.value ?? 0) * 100)
+          } else if (entry.entryType === "event") {
+            // Longest interaction duration is a conservative INP approximation.
+            observe("INP", entry.duration)
           }
         }
       })
-
-      po.observe({ entryTypes: ["largest-contentful-paint", "first-input", "layout-shift", "navigation", "interaction-to-next-paint"] })
-
-      return () => po.disconnect()
+      observer.observe({ type: "largest-contentful-paint", buffered: true })
+      observer.observe({ type: "layout-shift", buffered: true })
+      observer.observe({ type: "event", buffered: true })
     } catch {
-      if (process.env.NODE_ENV === "development") {
-        console.warn("Web Vitals observer not supported")
-      }
+      // Unsupported browser: collect nothing rather than sending bad data.
+      observer?.disconnect()
+      observer = null
+      return
+    }
+
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush()
+    }
+    document.addEventListener("visibilitychange", onVisibility)
+    flushTimer = setTimeout(flush, FLUSH_DELAY_MS)
+
+    return () => {
+      cancelled = true
+      observer?.disconnect()
+      document.removeEventListener("visibilitychange", onVisibility)
+      if (flushTimer) clearTimeout(flushTimer)
     }
   }, [])
 

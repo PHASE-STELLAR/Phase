@@ -34,6 +34,10 @@ export type LicenseAttestation = {
   nonce: string
   signature: string
   recorded_at: number
+  /** phase-216: revocation is additive — the original attestation is preserved. */
+  revoked_at?: number
+  revoked_by?: string
+  revocation_reason?: string
 }
 
 export type LicenseAttestationInput = Omit<LicenseAttestation, "collection_id" | "recorded_at"> & {
